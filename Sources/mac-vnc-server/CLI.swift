@@ -360,7 +360,7 @@ enum CLI {
     Without --display, port 5900 serves all displays and 5901, 5902, ... serve each display.
     Use --display all to keep only the single combined-display server, or --display 1 for one display.
     Use --verbose to enable periodic framebuffer update logs.
-    Use --clipboard-sync to enable basic text clipboard synchronization.
+    Use --clipboard-sync to enable Apple Screen Sharing and classic VNC text clipboard synchronization.
     Use --no-adaptive to disable adaptive FPS, compression, and scale changes.
     Use --service to install and start a per-user LaunchAgent that runs in the UI session.
     Use --service-restart to restart the registered LaunchAgent.

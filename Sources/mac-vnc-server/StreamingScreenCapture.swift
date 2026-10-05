@@ -6,6 +6,7 @@ import Foundation
 import ScreenCaptureKit
 
 final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, FramebufferSequenceSource, InputRecoverySource, CaptureFrameRateController {
+    let includesCursor = true
     private let scale: CGFloat
     private let fps: Int
     private let displaySelection: DisplaySelection
@@ -297,7 +298,9 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                 config.pixelFormat = kCVPixelFormatType_32BGRA
                 config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
                 config.queueDepth = 3
-                config.showsCursor = false
+                // Capture the real system cursor, including I-beam and resize shapes.
+                // RFB viewers with cursor support are told to hide their extra local cursor.
+                config.showsCursor = true
 
                 let delegate = ScreenCaptureStreamDelegate(eventSink: eventSink)
                 let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
@@ -802,6 +805,8 @@ private final class StreamingFrameStore: @unchecked Sendable {
 final class SelectedDisplayFramebufferSource: @unchecked Sendable, FramebufferSource, FramebufferSequenceSource, InputRecoverySource, CaptureFrameRateController {
     private let source: StreamingScreenCapture
     private let displayIndex: Int?
+
+    var includesCursor: Bool { source.includesCursor }
 
     init(source: StreamingScreenCapture, displayIndex: Int?) {
         self.source = source

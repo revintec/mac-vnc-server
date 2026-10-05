@@ -9,6 +9,12 @@ final class MacClipboard: ClipboardBridge {
         lastChangeCount = NSPasteboard.general.changeCount
     }
 
+    func currentText() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return NSPasteboard.general.string(forType: .string) ?? ""
+    }
+
     func localTextIfChanged() -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -18,7 +24,7 @@ final class MacClipboard: ClipboardBridge {
             return nil
         }
         lastChangeCount = pasteboard.changeCount
-        return pasteboard.string(forType: .string)
+        return pasteboard.string(forType: .string) ?? ""
     }
 
     func setRemoteText(_ text: String) {
@@ -27,7 +33,9 @@ final class MacClipboard: ClipboardBridge {
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        if !text.isEmpty {
+            pasteboard.setString(text, forType: .string)
+        }
         lastChangeCount = pasteboard.changeCount
     }
 }

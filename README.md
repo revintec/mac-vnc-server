@@ -242,7 +242,7 @@ Options:
 | `--service` | off | Install and start a per-user macOS LaunchAgent in the logged-in Aqua UI session. |
 | `--service-restart` | — | Restart the registered per-user macOS LaunchAgent. |
 | `--verbose` | off | Enable periodic framebuffer-update logs on stdout. |
-| `--clipboard-sync` | off | Enable basic text clipboard synchronization with the VNC client. |
+| `--clipboard-sync` | off | Enable text clipboard synchronization with Apple Screen Sharing or a classic VNC client. |
 | `--no-adaptive` | off | Disable adaptive FPS, compression, and automatic scale changes. |
 
 ### Password configuration
@@ -335,13 +335,17 @@ For Apple Screen Sharing, `Alt_L` / `Alt_R` keysyms are remapped to macOS Comman
 
 ### Clipboard
 
-Clipboard synchronization is disabled by default because the native macOS Screen Sharing client can apply incoming clipboard updates to the client's local pasteboard. Enable basic text synchronization explicitly when it is needed:
+Clipboard synchronization is disabled by default because the native macOS Screen Sharing client can apply incoming clipboard updates to the client's local pasteboard. Enable text synchronization explicitly when it is needed:
 
 ```sh
 ./.build/release/mac-vnc-server-dev run --clipboard-sync
 ```
 
-This uses `NSPasteboard` and classic VNC cut text messages; full extended clipboard support is not implemented yet.
+With `--clipboard-sync`, the server advertises Apple's RFB 3.889 dialect and negotiates an extended ServerInit with compatible viewers. Apple Screen Sharing uses native pasteboard notifications, fetches, and compressed UTF-8 text archives. Other viewers can negotiate RFB 3.3, 3.7, or 3.8 and continue using classic cut text messages. The configured password remains required in either mode.
+
+On the client, enable **Edit → Use Shared Clipboard** after connecting. The implementation supports text, including Unicode, multiline text, clearing, and deferred clipboard requests. Files, images, rich-text preservation, Apple account authentication, and encrypted Apple records are not implemented or advertised. Clipboard archives are limited to 16 MiB. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
+
+Mouse clicks carry macOS click counts, using the server Mac's double-click interval and desktop-point coordinates. Apple RFB 3.889's right/middle button ordering is translated before posting events. ScreenCaptureKit includes the actual system cursor in the captured pixels, including I-beam and resize shapes. Viewers advertising RichCursor or XCursor receive an empty local cursor to prevent a duplicate overlay. Cursor feedback therefore follows the framebuffer update rate.
 
 ## GitHub Actions
 

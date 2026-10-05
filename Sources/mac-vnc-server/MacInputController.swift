@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -11,6 +12,10 @@ final class MacInputController: InputController {
 
     private var lastButtonMask: UInt8 = 0
     private var lastPoint: CGPoint?
+    private var mouseClicks = MouseClickTracker()
+    private let eventTime: () -> TimeInterval
+    private let doubleClickInterval: () -> TimeInterval
+    private let postMouseEvent: (CGEvent) -> Void
     private var lastScrollTime: TimeInterval?
     private var lastScrollDirection: Int32?
     private var scrollMultiplier = 1.0
@@ -22,13 +27,22 @@ final class MacInputController: InputController {
     private let logger: ServerLogger?
     private let keyboardEventSource: CGEventSource?
 
-    init(logger: ServerLogger? = nil) {
+    init(
+        logger: ServerLogger? = nil,
+        eventTime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        doubleClickInterval: @escaping () -> TimeInterval = { NSEvent.doubleClickInterval },
+        postMouseEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+    ) {
         self.logger = logger
+        self.eventTime = eventTime
+        self.doubleClickInterval = doubleClickInterval
+        self.postMouseEvent = postMouseEvent
         keyboardEventSource = CGEventSource(stateID: .combinedSessionState)
     }
 
     func pointer(buttonMask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) {
         let point = layout.globalPoint(framebufferX: Int(x), framebufferY: Int(y))
+        mouseClicks.moved(to: point)
 
         if buttonMask & 0b00001000 != 0 {
             postScroll(direction: 1)
@@ -42,12 +56,15 @@ final class MacInputController: InputController {
 
         if lastPoint != point {
             let motion = Self.pointerMotion(for: buttonMask)
-            CGEvent(
+            if let event = CGEvent(
                 mouseEventSource: nil,
                 mouseType: motion.type,
                 mouseCursorPosition: point,
                 mouseButton: motion.button
-            )?.post(tap: .cghidEventTap)
+            ) {
+                event.flags = modifierFlags
+                postMouseEvent(event)
+            }
         }
         lastButtonMask = buttonMask
         lastPoint = point
@@ -280,6 +297,14 @@ final class MacInputController: InputController {
     }
 
     func releaseKeys() {
+        if let point = lastPoint {
+            postButtonIfChanged(mask: 0, bit: 0, button: .left, downType: .leftMouseDown, upType: .leftMouseUp, point: point)
+            postButtonIfChanged(mask: 0, bit: 1, button: .center, downType: .otherMouseDown, upType: .otherMouseUp, point: point)
+            postButtonIfChanged(mask: 0, bit: 2, button: .right, downType: .rightMouseDown, upType: .rightMouseUp, point: point)
+        }
+        lastButtonMask = 0
+        lastPoint = nil
+        mouseClicks.reset()
         shiftPressedWithoutKey = false
         shiftLatchedForNextKey = false
         for keyCode in activeKeys.keys.sorted() {
@@ -395,7 +420,15 @@ final class MacInputController: InputController {
         }
 
         let type = isDown ? downType : upType
-        CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)?.post(tap: .cghidEventTap)
+        let clickCount = isDown
+            ? mouseClicks.buttonDown(button, at: point, time: eventTime(), interval: doubleClickInterval())
+            : mouseClicks.buttonUp(button)
+        if let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button) {
+            event.setIntegerValueField(.mouseEventClickState, value: clickCount)
+            event.flags = modifierFlags
+            postMouseEvent(event)
+        }
+        logger?.verbose("input mouse \(isDown ? "down" : "up") button=\(button.rawValue) clicks=\(clickCount)")
     }
 
     static func pointerMotion(for buttonMask: UInt8) -> (type: CGEventType, button: CGMouseButton) {

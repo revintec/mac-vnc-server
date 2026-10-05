@@ -205,7 +205,12 @@ struct Rect: Equatable {
 }
 
 protocol FramebufferSource {
+    var includesCursor: Bool { get }
     func capture() throws -> Framebuffer
+}
+
+extension FramebufferSource {
+    var includesCursor: Bool { false }
 }
 
 protocol FramebufferSequenceSource {
@@ -233,6 +238,7 @@ protocol InputController {
 }
 
 protocol ClipboardBridge {
+    func currentText() -> String
     func localTextIfChanged() -> String?
     func setRemoteText(_ text: String)
 }
