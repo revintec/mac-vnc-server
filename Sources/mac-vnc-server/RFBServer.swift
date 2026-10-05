@@ -107,6 +107,7 @@ final class RFBServer: @unchecked Sendable {
     private let logger: ServerLogger
     private let maximumClients: Int
     private let handshakeTimeout: TimeInterval
+    private let messageTimeout: TimeInterval
     private let lock = NSLock()
     private let workers = DispatchGroup()
     private var stopped = false
@@ -119,7 +120,8 @@ final class RFBServer: @unchecked Sendable {
         makeClipboard: @escaping @Sendable () -> ClipboardBridge,
         logger: ServerLogger,
         maximumClients: Int = 32,
-        handshakeTimeout: TimeInterval = 10
+        handshakeTimeout: TimeInterval = 10,
+        messageTimeout: TimeInterval = 30
     ) {
         self.config = config
         self.capture = capture
@@ -128,6 +130,7 @@ final class RFBServer: @unchecked Sendable {
         self.logger = logger
         self.maximumClients = maximumClients
         self.handshakeTimeout = handshakeTimeout
+        self.messageTimeout = messageTimeout
     }
 
     func run(listener suppliedListener: ListeningSocket? = nil) throws {
@@ -159,13 +162,15 @@ final class RFBServer: @unchecked Sendable {
                 continue
             }
             do {
+                // A peer closing during socket setup must only fail its own session.
+                try client.configureTCP()
                 let session = try RFBClientSession(
                     socket: client, password: config.password, fps: config.fps,
                     encodingPreference: config.encodingPreference, capture: capture,
                     input: makeInput(), clipboard: makeClipboard(),
                     clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
                     adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
-                    handshakeTimeout: handshakeTimeout
+                    handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout
                 )
                 workers.enter()
                 DispatchQueue.global(qos: .userInteractive).async { [self] in
@@ -361,6 +366,7 @@ final class RFBClientSession: @unchecked Sendable {
 
     private let socket: ClientSocket
     private let handshakeTimeout: TimeInterval
+    private let messageTimeout: TimeInterval
     private let writer = DispatchGroup()
     private let password: String?
     private let minimumFrameInterval: TimeInterval
@@ -429,9 +435,11 @@ final class RFBClientSession: @unchecked Sendable {
         adaptiveStreaming: Bool,
         adaptiveFrameRate: Bool,
         logger: ServerLogger,
-        handshakeTimeout: TimeInterval = 10
+        handshakeTimeout: TimeInterval = 10,
+        messageTimeout: TimeInterval = 30
     ) throws {
         self.handshakeTimeout = handshakeTimeout
+        self.messageTimeout = messageTimeout
         self.socket = socket
         self.password = password
         minimumFrameInterval = 1.0 / Double(fps)
@@ -454,9 +462,9 @@ final class RFBClientSession: @unchecked Sendable {
         currentLayout = initialFrame.layout
         previousFramebuffer = initialFrame
 
-        socket.readDeadline = .now() + handshakeTimeout
-        try handshake(initialFrame: initialFrame)
-        socket.readDeadline = nil
+        try socket.withReadTimeout(handshakeTimeout, operation: "RFB handshake") {
+            try handshake(initialFrame: initialFrame)
+        }
         let captureRateConsumer = ObjectIdentifier(self)
         self.captureRateConsumer = captureRateConsumer
         (capture as? CaptureFrameRateController)?.registerCaptureRateConsumer(
@@ -476,41 +484,49 @@ final class RFBClientSession: @unchecked Sendable {
             if let writerError = consumeWriterError() {
                 throw writerError
             }
+            // A healthy viewer may stay idle indefinitely. Once a message
+            // starts, all of its fields must arrive within one total deadline.
             let messageType = try socket.readExact(1)[0]
-            switch messageType {
-            case 0:
-                try handleSetPixelFormat()
-            case 2:
-                try handleSetEncodings()
-            case 3:
-                try handleFramebufferUpdateRequestMessage()
-            case 4:
-                try handleKeyEvent()
-            case 5:
-                try handlePointerEvent()
-            case 6:
-                try handleClientCutText()
-            case 0x09:
-                try requireAppleClipboard()
-                try handleAppleAutoFramebufferUpdate()
-            case 0x0a:
-                try requireAppleClipboard()
-                try handleAppleSetMode()
-            case 0x0b:
-                try requireAppleClipboard()
-                try handleAppleClipboardFetch()
-            case 0x15:
-                try requireAppleClipboard()
-                try handleAppleAutoPasteboard()
-            case 0x1f:
-                try requireAppleClipboard()
-                try handleAppleClipboardSend()
-            case 0x21:
-                try requireAppleClipboard()
-                try handleAppleViewerInfo()
-            default:
-                throw RFBError.protocolError("unsupported client message \(messageType)")
+            try socket.withReadTimeout(messageTimeout, operation: "RFB client message") {
+                try handleClientMessage(messageType)
             }
+        }
+    }
+
+    private func handleClientMessage(_ messageType: UInt8) throws {
+        switch messageType {
+        case 0:
+            try handleSetPixelFormat()
+        case 2:
+            try handleSetEncodings()
+        case 3:
+            try handleFramebufferUpdateRequestMessage()
+        case 4:
+            try handleKeyEvent()
+        case 5:
+            try handlePointerEvent()
+        case 6:
+            try handleClientCutText()
+        case 0x09:
+            try requireAppleClipboard()
+            try handleAppleAutoFramebufferUpdate()
+        case 0x0a:
+            try requireAppleClipboard()
+            try handleAppleSetMode()
+        case 0x0b:
+            try requireAppleClipboard()
+            try handleAppleClipboardFetch()
+        case 0x15:
+            try requireAppleClipboard()
+            try handleAppleAutoPasteboard()
+        case 0x1f:
+            try requireAppleClipboard()
+            try handleAppleClipboardSend()
+        case 0x21:
+            try requireAppleClipboard()
+            try handleAppleViewerInfo()
+        default:
+            throw RFBError.protocolError("unsupported client message \(messageType)")
         }
     }
 

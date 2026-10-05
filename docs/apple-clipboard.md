@@ -55,6 +55,15 @@ listening port; incomplete handshakes expire after 10 seconds. Standard RFB
 exclusive ClientInit requests do not evict other viewers. Apple's SetMode still
 supports control and observe only, not exclusive control.
 
+TCP keepalive probes start after 60 idle seconds, retry at 10-second intervals,
+and drop an unreachable peer after three unanswered probes. Unacknowledged TCP
+data has a 90-second retransmission limit, and writes that make no progress time
+out after five seconds. These transport settings also apply to classic viewers.
+Healthy idle viewers have no application inactivity deadline. Each started client
+message has a total 30-second read deadline across its header and payload; this
+includes Apple clipboard archives, and trickled bytes do not extend the deadline.
+Timeouts take the same session cleanup path as an ordinary disconnect.
+
 All post-handshake writes go through that connection's framebuffer writer. It wakes
 every 100 ms even without framebuffer requests, services queued clipboard
 requests between complete frames, and suppresses notifications for remote
@@ -83,11 +92,14 @@ capability gating, clipboard delivery without framebuffer requests, serialized
 framebuffer/clipboard replies, generic RFB fallback, and rejection of an
 authentication downgrade.
 
-The multi-client change passes 85 tests in total. Real loopback TCP tests run
+The multi-client and timeout changes pass 91 tests in total. Real loopback TCP tests run
 two authenticated viewers on one listener with independent pixel formats and
 zlib streams, Apple/Apple and Apple/classic clipboard forwarding, echo
 suppression, observe-mode input cleanup, client limits, failed authentication,
-handshake expiry, and server shutdown. Input tests verify shared key/button
+handshake expiry, and server shutdown. Timeout tests verify the configured TCP
+options, incomplete message expiry, total deadlines across fields, healthy idle
+viewers, fragmented messages, input release, and reuse of expired client slots.
+A real silent network drop has not yet been tested. Input tests verify shared key/button
 ownership, Apple/classic modifier aliases, and click-sequence separation.
 
 On 2026-10-05, Screen Sharing **6.1 on macOS 26.6.2** connected to a loopback

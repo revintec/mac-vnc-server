@@ -147,6 +147,88 @@ struct MultiClientTests {
         }
     }
 
+    @Test(arguments: [
+        [UInt8]([4]), // Message type received, body never starts.
+        [2, 0, 0, 2, 0, 0, 0, 0], // Only one of two encodings arrives.
+        [6, 0, 0, 0, 0, 0, 0, 4, 0x61], // Truncated classic clipboard text.
+        [0x1f, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 8, 0x78], // Truncated Apple archive.
+    ])
+    func incompleteMessageExpiresWhileIdleViewerRemainsConnected(_ message: [UInt8]) throws {
+        let server = try MultiClientServer(messageTimeout: 0.3)
+        defer { server.finish() }
+        let stalled = try server.connect()
+        defer { stalled.finish() }
+        let idle = try server.connect()
+        defer { idle.finish() }
+        for peer in [stalled, idle] { _ = try peer.handshake(version: AppleRFB.version) }
+        let started = DispatchTime.now().uptimeNanoseconds
+        try stalled.write(message)
+        // Require actual socket activity/closure, not the test peer's read timeout.
+        try #require(stalled.hasData(timeout: 2))
+        #expect(throws: (any Error).self) { try stalled.read(1) }
+        #expect(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000 >= 0.25)
+        try idle.write(fullUpdate)
+        #expect(try framePayload(idle, encoding: 0).count == 8)
+        #expect(server.clipboard.currentText() == "")
+    }
+
+    @Test func messageTimeoutReleasesInputAndReclaimsClientSlot() throws {
+        let server = try MultiClientServer(maximumClients: 1, messageTimeout: 0.3)
+        defer { server.finish() }
+        let stalled = try server.connect()
+        defer { stalled.finish() }
+        _ = try stalled.handshake(version: AppleRFB.version)
+        try stalled.write([4, 1, 0, 0, 0, 0, 0, 0x61, 5, 1, 0, 0, 0, 0])
+        try fetch(stalled)
+        _ = try stalled.readClipboard()
+        #expect(server.input.snapshot.keyTransitions == [true])
+        #expect(server.input.snapshot.mask == 1)
+        try stalled.write([4])
+        try #require(stalled.hasData(timeout: 2))
+        #expect(throws: (any Error).self) { try stalled.read(1) }
+
+        // Socket shutdown wakes the peer just before the worker finishes cleanup.
+        let deadline = Date().addingTimeInterval(2)
+        var replacement: ClipboardTestPeer?
+        while Date() < deadline, replacement == nil {
+            let candidate = try server.connect()
+            var firstByte: UInt8 = 0
+            if candidate.hasData(timeout: 1), Darwin.recv(candidate.socket.fd, &firstByte, 1, MSG_PEEK) == 1 {
+                replacement = candidate
+            } else {
+                candidate.finish()
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+        let connected = try #require(replacement)
+        defer { connected.finish() }
+        _ = try connected.handshake(version: AppleRFB.version)
+        #expect(server.input.snapshot.keyTransitions == [true, false])
+        #expect(server.input.snapshot.mask == 0)
+        try connected.write(fullUpdate)
+        #expect(try framePayload(connected, encoding: 0).count == 8)
+    }
+
+    @Test func fragmentedMessageCompletesAndNextMessageGetsFreshDeadline() throws {
+        let server = try MultiClientServer(messageTimeout: 0.4)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.write([4, 1])
+        Thread.sleep(forTimeInterval: 0.05)
+        try peer.write([0, 0, 0, 0, 0, 0x61])
+        try fetch(peer)
+        _ = try peer.readClipboard()
+        #expect(server.input.snapshot.keyTransitions == [true])
+        // No application data arrives for longer than a message deadline.
+        #expect(!peer.hasData(timeout: 0.6))
+        try peer.write([4, 0, 0, 0, 0, 0, 0, 0x61])
+        try fetch(peer)
+        _ = try peer.readClipboard()
+        #expect(server.input.snapshot.keyTransitions == [true, false])
+    }
+
     @Test func failedAuthenticationAndDisconnectLeaveOtherClientWorking() throws {
         let server = try MultiClientServer()
         defer { server.finish() }
@@ -254,7 +336,7 @@ private final class MultiClientServer: @unchecked Sendable {
     let input = MultiClientInput()
     private let done = DispatchSemaphore(value: 0)
 
-    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 10) throws {
+    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 10, messageTimeout: TimeInterval = 30) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)
@@ -275,7 +357,7 @@ private final class MultiClientServer: @unchecked Sendable {
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
             logger: ServerLogger(verbose: false), maximumClients: maximumClients,
-            handshakeTimeout: handshakeTimeout)
+            handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout)
         // The listener is owned by this worker once created.
         let worker = MultiClientListener(server: server, listener: listener, done: done)
         DispatchQueue.global().async { worker.run() }

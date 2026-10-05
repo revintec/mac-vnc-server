@@ -3,8 +3,8 @@ import Foundation
 
 final class ClientSocket {
     let fd: Int32
-    // Set and read only by the session reader, before the framebuffer writer starts.
-    var readDeadline: DispatchTime?
+    // Accessed only by the session reader, independently of the writer's timeout.
+    private var readDeadline: (time: DispatchTime, operation: String)?
     private static let writeIdleTimeout: TimeInterval = 5
     private let stateLock = NSLock()
     private var didShutdown = false
@@ -23,6 +23,36 @@ final class ClientSocket {
         close(fd)
     }
 
+    func configureTCP() throws {
+        // Probe quiet viewers without requiring an RFB extension. Also bound
+        // retransmissions when data is buffered in the kernel awaiting an ACK:
+        // a successful write alone does not prove that the viewer received it.
+        let options: [(level: Int32, name: Int32, value: Int32, label: String)] = [
+            (SOL_SOCKET, SO_NOSIGPIPE, 1, "SO_NOSIGPIPE"),
+            (IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY"),
+            (SOL_SOCKET, SO_KEEPALIVE, 1, "SO_KEEPALIVE"),
+            (IPPROTO_TCP, TCP_KEEPALIVE, 60, "TCP_KEEPALIVE"),
+            (IPPROTO_TCP, TCP_KEEPINTVL, 10, "TCP_KEEPINTVL"),
+            (IPPROTO_TCP, TCP_KEEPCNT, 3, "TCP_KEEPCNT"),
+            (IPPROTO_TCP, TCP_RXT_CONNDROPTIME, 90, "TCP_RXT_CONNDROPTIME"),
+        ]
+        for option in options {
+            var value = option.value
+            guard setsockopt(fd, option.level, option.name, &value, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                throw RFBError.socketError("could not set \(option.label): \(String(cString: strerror(errno)))")
+            }
+        }
+    }
+
+    // One total deadline across every field of a handshake or client message.
+    // Partial progress must not let a peer extend the deadline indefinitely.
+    func withReadTimeout<T>(_ timeout: TimeInterval, operation: String, _ body: () throws -> T) rethrows -> T {
+        let previous = readDeadline
+        readDeadline = (.now() + timeout, operation)
+        defer { readDeadline = previous }
+        return try body()
+    }
+
     func readExact(_ count: Int) throws -> [UInt8] {
         var buffer = [UInt8](repeating: 0, count: count)
         var offset = 0
@@ -31,10 +61,10 @@ final class ClientSocket {
             let remaining: TimeInterval?
             if let deadline = readDeadline {
                 let now = DispatchTime.now().uptimeNanoseconds
-                guard now < deadline.uptimeNanoseconds else {
-                    throw RFBError.socketError("RFB handshake timed out")
+                guard now < deadline.time.uptimeNanoseconds else {
+                    throw RFBError.socketError("\(deadline.operation) timed out")
                 }
-                remaining = Double(deadline.uptimeNanoseconds - now) / 1_000_000_000
+                remaining = Double(deadline.time.uptimeNanoseconds - now) / 1_000_000_000
             } else { remaining = nil }
             let readCount = buffer.withUnsafeMutableBytes { pointer in
                 Darwin.read(fd, pointer.baseAddress!.advanced(by: offset), count - offset)
@@ -48,7 +78,7 @@ final class ClientSocket {
                 }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
                     guard try waitForEvent(Int16(POLLIN), timeout: remaining) else {
-                        throw RFBError.socketError("RFB handshake timed out")
+                        throw RFBError.socketError("\(readDeadline?.operation ?? "socket read") timed out")
                     }
                     continue
                 }
@@ -235,13 +265,16 @@ final class ClientSocket {
 
     private func waitForEvent(_ events: Int16, timeout: TimeInterval?) throws -> Bool {
         var descriptor = pollfd(fd: fd, events: events, revents: 0)
+        let deadline = timeout.map { DispatchTime.now() + max(0, $0) }
         while true {
             let timeoutMilliseconds: Int32
-            if let timeout {
-                guard timeout > 0 else {
+            if let deadline {
+                let now = DispatchTime.now().uptimeNanoseconds
+                guard now < deadline.uptimeNanoseconds else {
                     return false
                 }
-                timeoutMilliseconds = Int32(min(Double(Int32.max), max(1, ceil(timeout * 1_000))))
+                let remaining = Double(deadline.uptimeNanoseconds - now) / 1_000_000_000
+                timeoutMilliseconds = Int32(min(Double(Int32.max), max(1, ceil(remaining * 1_000))))
             } else {
                 timeoutMilliseconds = -1
             }
@@ -333,9 +366,6 @@ final class ListeningSocket {
             if [EINTR, EAGAIN, EWOULDBLOCK, ECONNABORTED].contains(errno) { return nil }
             throw RFBError.socketError(String(cString: strerror(errno)))
         }
-        var flag: Int32 = 1
-        setsockopt(clientFD, IPPROTO_TCP, TCP_NODELAY, &flag, socklen_t(MemoryLayout<Int32>.size))
-        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &flag, socklen_t(MemoryLayout<Int32>.size))
         return try ClientSocket(fd: clientFD)
     }
 }
