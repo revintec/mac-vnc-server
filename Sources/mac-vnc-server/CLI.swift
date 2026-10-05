@@ -62,9 +62,10 @@ enum CLICommand {
     }
 
     private func runServers(config: ServerConfig) async throws {
+        let inputs = SharedInputController(input: MacInputController(logger: ServerLogger(verbose: config.verbose)))
         let configs = try await expandedConfigs(from: config)
         if configs.count == 1, let config = configs.first {
-            try await Self.runServer(config: config)
+            try await Self.runServer(config: config, inputs: inputs)
             return
         }
 
@@ -89,7 +90,7 @@ enum CLICommand {
 
             Task.detached {
                 do {
-                    try await Self.runServer(config: config, capture: capture)
+                    try await Self.runServer(config: config, inputs: inputs, capture: capture)
                 } catch {
                     fputs("mac-vnc-server \(config.bindAddress):\(config.port): \(CLI.errorMessage(for: error))\n", stderr)
                     Foundation.exit(1)
@@ -122,7 +123,7 @@ enum CLICommand {
         return configs
     }
 
-    private static func runServer(config: ServerConfig, capture: FramebufferSource? = nil) async throws {
+    private static func runServer(config: ServerConfig, inputs: SharedInputController, capture: FramebufferSource? = nil) async throws {
         let logger = ServerLogger(verbose: config.verbose)
         let captureSource: FramebufferSource
         if let capture {
@@ -135,13 +136,11 @@ enum CLICommand {
                 logger: logger
             )
         }
-        let input = MacInputController(logger: logger)
-        let clipboard = MacClipboard()
         let server = RFBServer(
             config: config,
             capture: captureSource,
-            input: input,
-            clipboard: clipboard,
+            makeInput: { inputs.makeClient() },
+            makeClipboard: { MacClipboard() },
             logger: logger
         )
         try server.run()

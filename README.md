@@ -325,6 +325,14 @@ Adaptive compression prioritizes sender throughput: it uses level 1 when encodin
 ZRLE uses lossless solid-color, palette, packed-palette, and run-length tile modes, selecting the smallest representation for each changed tile. Dirty regions use smaller tiles when appropriate, and framebuffer update rectangles are batched into fewer socket writes.
 The cursor is excluded from captured frames so the VNC client can render a single local cursor. This avoids showing both the captured macOS cursor and the client's pointer at the same time; the server does not synthesize a separate RichCursor shape because ScreenCaptureKit does not expose that shape through a stable public API.
 
+### Multiple clients
+
+Up to 32 clients can connect to the same port simultaneously. Each client authenticates separately and has its own framebuffer encoding, update rate, and clipboard subscription. A new connection does not disconnect existing viewers, including clients that request exclusive access through the standard RFB shared flag. Incomplete handshakes expire after 10 seconds; an established viewer can remain idle.
+
+All viewers share the logged-in Mac's desktop, keyboard, and system cursor. Pointer movement from any controlling viewer moves that cursor. Held keys and mouse buttons are tracked by client and stay pressed until their last remote owner releases them; disconnecting or switching an Apple viewer to observe mode releases only that viewer's controls. Click sequences reset when another client takes over the pointer. These rules also apply across the automatic display ports within one server process.
+
+With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text copied by one viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical text echoes do not produce another clipboard change. This is a shared desktop, not separate macOS login sessions. Concurrent screen encoding and network traffic grow with the number of viewers.
+
 ### Input
 
 Keyboard and mouse events are injected with `CGEvent`.

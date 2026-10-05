@@ -1005,7 +1005,7 @@ import zlib
     #expect(layout.globalPoint(framebufferX: 200, framebufferY: 100) == CGPoint(x: 0, y: 100))
 }
 
-private func inflatePayloads(_ payloads: [[UInt8]], outputCounts: [Int]) throws -> [UInt8] {
+func inflatePayloads(_ payloads: [[UInt8]], outputCounts: [Int]) throws -> [UInt8] {
     guard payloads.count == outputCounts.count else {
         throw RFBError.protocolError("test payload count mismatch")
     }

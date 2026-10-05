@@ -271,7 +271,7 @@ struct AppleClipboardTests {
 
 }
 
-private final class ClipboardTestBridge: ClipboardBridge, @unchecked Sendable {
+final class ClipboardTestBridge: ClipboardBridge, @unchecked Sendable {
     private let lock = NSLock()
     private var text = "initial"
     private var changed = false
@@ -301,11 +301,18 @@ private struct ClipboardTestInput: InputController {
     func releaseKeys() {}
 }
 
-private final class ClipboardTestPeer: @unchecked Sendable {
+final class ClipboardTestPeer: @unchecked Sendable {
     let clipboard = ClipboardTestBridge()
     let socket: ClientSocket
     let password: String?
     let done = DispatchSemaphore(value: 0)
+    private var ownsSession = true
+
+    init(socket: ClientSocket, password: String? = "testpass") {
+        self.socket = socket
+        self.password = password
+        ownsSession = false
+    }
 
     init(password: String? = "testpass", includesCursor: Bool = false) throws {
         self.password = password
@@ -331,7 +338,7 @@ private final class ClipboardTestPeer: @unchecked Sendable {
 
     func finish() {
         socket.shutdown()
-        #expect(done.wait(timeout: .now() + 3) == .success)
+        if ownsSession { #expect(done.wait(timeout: .now() + 3) == .success) }
     }
 
     func write(_ bytes: [UInt8]) throws { try socket.writeAll(bytes) }
@@ -363,7 +370,7 @@ private final class ClipboardTestPeer: @unchecked Sendable {
         return UInt32.be(bytes[0], bytes[1], bytes[2], bytes[3])
     }
 
-    func handshake(version: String) throws -> [UInt8] {
+    func handshake(version: String, shared: Bool = true) throws -> [UInt8] {
         #expect(try read(12) == Array(AppleRFB.version.utf8))
         try write(Array(version.utf8))
         if version == "RFB 003.003\n" {
@@ -379,7 +386,7 @@ private final class ClipboardTestPeer: @unchecked Sendable {
         } else if version != "RFB 003.003\n" && version != "RFB 003.007\n" {
             #expect(try number() == 0)
         }
-        try write([version == AppleRFB.version ? 0xc1 : 1])
+        try write([version == AppleRFB.version ? 0xc0 | (shared ? 1 : 0) : (shared ? 1 : 0)])
         _ = try read(20)
         return try read(Int(number()))
     }

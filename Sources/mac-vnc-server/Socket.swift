@@ -3,6 +3,8 @@ import Foundation
 
 final class ClientSocket {
     let fd: Int32
+    // Set and read only by the session reader, before the framebuffer writer starts.
+    var readDeadline: DispatchTime?
     private static let writeIdleTimeout: TimeInterval = 5
     private let stateLock = NSLock()
     private var didShutdown = false
@@ -26,6 +28,14 @@ final class ClientSocket {
         var offset = 0
 
         while offset < count {
+            let remaining: TimeInterval?
+            if let deadline = readDeadline {
+                let now = DispatchTime.now().uptimeNanoseconds
+                guard now < deadline.uptimeNanoseconds else {
+                    throw RFBError.socketError("RFB handshake timed out")
+                }
+                remaining = Double(deadline.uptimeNanoseconds - now) / 1_000_000_000
+            } else { remaining = nil }
             let readCount = buffer.withUnsafeMutableBytes { pointer in
                 Darwin.read(fd, pointer.baseAddress!.advanced(by: offset), count - offset)
             }
@@ -37,7 +47,9 @@ final class ClientSocket {
                     continue
                 }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
-                    _ = try waitForEvent(Int16(POLLIN), timeout: nil)
+                    guard try waitForEvent(Int16(POLLIN), timeout: remaining) else {
+                        throw RFBError.socketError("RFB handshake timed out")
+                    }
                     continue
                 }
                 throw RFBError.socketError(String(cString: strerror(errno)))
@@ -293,6 +305,11 @@ final class ListeningSocket {
             throw RFBError.socketError("bind \(bindAddress):\(port) failed: \(message)")
         }
 
+        let flags = fcntl(fd, F_GETFL, 0)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            close(fd)
+            throw RFBError.socketError("failed to configure listening socket")
+        }
         guard listen(fd, 8) == 0 else {
             let message = String(cString: strerror(errno))
             close(fd)
@@ -304,19 +321,21 @@ final class ListeningSocket {
         close(fd)
     }
 
-    func acceptClient() throws -> ClientSocket {
-        while true {
-            let clientFD = accept(fd, nil, nil)
-            if clientFD >= 0 {
-                var flag: Int32 = 1
-                setsockopt(clientFD, IPPROTO_TCP, TCP_NODELAY, &flag, socklen_t(MemoryLayout<Int32>.size))
-                setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &flag, socklen_t(MemoryLayout<Int32>.size))
-                return try ClientSocket(fd: clientFD)
-            }
-            if errno == EINTR {
-                continue
-            }
+    func acceptClient(timeout: TimeInterval) throws -> ClientSocket? {
+        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let result = Darwin.poll(&descriptor, 1, Int32(timeout * 1_000))
+        if result == 0 || (result < 0 && errno == EINTR) { return nil }
+        guard result > 0, descriptor.revents & Int16(POLLIN) != 0 else {
+            throw RFBError.socketError("listener poll failed")
+        }
+        let clientFD = accept(fd, nil, nil)
+        guard clientFD >= 0 else {
+            if [EINTR, EAGAIN, EWOULDBLOCK, ECONNABORTED].contains(errno) { return nil }
             throw RFBError.socketError(String(cString: strerror(errno)))
         }
+        var flag: Int32 = 1
+        setsockopt(clientFD, IPPROTO_TCP, TCP_NODELAY, &flag, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &flag, socklen_t(MemoryLayout<Int32>.size))
+        return try ClientSocket(fd: clientFD)
     }
 }

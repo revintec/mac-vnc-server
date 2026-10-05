@@ -296,6 +296,8 @@ final class MacInputController: InputController {
         return KeySymMapper.Modifier(keyCode: keyCode, flag: preferred.flag)
     }
 
+    func resetClickSequence() { mouseClicks.resetSequence() }
+
     func releaseKeys() {
         if let point = lastPoint {
             postButtonIfChanged(mask: 0, bit: 0, button: .left, downType: .leftMouseDown, upType: .leftMouseUp, point: point)

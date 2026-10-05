@@ -49,10 +49,21 @@ limited to 16 MiB; malformed sizes, counts and compressed streams are rejected.
   The text UTI is `public.utf8-plain-text` (22 bytes). An item with zero flavors
   clears the pasteboard; a text flavor with zero data promises future contents.
 
-All post-handshake writes go through the existing framebuffer writer. It wakes
+Each connection has its own framebuffer writer, compressors, negotiated
+capabilities and clipboard change cursor. Up to 32 connections can run on each
+listening port; incomplete handshakes expire after 10 seconds. Standard RFB
+exclusive ClientInit requests do not evict other viewers. Apple's SetMode still
+supports control and observe only, not exclusive control.
+
+All post-handshake writes go through that connection's framebuffer writer. It wakes
 every 100 ms even without framebuffer requests, services queued clipboard
 requests between complete frames, and suppresses notifications for remote
-pasteboard writes. Verbose logging records message types, sizes and request IDs,
+pasteboard writes to their originating connection. Other connected viewers can
+receive those changes. Pasteboard access is serialized across the process, with
+an independent change cursor per viewer and suppression of identical text echoes.
+Disconnect cleanup waits for the connection's writer to stop, releases only its
+owned controls, and removes only its capture-rate subscription.
+Verbose logging records message types, sizes and request IDs,
 but never the clipboard text or authentication credentials.
 
 ## Validation
@@ -71,6 +82,13 @@ bidirectional text and clearing, deferred requests, stopped monitoring,
 capability gating, clipboard delivery without framebuffer requests, serialized
 framebuffer/clipboard replies, generic RFB fallback, and rejection of an
 authentication downgrade.
+
+The multi-client change passes 85 tests in total. Real loopback TCP tests run
+two authenticated viewers on one listener with independent pixel formats and
+zlib streams, Apple/Apple and Apple/classic clipboard forwarding, echo
+suppression, observe-mode input cleanup, client limits, failed authentication,
+handshake expiry, and server shutdown. Input tests verify shared key/button
+ownership, Apple/classic modifier aliases, and click-sequence separation.
 
 On 2026-10-05, Screen Sharing **6.1 on macOS 26.6.2** connected to a loopback
 probe using the production RFB session implementation, a synthetic framebuffer,

@@ -97,56 +97,98 @@ struct RFBClientCapabilities: Equatable {
     }
 }
 
-final class RFBServer {
+// The registry is locked; capture supports concurrent snapshots. Factories create
+// a separate clipboard subscription and input ownership handle for each session.
+final class RFBServer: @unchecked Sendable {
     private let config: ServerConfig
     private let capture: FramebufferSource
-    private let input: InputController
-    private let clipboard: ClipboardBridge
+    private let makeInput: @Sendable () -> InputController
+    private let makeClipboard: @Sendable () -> ClipboardBridge
     private let logger: ServerLogger
+    private let maximumClients: Int
+    private let handshakeTimeout: TimeInterval
+    private let lock = NSLock()
+    private let workers = DispatchGroup()
+    private var stopped = false
+    private var clients: [ObjectIdentifier: ClientSocket] = [:]
 
     init(
         config: ServerConfig,
         capture: FramebufferSource,
-        input: InputController,
-        clipboard: ClipboardBridge,
-        logger: ServerLogger
+        makeInput: @escaping @Sendable () -> InputController,
+        makeClipboard: @escaping @Sendable () -> ClipboardBridge,
+        logger: ServerLogger,
+        maximumClients: Int = 32,
+        handshakeTimeout: TimeInterval = 10
     ) {
         self.config = config
         self.capture = capture
-        self.input = input
-        self.clipboard = clipboard
+        self.makeInput = makeInput
+        self.makeClipboard = makeClipboard
         self.logger = logger
+        self.maximumClients = maximumClients
+        self.handshakeTimeout = handshakeTimeout
     }
 
-    func run() throws {
-        let listener = try ListeningSocket(bindAddress: config.bindAddress, port: config.port)
+    func run(listener suppliedListener: ListeningSocket? = nil) throws {
+        let listener = try suppliedListener ?? ListeningSocket(bindAddress: config.bindAddress, port: config.port)
+        defer {
+            stop()
+            workers.wait()
+        }
         logger.info("mac-vnc-server \(AppVersion.current)")
         logger.info("mac-vnc-server listening on \(config.bindAddress):\(config.port)")
         let fpsDescription = config.adaptiveFrameRate ? "auto(60-45-30)" : "\(config.fps)"
         logger.info("fps=\(fpsDescription) scale=\(config.scale) encoding=\(config.encodingPreference.rawValue) display=\(config.displaySelection.description)")
         logger.info("password configured: \(config.password != nil)")
         logger.info("clipboard sync: \(config.clipboardSync ? "enabled" : "disabled")")
+        logger.info("shared desktop: up to \(maximumClients) concurrent clients per port")
         logger.info("Connect with vnc://\(config.bindAddress == "0.0.0.0" ? "127.0.0.1" : config.bindAddress):\(config.port)")
 
-        while true {
-            let client = try listener.acceptClient()
-            do {
-                try RFBClientSession(
-                    socket: client,
-                    password: config.password,
-                    fps: config.fps,
-                    encodingPreference: config.encodingPreference,
-                    capture: capture,
-                    input: input,
-                    clipboard: clipboard,
-                    clipboardSync: config.clipboardSync,
-                    adaptiveStreaming: config.adaptiveStreaming,
-                    adaptiveFrameRate: config.adaptiveFrameRate,
-                    logger: logger
-                ).run()
-            } catch {
-                logger.warning("client disconnected: \(error.localizedDescription)")
+        while !lock.withLock({ stopped }) {
+            guard let client = try listener.acceptClient(timeout: 0.25) else { continue }
+            let id = ObjectIdentifier(client)
+            let admitted = lock.withLock {
+                guard !stopped, clients.count < maximumClients else { return false }
+                clients[id] = client
+                return true
             }
+            guard admitted else {
+                client.shutdown()
+                logger.warning("connection rejected: server stopping or client limit reached")
+                continue
+            }
+            do {
+                let session = try RFBClientSession(
+                    socket: client, password: config.password, fps: config.fps,
+                    encodingPreference: config.encodingPreference, capture: capture,
+                    input: makeInput(), clipboard: makeClipboard(),
+                    clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
+                    adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
+                    handshakeTimeout: handshakeTimeout
+                )
+                workers.enter()
+                DispatchQueue.global(qos: .userInteractive).async { [self] in
+                    defer {
+                        session.shutdown()
+                        lock.withLock { clients[id] = nil }
+                        workers.leave()
+                    }
+                    do { try session.run() }
+                    catch { logger.warning("client disconnected: \(error.localizedDescription)") }
+                }
+            } catch {
+                client.shutdown()
+                lock.withLock { clients[id] = nil }
+                logger.warning("could not start client: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func stop() {
+        lock.withLock {
+            stopped = true
+            for client in clients.values { client.shutdown() }
         }
     }
 }
@@ -318,6 +360,8 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private let socket: ClientSocket
+    private let handshakeTimeout: TimeInterval
+    private let writer = DispatchGroup()
     private let password: String?
     private let minimumFrameInterval: TimeInterval
     private var frameInterval: TimeInterval
@@ -384,8 +428,10 @@ final class RFBClientSession: @unchecked Sendable {
         clipboardSync: Bool,
         adaptiveStreaming: Bool,
         adaptiveFrameRate: Bool,
-        logger: ServerLogger
+        logger: ServerLogger,
+        handshakeTimeout: TimeInterval = 10
     ) throws {
+        self.handshakeTimeout = handshakeTimeout
         self.socket = socket
         self.password = password
         minimumFrameInterval = 1.0 / Double(fps)
@@ -408,7 +454,9 @@ final class RFBClientSession: @unchecked Sendable {
         currentLayout = initialFrame.layout
         previousFramebuffer = initialFrame
 
+        socket.readDeadline = .now() + handshakeTimeout
         try handshake(initialFrame: initialFrame)
+        socket.readDeadline = nil
         let captureRateConsumer = ObjectIdentifier(self)
         self.captureRateConsumer = captureRateConsumer
         (capture as? CaptureFrameRateController)?.registerCaptureRateConsumer(
@@ -523,6 +571,8 @@ final class RFBClientSession: @unchecked Sendable {
 
         let clientInit = try socket.readExact(1)[0]
         logger.verbose("RFB handshake: ClientInit=\(clientInit)")
+        // Always share the desktop, even when ClientInit requests an exclusive session.
+        // A newly connected viewer must never evict an existing viewer.
         usesAppleClipboard = versionText == AppleRFB.version && clientInit & 0x80 != 0
         // Apple's viewer commonly sends 0xc1. The optional session-selection
         // request is declined by leaving server flag 0x04 clear, not by disconnecting.
@@ -609,8 +659,12 @@ final class RFBClientSession: @unchecked Sendable {
         state.unlock()
     }
 
+    func shutdown() { socket.shutdown() }
+
     private func startFramebufferWriter() {
+        writer.enter()
         DispatchQueue.global(qos: .userInteractive).async { [self] in
+            defer { writer.leave() }
             do {
                 try framebufferWriterLoop()
             } catch {
@@ -685,6 +739,7 @@ final class RFBClientSession: @unchecked Sendable {
         state.broadcast()
         state.unlock()
         socket.shutdown()
+        writer.wait()
     }
 
     private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false) throws {

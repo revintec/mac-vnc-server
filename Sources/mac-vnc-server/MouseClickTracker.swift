@@ -47,6 +47,9 @@ struct MouseClickTracker {
         return pressedCounts.removeValue(forKey: button.rawValue) ?? 1
     }
 
+    // Preserve the counts on held buttons so their eventual releases still match.
+    mutating func resetSequence() { sequence = nil }
+
     mutating func reset() {
         sequence = nil
         pressedCounts.removeAll()
