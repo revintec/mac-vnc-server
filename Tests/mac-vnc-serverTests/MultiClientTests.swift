@@ -221,8 +221,9 @@ struct MultiClientTests {
         try fetch(peer)
         _ = try peer.readClipboard()
         #expect(server.input.snapshot.keyTransitions == [true])
-        // No application data arrives for longer than a message deadline.
-        #expect(!peer.hasData(timeout: 0.6))
+        // Stay idle past the message deadline and through multiple TCP keepalive
+        // probes. A healthy peer must remain connected without application traffic.
+        #expect(!peer.hasData(timeout: 7))
         try peer.write([4, 0, 0, 0, 0, 0, 0, 0x61])
         try fetch(peer)
         _ = try peer.readClipboard()
@@ -336,7 +337,7 @@ private final class MultiClientServer: @unchecked Sendable {
     let input = MultiClientInput()
     private let done = DispatchSemaphore(value: 0)
 
-    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 10, messageTimeout: TimeInterval = 30) throws {
+    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5, messageTimeout: TimeInterval = 5) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)

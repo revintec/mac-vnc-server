@@ -120,8 +120,8 @@ final class RFBServer: @unchecked Sendable {
         makeClipboard: @escaping @Sendable () -> ClipboardBridge,
         logger: ServerLogger,
         maximumClients: Int = 32,
-        handshakeTimeout: TimeInterval = 10,
-        messageTimeout: TimeInterval = 30
+        handshakeTimeout: TimeInterval = 5,
+        messageTimeout: TimeInterval = 5
     ) {
         self.config = config
         self.capture = capture
@@ -435,8 +435,8 @@ final class RFBClientSession: @unchecked Sendable {
         adaptiveStreaming: Bool,
         adaptiveFrameRate: Bool,
         logger: ServerLogger,
-        handshakeTimeout: TimeInterval = 10,
-        messageTimeout: TimeInterval = 30
+        handshakeTimeout: TimeInterval = 5,
+        messageTimeout: TimeInterval = 5
     ) throws {
         self.handshakeTimeout = handshakeTimeout
         self.messageTimeout = messageTimeout

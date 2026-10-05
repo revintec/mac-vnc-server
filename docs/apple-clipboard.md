@@ -51,16 +51,17 @@ limited to 16 MiB; malformed sizes, counts and compressed streams are rejected.
 
 Each connection has its own framebuffer writer, compressors, negotiated
 capabilities and clipboard change cursor. Up to 32 connections can run on each
-listening port; incomplete handshakes expire after 10 seconds. Standard RFB
+listening port; incomplete handshakes expire after 5 seconds. Standard RFB
 exclusive ClientInit requests do not evict other viewers. Apple's SetMode still
 supports control and observe only, not exclusive control.
 
-TCP keepalive probes start after 60 idle seconds, retry at 10-second intervals,
-and drop an unreachable peer after three unanswered probes. Unacknowledged TCP
-data has a 90-second retransmission limit, and writes that make no progress time
-out after five seconds. These transport settings also apply to classic viewers.
+TCP keepalive probes start after 3 idle seconds, retry at one-second intervals,
+and drop an unreachable peer after three unanswered probes (roughly 6 seconds,
+subject to OS timer scheduling). Brief network outages may require reconnecting.
+Unacknowledged TCP data has a 6-second retransmission limit, and writes that make no progress time
+out after three seconds. These transport settings also apply to classic viewers.
 Healthy idle viewers have no application inactivity deadline. Each started client
-message has a total 30-second read deadline across its header and payload; this
+message has a total 5-second read deadline across its header and payload; this
 includes Apple clipboard archives, and trickled bytes do not extend the deadline.
 Timeouts take the same session cleanup path as an ordinary disconnect.
 
@@ -98,7 +99,8 @@ zlib streams, Apple/Apple and Apple/classic clipboard forwarding, echo
 suppression, observe-mode input cleanup, client limits, failed authentication,
 handshake expiry, and server shutdown. Timeout tests verify the configured TCP
 options, incomplete message expiry, total deadlines across fields, healthy idle
-viewers, fragmented messages, input release, and reuse of expired client slots.
+viewers across multiple keepalive probes, fragmented messages, input release,
+and reuse of expired client slots.
 A real silent network drop has not yet been tested. Input tests verify shared key/button
 ownership, Apple/classic modifier aliases, and click-sequence separation.
 

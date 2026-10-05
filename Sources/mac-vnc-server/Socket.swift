@@ -5,7 +5,7 @@ final class ClientSocket {
     let fd: Int32
     // Accessed only by the session reader, independently of the writer's timeout.
     private var readDeadline: (time: DispatchTime, operation: String)?
-    private static let writeIdleTimeout: TimeInterval = 5
+    private static let writeIdleTimeout: TimeInterval = 3
     private let stateLock = NSLock()
     private var didShutdown = false
 
@@ -31,10 +31,10 @@ final class ClientSocket {
             (SOL_SOCKET, SO_NOSIGPIPE, 1, "SO_NOSIGPIPE"),
             (IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY"),
             (SOL_SOCKET, SO_KEEPALIVE, 1, "SO_KEEPALIVE"),
-            (IPPROTO_TCP, TCP_KEEPALIVE, 60, "TCP_KEEPALIVE"),
-            (IPPROTO_TCP, TCP_KEEPINTVL, 10, "TCP_KEEPINTVL"),
+            (IPPROTO_TCP, TCP_KEEPALIVE, 3, "TCP_KEEPALIVE"),
+            (IPPROTO_TCP, TCP_KEEPINTVL, 1, "TCP_KEEPINTVL"),
             (IPPROTO_TCP, TCP_KEEPCNT, 3, "TCP_KEEPCNT"),
-            (IPPROTO_TCP, TCP_RXT_CONNDROPTIME, 90, "TCP_RXT_CONNDROPTIME"),
+            (IPPROTO_TCP, TCP_RXT_CONNDROPTIME, 6, "TCP_RXT_CONNDROPTIME"),
         ]
         for option in options {
             var value = option.value

@@ -25,10 +25,10 @@ struct SocketTimeoutTests {
         try accepted.configureTCP()
         for (level, name, expected): (Int32, Int32, Int32) in [
             (SOL_SOCKET, SO_KEEPALIVE, 1),
-            (IPPROTO_TCP, TCP_KEEPALIVE, 60),
-            (IPPROTO_TCP, TCP_KEEPINTVL, 10),
+            (IPPROTO_TCP, TCP_KEEPALIVE, 3),
+            (IPPROTO_TCP, TCP_KEEPINTVL, 1),
             (IPPROTO_TCP, TCP_KEEPCNT, 3),
-            (IPPROTO_TCP, TCP_RXT_CONNDROPTIME, 90),
+            (IPPROTO_TCP, TCP_RXT_CONNDROPTIME, 6),
         ] {
             var value: Int32 = 0
             var length = socklen_t(MemoryLayout<Int32>.size)
