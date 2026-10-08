@@ -6,6 +6,83 @@ import Testing
 
 @Suite(.serialized)
 struct MultiClientTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil),
+          arguments: [false, true], [false, true])
+    func nativeScreenSharingCanResumeControl(fileTransfer: Bool, startControlling: Bool) throws {
+        let server = try MultiClientServer(fileTransfer: fileTransfer, width: 1728, height: 1118)
+        defer { server.finish() }
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"]))
+        probe.arguments = ["vnc://127.0.0.1:\(server.port)/?encrypt=none",
+                           fileTransfer ? "1" : "0", startControlling ? "1" : "0"]
+        let output = Pipe()
+        probe.standardOutput = output
+        probe.standardError = output
+        let finished = DispatchSemaphore(value: 0)
+        probe.terminationHandler = { _ in finished.signal() }
+        try probe.run()
+        guard finished.wait(timeout: .now() + 25) == .success else {
+            probe.terminate()
+            Issue.record("native Screen Sharing probe timed out")
+            return
+        }
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        #expect(probe.terminationStatus == 0, "\(text)")
+        #expect(text.contains("controlSupported=1 controlAllowed=1 initiallyControlling=\(startControlling ? 1 : 0)"), "\(text)")
+        #expect(text.contains("observing=1 canResumeControl=1 resumedControl=1"), "\(text)")
+        if fileTransfer {
+            #expect(text.contains("connected=1 legacy=0 files=1 toRemote=1 fromRemote=1"), "\(text)")
+            #expect(text.contains("scaling=0.50 framebuffer=864x559"), "\(text)")
+            #expect(text.contains("scaling=1.00 framebuffer=1728x1118"), "\(text)")
+        }
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available))
+    func appleScalingKeepsPointerCoordinatesAndOtherClientsUnchanged() throws {
+        let server = try MultiClientServer(fileTransfer: true, width: 32, height: 16)
+        defer { server.finish() }
+        let scaled = try server.connect(), other = try server.connect()
+        defer { scaled.finish(); other.finish() }
+        for peer in [scaled, other] { _ = try peer.handshake(version: AppleRFB.version) }
+        let encodings: [UInt8] = [2, 0, 0, 2] + UInt32(0).beBytes + UInt32(1101).beBytes
+        let update: [UInt8] = [3, 0, 0, 0, 0, 0, 0, 32, 0, 16]
+        func readDisplay(width: Int, height: Int) throws {
+            #expect(try scaled.read(8) == [0, 0, 0, 1, 0, 0, 0, 0])
+            #expect(try scaled.read(4) == UInt16(width).beBytes + UInt16(height).beBytes)
+            #expect(try scaled.number() == 1101)
+            // Logical screen dimensions must remain 32x16 at every scale.
+            #expect(try scaled.read(10) == [0, 32, 0, 16, 0, 0, 0, 0, 0, 1])
+            #expect(try scaled.read(28) == UInt32(1).beBytes + [0, 32, 0, 16]
+                + [UInt8](repeating: 0, count: 12) + UInt32(32).beBytes + UInt32(16).beBytes)
+        }
+        func readFrame(_ peer: ClipboardTestPeer, width: Int, height: Int) throws {
+            #expect(try peer.read(8) == [0, 0, 0, 1, 0, 0, 0, 0])
+            #expect(try peer.read(4) == UInt16(width).beBytes + UInt16(height).beBytes)
+            #expect(try peer.number() == 0)
+            #expect(try peer.read(width * height * 4) == [UInt8](repeating: 0, count: width * height * 4))
+        }
+        try scaled.write(encodings)
+        try readDisplay(width: 32, height: 16)
+        for factor in [0.5, 0.75, 1.0, 1.0] {
+            let bits = factor.bitPattern
+            let bytes = stride(from: 56, through: 0, by: -8).map { UInt8(truncatingIfNeeded: bits >> $0) }
+            try scaled.write([8, 0] + bytes)
+            let width = Int(32 * factor), height = Int(16 * factor)
+            try readDisplay(width: width, height: height)
+            try readFrame(scaled, width: width, height: height)
+            // A subsequent negotiation must keep the actual scaled dimensions.
+            try scaled.write(encodings)
+            try readDisplay(width: width, height: height)
+            try scaled.write([5, 0, 0, 24, 0, 12] + update)
+            try readFrame(scaled, width: width, height: height)
+            let pointer = try #require(server.input.snapshot.pointer)
+            #expect(pointer.x == 24 && pointer.y == 12)
+            #expect(pointer.width == 32 && pointer.height == 16 && pointer.scale == 1)
+            try other.write(update)
+            try readFrame(other, width: 32, height: 16)
+        }
+    }
+
     @Test func twoClientsAuthenticateAndStreamWithIndependentEncodingState() throws {
         let server = try MultiClientServer()
         defer { server.finish() }
@@ -89,6 +166,30 @@ struct MultiClientTests {
         #expect(try second.read(8) == changedStatus)
         try fetch(second)
         #expect(try second.readClipboard().1 == .text(""))
+    }
+
+    @Test func imagesForwardBetweenAppleClientsWithoutClearingClassicClipboard() throws {
+        let server = try MultiClientServer()
+        defer { server.finish() }
+        let first = try server.connect(), second = try server.connect(), classic = try server.connect()
+        defer { first.finish(); second.finish(); classic.finish() }
+        for peer in [first, second] {
+            _ = try peer.handshake(version: AppleRFB.version)
+            try peer.enableAppleClipboard()
+        }
+        _ = try classic.handshake(version: "RFB 003.008\n")
+        let content = ClipboardContent(items: [[.init(type: "public.png", data: Data([137, 80, 78, 71, 1, 2, 3]))]])
+        try first.write(AppleClipboard.message(content: content, requestID: 0))
+        try fetch(first)
+        #expect(try first.readClipboard().1.supportedContent == content)
+        #expect(try second.read(8) == changedStatus)
+        try fetch(second)
+        #expect(try second.readClipboard().1.supportedContent == content)
+        try second.write(AppleClipboard.message(content: content, requestID: 0))
+        try fetch(second)
+        #expect(try second.readClipboard().1.supportedContent == content)
+        #expect(!first.hasData(timeout: 0.2))
+        #expect(!classic.hasData(timeout: 0.2))
     }
 
     @Test func appleAndClassicClientsShareClipboardOnOnePort() throws {
@@ -265,6 +366,30 @@ struct MultiClientTests {
         #expect(first.localTextIfChanged() == nil)
     }
 
+    @Test(arguments: [false, true])
+    func observationPreservesControlPermissionAndResumingEnablesInput(fileTransfer: Bool) throws {
+        let server = try MultiClientServer(fileTransfer: fileTransfer)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.enableAppleClipboard()
+        let press: [UInt8] = [4, 1, 0, 0, 0, 0, 0, 0x61, 5, 1, 0, 0, 0, 0]
+        try peer.write([0x0a, 0, 0, 0] + press + fullUpdate)
+        // The next reply must be a frame, with no control-revoked status 10.
+        // Its completion also confirms the preceding input was processed.
+        _ = try framePayload(peer, encoding: 0)
+        #expect(server.input.snapshot.keyTransitions.isEmpty)
+        #expect(server.input.snapshot.mask == 0)
+
+        try peer.write([0x0a, 0, 0, 1])
+        #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 9])
+        try peer.write(press + fullUpdate)
+        _ = try framePayload(peer, encoding: 0)
+        #expect(server.input.snapshot.keyTransitions == [true])
+        #expect(server.input.snapshot.mask == 1)
+    }
+
     @Test func observeAndDisconnectReleaseOnlyThatSessionsInput() throws {
         let server = try MultiClientServer()
         defer { server.finish() }
@@ -337,7 +462,8 @@ private final class MultiClientServer: @unchecked Sendable {
     let input = MultiClientInput()
     private let done = DispatchSemaphore(value: 0)
 
-    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5, messageTimeout: TimeInterval = 5) throws {
+    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5, messageTimeout: TimeInterval = 5,
+         fileTransfer: Bool = false, width: Int = 2, height: Int = 1) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)
@@ -352,12 +478,12 @@ private final class MultiClientServer: @unchecked Sendable {
         let config = ServerConfig(bindAddress: "127.0.0.1", port: port, password: "testpass",
             passwordFromConfig: false, fps: 30, scale: 1, encodingPreference: .auto,
             displaySelection: .all, verbose: false, clipboardSync: true,
-            adaptiveStreaming: false, adaptiveFrameRate: false)
+            adaptiveStreaming: false, adaptiveFrameRate: false, fileTransfer: fileTransfer)
         let inputs = SharedInputController(input: input)
-        server = RFBServer(config: config, capture: MultiClientScreen(),
+        server = RFBServer(config: config, capture: MultiClientScreen(width: width, height: height),
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
-            logger: ServerLogger(verbose: false), maximumClients: maximumClients,
+            logger: ServerLogger(verbose: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil), maximumClients: maximumClients,
             handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout)
         // The listener is owned by this worker once created.
         let worker = MultiClientListener(server: server, listener: listener, done: done)
@@ -406,9 +532,11 @@ private final class MultiClientListener: @unchecked Sendable {
 }
 
 private struct MultiClientScreen: FramebufferSource {
+    var width = 2
+    var height = 1
     func capture() throws -> Framebuffer {
-        Framebuffer(width: 2, height: 1, bgra: [0, 0, 0, 255, 0, 0, 0, 255],
-            layout: VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 2, height: 1))
+        Framebuffer(width: width, height: height, bgra: [UInt8](repeating: 0, count: width * height * 4),
+            layout: VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: width, height: height), sequence: 1)
     }
 }
 
@@ -416,6 +544,7 @@ private final class MultiClientInput: InputController {
     struct Snapshot {
         var keyTransitions: [Bool] = []
         var mask: UInt8 = 0
+        var pointer: (x: UInt16, y: UInt16, width: Int, height: Int, scale: CGFloat)?
     }
     private let lock = NSLock()
     private var state = Snapshot()
@@ -424,7 +553,10 @@ private final class MultiClientInput: InputController {
         lock.withLock { state.keyTransitions.append(down) }
     }
     func pointer(buttonMask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) {
-        lock.withLock { state.mask = buttonMask }
+        lock.withLock {
+            state.mask = buttonMask
+            state.pointer = (x, y, layout.width, layout.height, layout.scale)
+        }
     }
     func releaseKeys() {}
 }

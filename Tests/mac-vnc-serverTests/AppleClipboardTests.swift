@@ -32,9 +32,39 @@ struct AppleClipboardTests {
     }
 }
 
+@Test func appleClipboardAcceptsHeaderOnlyEmptyArchive() throws {
+    for promises: UInt8 in [0, 1] {
+        // The zero-size representation has no zlib stream at all. Empty
+        // archives clear the clipboard even with the promises bit set.
+        let bytes = [0, promises, 0] + UInt32(17).beBytes
+            + UInt32(0).beBytes + UInt32(0).beBytes
+        let header = try AppleClipboard.Header(bytes: bytes)
+        #expect(try AppleClipboard.decode(header: header, compressed: []) == .text(""))
+    }
+
+    // Also continue accepting an empty archive inside a real zlib stream.
+    let compressed = try AppleClipboard.compress([])
+    let header = try AppleClipboard.Header(bytes: [0, 0, 0] + UInt32(18).beBytes
+        + UInt32(0).beBytes + UInt32(compressed.count).beBytes)
+    #expect(try AppleClipboard.decode(header: header, compressed: compressed) == .text(""))
+}
+
+@Test func appleClipboardRejectsMissingCompressedDataForNonemptyArchive() throws {
+    let header = try AppleClipboard.Header(bytes: [0, 0, 0] + UInt32(19).beBytes
+        + UInt32(4).beBytes + UInt32(0).beBytes)
+    #expect(throws: (any Error).self) {
+        try AppleClipboard.decode(header: header, compressed: [])
+    }
+    let missingPayload = try AppleClipboard.Header(bytes: [0, 0, 0] + UInt32(20).beBytes
+        + UInt32(0).beBytes + UInt32(1).beBytes)
+    #expect(throws: (any Error).self) {
+        try AppleClipboard.decode(header: missingPayload, compressed: [])
+    }
+}
+
 @Test func appleArchiveReadsMultipleItemsTagsAndUnsupportedFlavors() throws {
     func counted(_ bytes: [UInt8]) -> [UInt8] { UInt32(bytes.count).beBytes + bytes }
-    let image = counted(Array("public.png".utf8)) + UInt32(0).beBytes + UInt32(1).beBytes
+    let image = counted(Array("com.example.unsupported".utf8)) + UInt32(0).beBytes + UInt32(1).beBytes
         + counted(Array("MIME".utf8)) + counted(Array("image/png".utf8)) + counted([1, 2, 3])
     let firstItem = UInt32(1).beBytes + image
     #expect(try AppleClipboard.parseArchive(firstItem) == .noText)
@@ -120,6 +150,90 @@ struct AppleClipboardTests {
     #expect(!peer.hasData(timeout: 0.25))
     try peer.write([0x15, 0, 0, 1, 0, 0, 0, 0])
     #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 2])
+}
+
+@Test func appleClipboardRepeatedStartDoesNotAnnounceUnchangedServerText() throws {
+    let peer = try ClipboardTestPeer()
+    defer { peer.finish() }
+    _ = try peer.handshake(version: AppleRFB.version)
+    try peer.enableAppleClipboard()
+    // The viewer has already fetched the server's clipboard before a local copy.
+    try peer.write([0x0b, 1, 0, 0, 0, 0, 0, 40])
+    #expect(try peer.readClipboard().1 == .promisedText)
+    try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 41])
+    #expect(try peer.readClipboard().1 == .text("initial"))
+
+    // Reasserting an active subscription must not advertise the old server text
+    // as a new copy: the viewer could overwrite its newer local screenshot.
+    try peer.write([0x15, 0, 0, 1, 0, 0, 0, 0])
+    #expect(!peer.hasData(timeout: 0.25))
+    peer.clipboard.copyLocal("new server copy")
+    #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 2])
+    try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 42])
+    #expect(try peer.readClipboard().1 == .text("new server copy"))
+}
+
+@Test func appleClipboardIgnoresUnsupportedFormatsWithoutReplyingOrClearingServerText() throws {
+    for promises in [true, false] {
+        let peer = try ClipboardTestPeer()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.enableAppleClipboard()
+        try peer.write([0x0b, 1, 0, 0, 0, 0, 0, 44])
+        #expect(try peer.readClipboard().1 == .promisedText)
+        func counted(_ bytes: [UInt8]) -> [UInt8] { UInt32(bytes.count).beBytes + bytes }
+        // Both unsupported announcements and populated unsupported flavors use
+        // the no-text path. The payload bytes are opaque to the server.
+        let data: [UInt8] = promises ? [] : [0x89, 0x50, 0x4e, 0x47]
+        let raw = UInt32(1).beBytes + counted(Array("com.example.unsupported".utf8))
+            + UInt32(0).beBytes + UInt32(0).beBytes + counted(data)
+        let compressed = try AppleClipboard.compress(raw)
+        try peer.write([0x1f, 0, promises ? 1 : 0, 0] + UInt32(0).beBytes
+            + UInt32(raw.count).beBytes + UInt32(compressed.count).beBytes + compressed)
+        // SetMode provides a processing barrier without fetching the clipboard.
+        try peer.write([0x0a, 0, 0, 1])
+        #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 9])
+        #expect(!peer.hasData(timeout: 0.25))
+        #expect(peer.clipboard.currentText() == "initial")
+
+        try peer.write([0x15, 0, 0, 1, 0, 0, 0, 0])
+        #expect(!peer.hasData(timeout: 0.25))
+
+        // A subsequent explicit fetch still returns the server's existing text.
+        try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 43])
+        #expect(try peer.readClipboard().1 == .text("initial"))
+    }
+}
+
+@Test func appleClipboardHeaderOnlyClearDoesNotDisconnectAfterImage() throws {
+    let peer = try ClipboardTestPeer()
+    defer { peer.finish() }
+    _ = try peer.handshake(version: AppleRFB.version)
+    try peer.enableAppleClipboard()
+    try peer.write([0x0b, 1, 0, 0, 0, 0, 0, 45])
+    #expect(try peer.readClipboard().1 == .promisedText)
+
+    // Reproduce the reported unsupported flavor -> zero-payload message
+    // sequence, with an old server text promise still outstanding.
+    let flavor = Array("public.png".utf8)
+    let raw = UInt32(1).beBytes + UInt32(flavor.count).beBytes + flavor
+        + UInt32(0).beBytes + UInt32(0).beBytes + UInt32(0).beBytes
+    let compressed = try AppleClipboard.compress(raw)
+    let imagePromise: [UInt8] = [0x1f, 0, 1, 0] + UInt32(0).beBytes
+        + UInt32(raw.count).beBytes + UInt32(compressed.count).beBytes + compressed
+    let emptyClipboard: [UInt8] = [0x1f, 0, 0, 0] + [UInt8](repeating: 0, count: 12)
+    try peer.write(imagePromise + emptyClipboard + [0x0b, 0, 0, 0, 0, 0, 0, 46])
+    #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 3])
+    let (header, contents) = try peer.readClipboard()
+    #expect(header.requestID == 46)
+    #expect(contents == .text(""))
+    #expect(peer.clipboard.currentText() == "")
+    #expect(!peer.hasData(timeout: 0.25))
+
+    // Continue on the same socket: no reconnect or stale initial text replay.
+    try peer.write(AppleClipboard.message(text: "after clear", requestID: 0))
+    try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 47])
+    #expect(try peer.readClipboard().1 == .text("after clear"))
 }
 
 @Test func appleClipboardRequiresViewerStatusCapability() throws {
@@ -273,18 +387,19 @@ struct AppleClipboardTests {
 
 final class ClipboardTestBridge: ClipboardBridge, @unchecked Sendable {
     private let lock = NSLock()
-    private var text = "initial"
+    private var content = ClipboardContent.text("initial")
     private var changed = false
-    func currentText() -> String { lock.withLock { text } }
-    func localTextIfChanged() -> String? {
+    func currentContent() -> ClipboardContent? { lock.withLock { content } }
+    func localContentIfChanged() -> ClipboardContent? {
         lock.withLock {
             guard changed else { return nil }
             changed = false
-            return text
+            return content
         }
     }
-    func setRemoteText(_ value: String) { lock.withLock { text = value; changed = false } }
-    func copyLocal(_ value: String) { lock.withLock { text = value; changed = true } }
+    func setRemoteContent(_ value: ClipboardContent) { lock.withLock { content = value; changed = false } }
+    func copyLocal(_ value: String) { copyLocal(.text(value)) }
+    func copyLocal(_ value: ClipboardContent) { lock.withLock { content = value; changed = true } }
 }
 
 private struct ClipboardTestScreen: FramebufferSource {
@@ -314,7 +429,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
         ownsSession = false
     }
 
-    init(password: String? = "testpass", includesCursor: Bool = false) throws {
+    init(password: String? = "testpass", includesCursor: Bool = false, fileTransfer: Bool = false) throws {
         self.password = password
         var fds = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
@@ -329,7 +444,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
         let session = try RFBClientSession(socket: server, password: password, fps: 30,
             encodingPreference: .raw, capture: ClipboardTestScreen(includesCursor: includesCursor), input: ClipboardTestInput(),
             clipboard: clipboard, clipboardSync: true, adaptiveStreaming: false,
-            adaptiveFrameRate: false, logger: ServerLogger(verbose: false))
+            adaptiveFrameRate: false, logger: ServerLogger(verbose: false), fileTransfer: fileTransfer)
         DispatchQueue.global().async { [self] in
             defer { done.signal() }
             try? session.run()

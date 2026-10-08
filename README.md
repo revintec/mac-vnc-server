@@ -242,7 +242,8 @@ Options:
 | `--service` | off | Install and start a per-user macOS LaunchAgent in the logged-in Aqua UI session. |
 | `--service-restart` | — | Restart the registered per-user macOS LaunchAgent. |
 | `--verbose` | off | Enable periodic framebuffer-update logs on stdout. |
-| `--clipboard-sync` | off | Enable text clipboard synchronization with Apple Screen Sharing or a classic VNC client. |
+| `--clipboard-sync` | off | Share text and PNG/TIFF/JPEG images with Apple Screen Sharing; text with classic VNC. |
+| `--file-transfer` | off | Enable Apple file/folder drag and drop in plaintext compatibility mode. Screen Sharing requires `?encrypt=none`; see below. |
 | `--no-adaptive` | off | Disable adaptive FPS, compression, and automatic scale changes. |
 
 ### Password configuration
@@ -333,7 +334,7 @@ Accepted connections use TCP keepalive after 3 seconds of inactivity, with probe
 
 All viewers share the logged-in Mac's desktop, keyboard, and system cursor. Pointer movement from any controlling viewer moves that cursor. Held keys and mouse buttons are tracked by client and stay pressed until their last remote owner releases them; disconnecting or switching an Apple viewer to observe mode releases only that viewer's controls. Click sequences reset when another client takes over the pointer. These rules also apply across the automatic display ports within one server process.
 
-With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text copied by one viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical text echoes do not produce another clipboard change. This is a shared desktop, not separate macOS login sessions. Concurrent screen encoding and network traffic grow with the number of viewers.
+With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text or images copied by one Apple viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical content echoes do not produce another clipboard change. This is a shared desktop, not separate macOS login sessions. Concurrent screen encoding and network traffic grow with the number of viewers.
 
 ### Input
 
@@ -345,15 +346,41 @@ For Apple Screen Sharing, `Alt_L` / `Alt_R` keysyms are remapped to macOS Comman
 
 ### Clipboard
 
-Clipboard synchronization is disabled by default because the native macOS Screen Sharing client can apply incoming clipboard updates to the client's local pasteboard. Enable text synchronization explicitly when it is needed:
+Clipboard synchronization is disabled by default because the native macOS Screen Sharing client can apply incoming clipboard updates to the client's local pasteboard. Enable clipboard synchronization explicitly when it is needed:
 
 ```sh
 ./.build/release/mac-vnc-server-dev run --clipboard-sync
 ```
 
-With `--clipboard-sync`, the server advertises Apple's RFB 3.889 dialect and negotiates an extended ServerInit with compatible viewers. Apple Screen Sharing uses native pasteboard notifications, fetches, and compressed UTF-8 text archives. Other viewers can negotiate RFB 3.3, 3.7, or 3.8 and continue using classic cut text messages. The configured password remains required in either mode.
+With `--clipboard-sync`, the server advertises Apple's RFB 3.889 dialect and negotiates an extended ServerInit with compatible viewers. Apple Screen Sharing uses native pasteboard notifications, fetches, and compressed text and image archives. Other viewers can negotiate RFB 3.3, 3.7, or 3.8 and continue using classic cut text messages. The configured password remains required in either mode.
 
-On the client, enable **Edit → Use Shared Clipboard** after connecting. The implementation supports text, including Unicode, multiline text, clearing, and deferred clipboard requests. Files, images, rich-text preservation, Apple account authentication, and encrypted Apple records are not implemented or advertised. Clipboard archives are limited to 16 MiB. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
+On the client, enable **Edit → Use Shared Clipboard** after connecting. The implementation supports Unicode and multiline text, PNG/TIFF/JPEG images, clearing, and deferred clipboard requests in both directions. Apple clipboard archives are limited to 100 MiB; classic VNC text remains limited to 16 MiB. Rich-text preservation, Apple account authentication, and encrypted Apple records are not implemented. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
+
+File/folder drag and drop is enabled separately with `--file-transfer`. This uses
+an experimental plaintext Apple compatibility profile. Restart the updated
+server with that flag, disconnect the existing viewer session, and connect from
+the client with:
+
+```sh
+open -a "Screen Sharing" 'vnc://SERVER_IP:5900/?encrypt=none'
+```
+
+Use control mode, then drag a file or folder from local Finder into remote Finder
+or onto the remote desktop. Drag a remote Finder item out of the Screen Sharing
+window into local Finder to copy in the other direction. Existing destinations
+are preserved by choosing a numbered name. The VNC password is still required;
+the session traffic is unencrypted. Clients requesting Apple record encryption
+are disconnected with a log explaining the required URL option.
+
+The backend uses the system's private `SSDragHelper`,
+`SSFileCopySender` and `SSFileCopyReceiver` executables as the logged-in user.
+Tests cover native file/folder helpers, drag initialization and authorization,
+completion staging, collision handling and cancellation. An unshown Tahoe native
+Screen Sharing view also verifies that a real connection registers Finder drops
+and enables both directions. Actual Finder gestures with the macOS 13.1 client
+remain a manual interoperability check. Receiving symbolic links is unsupported.
+See [Apple file transfers](docs/apple-file-transfer.md) for the protocol and limits.
+
 
 Mouse clicks carry macOS click counts, using the server Mac's double-click interval and desktop-point coordinates. Apple RFB 3.889's right/middle button ordering is translated before posting events. ScreenCaptureKit includes the actual system cursor in the captured pixels, including I-beam and resize shapes. Viewers advertising RichCursor or XCursor receive an empty local cursor to prevent a duplicate overlay. Cursor feedback therefore follows the framebuffer update rate.
 

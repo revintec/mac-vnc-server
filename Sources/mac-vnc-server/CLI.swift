@@ -209,6 +209,7 @@ enum CLI {
         var displaySelection = DisplaySelection.automatic
         var verbose = false
         var clipboardSync = false
+        var fileTransfer = false
         var adaptiveStreaming = true
         var adaptiveFrameRate = true
         var registerService = false
@@ -285,6 +286,8 @@ enum CLI {
             case "--service":
                 registerService = true
                 serviceFlagIndices.insert(index)
+            case "--file-transfer":
+                fileTransfer = true
             case "--clipboard-sync":
                 clipboardSync = true
             case "--no-adaptive":
@@ -317,7 +320,8 @@ enum CLI {
             verbose: verbose,
             clipboardSync: clipboardSync,
             adaptiveStreaming: adaptiveStreaming,
-            adaptiveFrameRate: adaptiveFrameRate
+            adaptiveFrameRate: adaptiveFrameRate,
+            fileTransfer: fileTransfer
         )
         return ParsedRun(
             config: config,
@@ -347,7 +351,7 @@ enum CLI {
     Usage:
       mac-vnc-server run [--service] [--bind 127.0.0.1] [--port 5900] [--password value]
                           [--fps auto|1...120] [--scale 1.0] [--encoding auto|zrle|zlib|raw]
-                          [--display all|number] [--verbose] [--clipboard-sync] [--no-adaptive]
+                          [--display all|number] [--verbose] [--clipboard-sync] [--file-transfer] [--no-adaptive]
       mac-vnc-server --service-restart
       mac-vnc-server permissions
       mac-vnc-server diagnose
@@ -359,7 +363,8 @@ enum CLI {
     Without --display, port 5900 serves all displays and 5901, 5902, ... serve each display.
     Use --display all to keep only the single combined-display server, or --display 1 for one display.
     Use --verbose to enable periodic framebuffer update logs.
-    Use --clipboard-sync to enable Apple Screen Sharing and classic VNC text clipboard synchronization.
+    Use --clipboard-sync for text and images with Apple Screen Sharing (text with classic VNC).
+    Use --file-transfer for Finder file/folder drag and drop; Screen Sharing must connect with vnc://HOST:PORT/?encrypt=none.
     Use --no-adaptive to disable adaptive FPS, compression, and scale changes.
     Use --service to install and start a per-user LaunchAgent that runs in the UI session.
     Use --service-restart to restart the registered LaunchAgent.
@@ -401,7 +406,8 @@ private extension ServerConfig {
             verbose: verbose,
             clipboardSync: clipboardSync,
             adaptiveStreaming: adaptiveStreaming,
-            adaptiveFrameRate: adaptiveFrameRate
+            adaptiveFrameRate: adaptiveFrameRate,
+            fileTransfer: fileTransfer
         )
     }
 
@@ -418,7 +424,8 @@ private extension ServerConfig {
             verbose: verbose,
             clipboardSync: clipboardSync,
             adaptiveStreaming: adaptiveStreaming,
-            adaptiveFrameRate: adaptiveFrameRate
+            adaptiveFrameRate: adaptiveFrameRate,
+            fileTransfer: fileTransfer
         )
     }
 }

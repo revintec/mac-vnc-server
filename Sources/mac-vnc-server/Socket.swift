@@ -281,11 +281,11 @@ final class ClientSocket {
 
             let result = Darwin.poll(&descriptor, 1, timeoutMilliseconds)
             if result > 0 {
+                // A pipe/socket can have buffered input when its peer closes.
+                // Drain that input before treating the hangup as EOF.
+                if descriptor.revents & events != 0 { return true }
                 if descriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 {
                     throw RFBError.socketError("client socket closed while waiting for I/O")
-                }
-                if descriptor.revents & events != 0 {
-                    return true
                 }
                 continue
             }

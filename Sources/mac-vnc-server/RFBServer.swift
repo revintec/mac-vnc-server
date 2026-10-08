@@ -13,6 +13,7 @@ struct ServerConfig {
     let clipboardSync: Bool
     let adaptiveStreaming: Bool
     let adaptiveFrameRate: Bool
+    var fileTransfer = false
 }
 
 enum DisplaySelection: Equatable {
@@ -145,8 +146,13 @@ final class RFBServer: @unchecked Sendable {
         logger.info("fps=\(fpsDescription) scale=\(config.scale) encoding=\(config.encodingPreference.rawValue) display=\(config.displaySelection.description)")
         logger.info("password configured: \(config.password != nil)")
         logger.info("clipboard sync: \(config.clipboardSync ? "enabled" : "disabled")")
+        if config.fileTransfer {
+            logger.info("Apple file transfer backend: \(NativeTransferProcess.available ? "enabled" : "unavailable: native helpers missing")")
+            logger.info("Apple file drag and drop: plaintext compatibility mode (client requires encrypt=none)")
+        }
         logger.info("shared desktop: up to \(maximumClients) concurrent clients per port")
-        logger.info("Connect with vnc://\(config.bindAddress == "0.0.0.0" ? "127.0.0.1" : config.bindAddress):\(config.port)")
+        let connectionSuffix = config.fileTransfer ? "/?encrypt=none" : ""
+        logger.info("Connect with vnc://\(config.bindAddress == "0.0.0.0" ? "127.0.0.1" : config.bindAddress):\(config.port)\(connectionSuffix)")
 
         while !lock.withLock({ stopped }) {
             guard let client = try listener.acceptClient(timeout: 0.25) else { continue }
@@ -170,7 +176,7 @@ final class RFBServer: @unchecked Sendable {
                     input: makeInput(), clipboard: makeClipboard(),
                     clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
                     adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
-                    handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout
+                    handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout, fileTransfer: config.fileTransfer
                 )
                 workers.enter()
                 DispatchQueue.global(qos: .userInteractive).async { [self] in
@@ -351,6 +357,7 @@ final class RFBClientSession: @unchecked Sendable {
 
     private struct PreparedFramebufferUpdate {
         let framebuffer: Framebuffer
+        let sourceLayout: VirtualDisplayLayout
         let encoding: RFBEncoding
         let rects: [Rect]
         let encodedRects: [[UInt8]]
@@ -376,6 +383,8 @@ final class RFBClientSession: @unchecked Sendable {
     private let input: InputController
     private let clipboard: ClipboardBridge
     private let clipboardSync: Bool
+    private let fileTransferEnabled: Bool
+    private var fileTransfer: MacFileTransfer?
     private let adaptiveStreaming: Bool
     private let adaptiveFrameRate: Bool
     private let logger: ServerLogger
@@ -414,14 +423,25 @@ final class RFBClientSession: @unchecked Sendable {
     private var applePushInterval: TimeInterval = 0
     private var appleNextPush = Date.distantPast
     // Accessed only by the writer; retained between a promises-only and a full fetch.
-    private var applePromisedText: (generation: UInt64, text: String)?
+    private var applePromisedContent: (generation: UInt64, content: ClipboardContent)?
+    private var appleIncomingPromise = false
+    private var appleCancelledPromise = false
+    private var appleDeferredFetches: [WriterCommand] = []
+    private static let maxClassicClipboardBytes = 16 * 1_024 * 1_024
 
     private enum WriterCommand {
         case clipboardFetch(requestID: UInt32, promises: Bool)
+        case clipboardReceived(ClipboardContent, promises: Bool, canRequest: Bool)
+        case clipboardReset
         case status(UInt16)
+        case fileData([UInt8], DispatchSemaphore)
     }
     private var writerCommands: [WriterCommand] = []
     private var pendingCursorEncoding: Int32?
+    private var pendingAppleDisplayInfo = false
+    private var pendingAppleFramebufferScale: Double?
+    // Applied only by the writer, so metadata and pixels change together.
+    private var appleFramebufferScale = 1.0
 
     init(
         socket: ClientSocket,
@@ -436,7 +456,8 @@ final class RFBClientSession: @unchecked Sendable {
         adaptiveFrameRate: Bool,
         logger: ServerLogger,
         handshakeTimeout: TimeInterval = 5,
-        messageTimeout: TimeInterval = 5
+        messageTimeout: TimeInterval = 5,
+        fileTransfer: Bool = false
     ) throws {
         self.handshakeTimeout = handshakeTimeout
         self.messageTimeout = messageTimeout
@@ -449,6 +470,7 @@ final class RFBClientSession: @unchecked Sendable {
         self.input = input
         self.clipboard = clipboard
         self.clipboardSync = clipboardSync
+        fileTransferEnabled = fileTransfer && NativeTransferProcess.available
         self.adaptiveStreaming = adaptiveStreaming
         self.adaptiveFrameRate = adaptiveFrameRate
         self.logger = logger
@@ -471,8 +493,21 @@ final class RFBClientSession: @unchecked Sendable {
             captureRateConsumer,
             fps: Int((1.0 / minimumFrameInterval).rounded())
         )
+        if fileTransferEnabled && usesAppleClipboard {
+            fileTransfer = MacFileTransfer(logger: logger, input: input) { [weak self] bytes in
+                guard let self else { throw RFBError.socketError("file-transfer session closed") }
+                let completion = DispatchSemaphore(value: 0)
+                try self.enqueueWriterCommand(.fileData(bytes, completion))
+                while completion.wait(timeout: .now() + 0.25) == .timedOut {
+                    if self.state.withLock({ self.stopped }) {
+                        throw RFBError.socketError("file-transfer session closed")
+                    }
+                }
+            }
+        }
         startFramebufferWriter()
         defer {
+            fileTransfer?.stop()
             stopFramebufferWriter()
             input.releaseKeys()
             if let captureRateConsumer = self.captureRateConsumer {
@@ -507,6 +542,9 @@ final class RFBClientSession: @unchecked Sendable {
             try handlePointerEvent()
         case 6:
             try handleClientCutText()
+        case 0x08:
+            try requireAppleClipboard()
+            try handleAppleSetServerScaling()
         case 0x09:
             try requireAppleClipboard()
             try handleAppleAutoFramebufferUpdate()
@@ -516,6 +554,42 @@ final class RFBClientSession: @unchecked Sendable {
         case 0x0b:
             try requireAppleClipboard()
             try handleAppleClipboardFetch()
+        case 0x12:
+            try requireAppleClipboard()
+            try handleAppleSetEncryption()
+        case 0x0e:
+            try requireAppleClipboard()
+            let bytes = try socket.readExact(7)
+            let sessionID = UInt32.be(bytes[3], bytes[4], bytes[5], bytes[6])
+            logger.verbose("Apple DragEvent received: session=\(sessionID) \(appleFileTransferDiagnostic) [client_fd=\(socket.fd)]")
+            if appleFileTransferAllowed {
+                try fileTransfer?.startDrag(sessionID: sessionID, compressed: [], archiveSize: 0)
+            }
+        case 0x20:
+            try requireAppleClipboard()
+            let bytes = try socket.readExact(15)
+            let sessionID = UInt32.be(bytes[3], bytes[4], bytes[5], bytes[6])
+            let size = Int(UInt32.be(bytes[7], bytes[8], bytes[9], bytes[10]))
+            let compressedSize = Int(UInt32.be(bytes[11], bytes[12], bytes[13], bytes[14]))
+            guard size <= AppleFileTransfer.maxDragBytes, compressedSize <= AppleFileTransfer.maxDragBytes else {
+                throw RFBError.protocolError("Apple drag exceeds 5 MiB")
+            }
+            let compressed = try socket.readExact(compressedSize)
+            logger.verbose("Apple DropEvent received: session=\(sessionID) archive_bytes=\(size) compressed_bytes=\(compressedSize) \(appleFileTransferDiagnostic) [client_fd=\(socket.fd)]")
+            if compressed.isEmpty { fileTransfer?.cancelDrag() }
+            else if appleFileTransferAllowed {
+                try fileTransfer?.startDrag(sessionID: sessionID, compressed: compressed, archiveSize: size)
+            }
+        case 0x22:
+            try requireAppleClipboard()
+            let bytes = try socket.readExact(5)
+            let size = Int(UInt32.be(bytes[1], bytes[2], bytes[3], bytes[4]))
+            guard size <= AppleFileTransfer.maxMessageBytes else {
+                throw RFBError.protocolError("Apple file-copy record exceeds 1 MiB")
+            }
+            let message = try AppleFileTransfer.Message(body: socket.readExact(size))
+            if appleFileTransferAllowed { try fileTransfer?.handle(message) }
+            else { logger.verbose("Apple FileCopy ignored: command=\(message.command) session=\(message.sessionID) \(appleFileTransferDiagnostic) [client_fd=\(socket.fd)]") }
         case 0x15:
             try requireAppleClipboard()
             try handleAppleAutoPasteboard()
@@ -532,13 +606,13 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func handshake(initialFrame: Framebuffer) throws {
         let preferLegacyHandshake = password != nil
-        let banner = clipboardSync ? AppleRFB.version
+        let banner = (clipboardSync || fileTransferEnabled) ? AppleRFB.version
             : (preferLegacyHandshake ? "RFB 003.003\n" : "RFB 003.008\n")
         try socket.writeString(banner)
         let clientVersion = try socket.readExact(12)
         let versionText = String(bytes: clientVersion, encoding: .ascii) ?? "unknown"
         guard ["RFB 003.003\n", "RFB 003.007\n", "RFB 003.008\n", AppleRFB.version].contains(versionText),
-              versionText != AppleRFB.version || clipboardSync else {
+              versionText != AppleRFB.version || clipboardSync || fileTransferEnabled else {
             throw RFBError.protocolError("unsupported RFB protocol version")
         }
         let isRFB33 = versionText == "RFB 003.003\n"
@@ -620,7 +694,7 @@ final class RFBClientSession: @unchecked Sendable {
         bytes += UInt16(framebuffer.width).beBytes
         bytes += UInt16(framebuffer.height).beBytes
         bytes += PixelFormat.serverDefault.bytes
-        let name = usesAppleClipboard ? AppleRFB.desktopName("mac-vnc-server") : Array("mac-vnc-server".utf8)
+        let name = usesAppleClipboard ? AppleRFB.desktopName("mac-vnc-server", fileTransfer: fileTransferEnabled) : Array("mac-vnc-server".utf8)
         bytes += UInt32(name.count).beBytes
         bytes += Array(name)
         try socket.writeAll(bytes)
@@ -649,6 +723,9 @@ final class RFBClientSession: @unchecked Sendable {
         let capabilities = RFBClientCapabilities(encodings: encodings)
         state.lock()
         clientCapabilities = capabilities
+        pendingAppleDisplayInfo = usesAppleClipboard && fileTransferEnabled
+            && encodings.contains(AppleRFB.displayInfoEncoding)
+        if pendingAppleDisplayInfo { state.signal() }
         if capture.includesCursor {
             pendingCursorEncoding = capabilities.supportsRichCursor ? RFBPseudoEncoding.richCursor
                 : (capabilities.supportsXCursor ? RFBPseudoEncoding.xCursor : nil)
@@ -698,7 +775,7 @@ final class RFBClientSession: @unchecked Sendable {
         while true {
             state.lock()
             let automaticUpdateDue = appleAutomaticUpdate != nil && Date() >= appleNextPush
-            if latestUpdateRequest == nil && activeUpdateRequest == nil && !automaticUpdateDue && writerCommands.isEmpty && pendingCursorEncoding == nil && !stopped {
+            if latestUpdateRequest == nil && activeUpdateRequest == nil && !automaticUpdateDue && writerCommands.isEmpty && pendingCursorEncoding == nil && !pendingAppleDisplayInfo && pendingAppleFramebufferScale == nil && !stopped {
                 // Pasteboard monitoring must keep running without framebuffer requests.
                 _ = state.wait(until: Date().addingTimeInterval(0.1))
             }
@@ -710,9 +787,18 @@ final class RFBClientSession: @unchecked Sendable {
             writerCommands.removeAll(keepingCapacity: true)
             let cursorEncoding = pendingCursorEncoding
             pendingCursorEncoding = nil
+            let displayInfo = pendingAppleDisplayInfo
+            pendingAppleDisplayInfo = false
+            let requestedScale = pendingAppleFramebufferScale
+            pendingAppleFramebufferScale = nil
+            let displayLayout = currentLayout
             let request: FramebufferUpdateRequest?
             var unsolicited = false
-            if let latest = latestUpdateRequest {
+            if requestedScale != nil {
+                latestUpdateRequest = nil
+                request = FramebufferUpdateRequest(incremental: false,
+                    rect: Rect(x: 0, y: 0, width: Int(UInt16.max), height: Int(UInt16.max)))
+            } else if let latest = latestUpdateRequest {
                 latestUpdateRequest = nil
                 activeUpdateRequest = usesAppleClipboard ? nil : latest
                 request = latest
@@ -730,6 +816,10 @@ final class RFBClientSession: @unchecked Sendable {
             for command in commands {
                 try sendWriterCommand(command)
             }
+            if let requestedScale { appleFramebufferScale = requestedScale }
+            if displayInfo && requestedScale == nil, let framebuffer = previousFramebuffer {
+                try sendAppleDisplayInfo(framebuffer: framebuffer, sourceLayout: displayLayout)
+            }
             if let cursorEncoding {
                 // A zero-sized cursor hides the viewer's local overlay. The real
                 // cursor is already in ScreenCaptureKit's framebuffer pixels.
@@ -739,7 +829,10 @@ final class RFBClientSession: @unchecked Sendable {
             }
             try sendClipboardChangeIfNeeded()
             if let request {
-                try sendFramebufferUpdate(request, unsolicited: unsolicited)
+                // A scaling request needs a layout reply even without a frame
+                // request. Its full frame also satisfies any pending update.
+                try sendFramebufferUpdate(request, unsolicited: unsolicited,
+                    sendDisplayInfo: requestedScale != nil)
                 if usesAppleClipboard {
                     state.lock()
                     appleNextPush = Date().addingTimeInterval(applePushInterval)
@@ -758,7 +851,14 @@ final class RFBClientSession: @unchecked Sendable {
         writer.wait()
     }
 
-    private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false) throws {
+    private func sendAppleDisplayInfo(framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout) throws {
+        try socket.writeAll(AppleRFB.displayInfo(width: framebuffer.width, height: framebuffer.height,
+            unscaledWidth: sourceLayout.width, unscaledHeight: sourceLayout.height))
+        logger.verbose("Apple DisplayInfo sent: \(framebuffer.width)x\(framebuffer.height) unscaled=\(sourceLayout.width)x\(sourceLayout.height) scale=\(appleFramebufferScale)")
+    }
+
+    private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false,
+                                       sendDisplayInfo: Bool = false) throws {
         frameHadNetworkStall = false
         throttleFrameRate()
         let frameStarted = Date()
@@ -792,7 +892,14 @@ final class RFBClientSession: @unchecked Sendable {
             break
         }
 
-        if unsolicited && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged {
+        let appleLayoutChanged = usesAppleClipboard && state.withLock {
+            clientCapabilities.advertisedEncodings.contains(AppleRFB.displayInfoEncoding)
+                && (sendDisplayInfo || previousFramebuffer?.width != prepared.framebuffer.width
+                    || previousFramebuffer?.height != prepared.framebuffer.height
+                    || currentLayout.width != prepared.sourceLayout.width
+                    || currentLayout.height != prepared.sourceLayout.height)
+        }
+        if unsolicited && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && !appleLayoutChanged {
             return
         }
 
@@ -815,6 +922,10 @@ final class RFBClientSession: @unchecked Sendable {
             networkStallNotifications = 0
             state.unlock()
             return
+        }
+
+        if appleLayoutChanged {
+            try sendAppleDisplayInfo(framebuffer: prepared.framebuffer, sourceLayout: prepared.sourceLayout)
         }
 
         let rectCount = prepared.encodedRects.count
@@ -857,7 +968,9 @@ final class RFBClientSession: @unchecked Sendable {
             )
         }
         previousFramebuffer = prepared.framebuffer
-        currentLayout = prepared.framebuffer.layout
+        // Apple's pointer messages stay in the original framebuffer coordinates
+        // even when its transmitted image is scaled down.
+        currentLayout = usesAppleClipboard ? prepared.sourceLayout : prepared.framebuffer.layout
         hasSentFramebufferUpdate = true
         forceFullFramebuffer = false
         networkStallNotifications = 0
@@ -895,17 +1008,20 @@ final class RFBClientSession: @unchecked Sendable {
         let supportsResize: Bool
         let forceFull: Bool
         state.lock()
-        scale = CGFloat(adaptiveScale)
+        scale = CGFloat(usesAppleClipboard ? appleFramebufferScale : adaptiveScale)
         format = pixelFormat
         encoding = selectedEncodingLocked()
         previous = previousFramebuffer
         sentBefore = hasSentFramebufferUpdate
-        supportsResize = clientCapabilities.supportsDynamicResize
+        supportsResize = !usesAppleClipboard && clientCapabilities.supportsDynamicResize
         let useEncodingTransaction = !clientCapabilities.isAppleScreenSharingClient
         forceFull = forceFullFramebuffer
         state.unlock()
 
-        let framebuffer = try FramebufferResampling.scale(capturedFramebuffer, factor: scale)
+        // DisplayInfo's older screen records infer scaled bounds by rounding
+        // the original pixel dimensions, including on physical Retina displays.
+        let framebuffer = try FramebufferResampling.scale(capturedFramebuffer, factor: scale,
+            roundPixelDimensions: usesAppleClipboard)
         let captureDuration = measureTimings ? Date().timeIntervalSince(captureStarted) : 0
         let framebufferSizeChanged = sentBefore
             && (previous?.width != framebuffer.width || previous?.height != framebuffer.height)
@@ -1017,6 +1133,7 @@ final class RFBClientSession: @unchecked Sendable {
 
         return PreparedFramebufferUpdate(
             framebuffer: framebuffer,
+            sourceLayout: capturedFramebuffer.layout,
             encoding: encoding,
             rects: rects,
             encodedRects: encodedRects,
@@ -1266,7 +1383,7 @@ final class RFBClientSession: @unchecked Sendable {
         _ = try socket.readExact(3)
         let lengthBytes = try socket.readExact(4)
         let length = Int(UInt32.be(lengthBytes[0], lengthBytes[1], lengthBytes[2], lengthBytes[3]))
-        guard length <= AppleClipboard.maxArchiveBytes else {
+        guard length <= Self.maxClassicClipboardBytes else {
             throw RFBError.protocolError("VNC clipboard exceeds the 16 MiB limit")
         }
         let bytes = try socket.readExact(length)
@@ -1278,7 +1395,7 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func sendServerCutText(_ text: String) throws {
         let payload = Array(text.utf8)
-        guard payload.count <= AppleClipboard.maxArchiveBytes else {
+        guard payload.count <= Self.maxClassicClipboardBytes else {
             logger.warning("skipping VNC clipboard larger than 16 MiB")
             return
         }
@@ -1286,6 +1403,27 @@ final class RFBClientSession: @unchecked Sendable {
         bytes += UInt32(payload.count).beBytes
         bytes += payload
         try socket.writeAll(bytes)
+    }
+
+    private var appleFileTransferAllowed: Bool {
+        state.withLock {
+            // Native Screen Sharing omits the FileCopy (0x22) bitmap bit even
+            // while enabling and implementing file transfers. Gate on its drag
+            // negotiation messages; MacFileTransfer still requires a selected
+            // source or accepted destination for every file-copy request.
+            fileTransferEnabled && appleControlMode
+                && AppleRFB.supports(0x20, bitmap: appleViewerCapabilities)
+                && AppleRFB.supports(0x1e, bitmap: appleViewerCapabilities)
+        }
+    }
+
+    private var appleFileTransferDiagnostic: String {
+        state.withLock {
+            "backend=\(fileTransferEnabled) control=\(appleControlMode)"
+                + " viewer_transfer_request=\(AppleRFB.supports(0x1e, bitmap: appleViewerCapabilities))"
+                + " viewer_drag=\(AppleRFB.supports(0x20, bitmap: appleViewerCapabilities))"
+                + " viewer_file_copy=\(AppleRFB.supports(0x22, bitmap: appleViewerCapabilities))"
+        }
     }
 
     private func requireAppleClipboard() throws {
@@ -1297,8 +1435,18 @@ final class RFBClientSession: @unchecked Sendable {
     private func enqueueWriterCommand(_ command: WriterCommand) throws {
         state.lock()
         defer { state.unlock() }
+        guard !stopped else { throw RFBError.socketError("session closed") }
         guard writerCommands.count < 64 else {
             throw RFBError.protocolError("too many pending Apple clipboard requests")
+        }
+        if case .clipboardReceived(let content, _, _) = command {
+            let pendingBytes = writerCommands.reduce(0) { count, pending in
+                if case .clipboardReceived(let queued, _, _) = pending { return count + queued.payloadBytes }
+                return count
+            }
+            guard content.payloadBytes <= AppleClipboard.maxArchiveBytes - pendingBytes else {
+                throw RFBError.protocolError("too many buffered clipboard bytes")
+            }
         }
         writerCommands.append(command)
         state.signal()
@@ -1314,7 +1462,59 @@ final class RFBClientSession: @unchecked Sendable {
         state.lock()
         appleViewerCapabilities = capabilities
         state.unlock()
-        logger.verbose("Apple ViewerInfo: status=\(AppleRFB.supports(0x14, bitmap: capabilities)) clipboard=\(AppleRFB.supports(0x1f, bitmap: capabilities))")
+        logger.verbose("Apple ViewerInfo: status=\(AppleRFB.supports(0x14, bitmap: capabilities)) clipboard=\(AppleRFB.supports(0x1f, bitmap: capabilities)) files=\(AppleRFB.supports(0x22, bitmap: capabilities))")
+        if fileTransferEnabled { logger.verbose("Apple file transfer negotiation: \(appleFileTransferDiagnostic) [client_fd=\(socket.fd)]") }
+    }
+
+    private func handleAppleSetEncryption() throws {
+        let header = try socket.readExact(3)
+        let command = UInt16.be(header[1], header[2])
+        var request = "command=\(command)"
+        // The plaintext path does not need a key exchange. Never silently accept
+        // encryption and then continue sending or receiving unencrypted data.
+        if command == 1 {
+            let body = try socket.readExact(4)
+            let level = UInt16.be(body[0], body[1])
+            let count = Int(UInt16.be(body[2], body[3]))
+            guard count <= 100 else {
+                throw RFBError.protocolError("too many Apple encryption methods: \(count)")
+            }
+            let bytes = try socket.readExact(count * 4)
+            let methods = stride(from: 0, to: bytes.count, by: 4).map {
+                UInt32.be(bytes[$0], bytes[$0 + 1], bytes[$0 + 2], bytes[$0 + 3])
+            }
+            // Command 1 negotiates keys even at level 0; it is not an
+            // unencrypted no-op. Record only negotiation fields, never keys.
+            request += " level=\(level) methods=\(methods)"
+        } else if command == 2 {
+            let body = try socket.readExact(4)
+            let enabled = UInt16.be(body[0], body[1])
+            request += " enabled=\(enabled)"
+            if fileTransferEnabled && enabled == 0 {
+                logger.verbose("Apple SetEncryption: \(request) plaintext retained [client_fd=\(socket.fd)]")
+                return
+            }
+        }
+        throw RFBError.protocolError("Apple encryption is unsupported (\(request)); VNC authentication already succeeded; quit Screen Sharing and open a fresh vnc://HOST:PORT/?encrypt=none connection")
+    }
+
+    private func handleAppleSetServerScaling() throws {
+        // Ten bytes including the message type: padding and a big-endian f64.
+        // Native viewers can send this without checking the capability bitmap.
+        let bytes = try socket.readExact(9)
+        let bits = bytes.dropFirst().reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        let scale = Double(bitPattern: bits)
+        guard scale.isFinite, scale > 0, scale <= 1 else {
+            throw RFBError.protocolError("invalid Apple server scaling factor \(scale)")
+        }
+        state.lock()
+        let supportsDisplayInfo = clientCapabilities.advertisedEncodings.contains(AppleRFB.displayInfoEncoding)
+        if supportsDisplayInfo {
+            pendingAppleFramebufferScale = scale
+            state.signal()
+        }
+        state.unlock()
+        logger.verbose("Apple SetServerScaling: requested=\(scale) display_info=\(supportsDisplayInfo) [client_fd=\(socket.fd)]")
     }
 
     private func handleAppleAutoFramebufferUpdate() throws {
@@ -1347,8 +1547,14 @@ final class RFBClientSession: @unchecked Sendable {
         appleControlMode = mode == 1
         let supportsStatus = AppleRFB.supports(0x14, bitmap: appleViewerCapabilities)
         state.unlock()
-        if mode == 0 { input.releaseKeys() }
-        if supportsStatus { try enqueueWriterCommand(.status(mode == 1 ? 9 : 10)) }
+        if mode == 0 {
+            input.releaseKeys(); fileTransfer?.cancelAll()
+            try enqueueWriterCommand(.clipboardReset)
+        }
+        // MiscStatus 9/10 report permission to control, not the selected mode.
+        // Sending 10 for a voluntary Observe request disables the viewer's
+        // Control command and prevents it from switching back.
+        if supportsStatus && mode == 1 { try enqueueWriterCommand(.status(9)) }
         logger.verbose("Apple SetMode: \(mode == 1 ? "control" : "observe")")
     }
 
@@ -1357,21 +1563,30 @@ final class RFBClientSession: @unchecked Sendable {
         let command = UInt16.be(bytes[1], bytes[2])
         guard command == 1 || command == 2 else { return }
         state.lock()
-        appleAutoPasteboard = command == 1
-        appleInitialClipboardNotification = command == 1
-        appleClipboardGeneration &+= 1
-        state.signal()
+        let enabled = command == 1
+        let changed = appleAutoPasteboard != enabled
+        // Reasserting an active subscription is not a clipboard change. A
+        // false notification can replace a newer copy on the viewer with our
+        // old text, including when the viewer's new copy is an unsupported image.
+        if changed {
+            appleAutoPasteboard = enabled
+            appleInitialClipboardNotification = enabled
+            appleClipboardGeneration &+= 1
+            state.signal()
+        }
         state.unlock()
-        logger.verbose("Apple AutoPasteboard: \(command == 1 ? "started" : "stopped")")
+        if changed && !enabled { try enqueueWriterCommand(.clipboardReset) }
+        logAppleClipboard("Apple AutoPasteboard: \(enabled ? "started" : "stopped") state_changed=\(changed)")
     }
 
     private func handleAppleClipboardFetch() throws {
         let bytes = try socket.readExact(7)
         let requestID = UInt32.be(bytes[3], bytes[4], bytes[5], bytes[6])
         state.lock()
-        let allowed = appleControlMode
+        let allowed = appleControlMode && clipboardSync
         let promises = appleAutoPasteboard && bytes[0] & 1 != 0
         state.unlock()
+        logAppleClipboard("Apple ClipboardFetch received: request=\(requestID) promises=\(promises) allowed=\(allowed)")
         if allowed {
             try enqueueWriterCommand(.clipboardFetch(requestID: requestID, promises: promises))
         }
@@ -1379,50 +1594,115 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func handleAppleClipboardSend() throws {
         let header = try AppleClipboard.Header(bytes: socket.readExact(15))
-        let compressed = try socket.readExact(header.compressedSize)
+        // Headers retain the normal message deadline. Image bodies get a
+        // bounded size-based allowance, including slow links (at least 1 MiB/s).
+        let compressed = try socket.withReadTimeout(
+            messageTimeout + Double(header.compressedSize) / 1_048_576,
+            operation: "Apple clipboard body"
+        ) { try socket.readExact(header.compressedSize) }
         state.lock()
-        let allowed = appleControlMode
+        let allowed = appleControlMode && clipboardSync
         let canRequestPromises = appleAutoPasteboard
             && AppleRFB.supports(0x14, bitmap: appleViewerCapabilities)
         state.unlock()
+        logAppleClipboard("Apple ClipboardSend received: request=\(header.requestID) promises=\(header.promises) archive_bytes=\(header.uncompressedSize) compressed_bytes=\(header.compressedSize) allowed=\(allowed)")
         guard allowed else { return }
-        switch try AppleClipboard.decode(header: header, compressed: compressed) {
-        case .text(let text):
-            clipboard.setRemoteText(text)
-            state.lock()
-            appleClipboardGeneration &+= 1
-            // Applying a remote change must not trigger an initial-change echo.
-            appleInitialClipboardNotification = false
-            state.unlock()
-            logger.verbose("Apple ClipboardSend received: \(text.utf8.count) text bytes")
-        case .promisedText:
-            if header.promises && canRequestPromises {
-                try enqueueWriterCommand(.status(3))
-            }
-        case .noText:
-            logger.verbose("Apple ClipboardSend ignored: no supported text flavor")
+        guard let content = try AppleClipboard.decode(header: header, compressed: compressed).supportedContent else {
+            logAppleClipboard("Apple ClipboardSend ignored: no supported flavor; server clipboard retained")
+            return
         }
+        // Clipboard mutations and fetches share the writer queue, preserving
+        // wire order and preventing a fetch from racing an incoming image.
+        let resolved = !header.promises && content.hasPromises ? content.resolved : content
+        // An unavailable representation must not turn a full response into a clear.
+        guard content.items.isEmpty || !resolved.items.isEmpty else { return }
+        try enqueueWriterCommand(.clipboardReceived(resolved, promises: header.promises, canRequest: canRequestPromises))
+    }
+
+    private func applyAppleClipboard(_ content: ClipboardContent, promises: Bool, canRequest: Bool) throws {
+        state.lock()
+        let allowed = appleControlMode
+        state.unlock()
+        guard allowed else { return }
+        if content.hasPromises {
+            if promises && canRequest {
+                appleIncomingPromise = true
+                appleCancelledPromise = false
+                applePromisedContent = nil
+                state.lock()
+                appleClipboardGeneration &+= 1
+                appleInitialClipboardNotification = false
+                state.unlock()
+                try socket.writeAll(AppleRFB.status(3))
+                logAppleClipboard("Apple ClipboardSend requesting promised contents: images=\(content.hasImages)")
+            }
+            return
+        }
+        // A local copy made during a deferred transfer takes precedence over
+        // the response we requested earlier. Check here as well as in polling.
+        if appleIncomingPromise && !promises { try sendClipboardChangeIfNeeded() }
+        if appleCancelledPromise && !promises && !content.items.isEmpty {
+            appleCancelledPromise = false
+            logAppleClipboard("Apple ClipboardSend ignored: superseded promised response")
+            return
+        }
+        appleCancelledPromise = appleIncomingPromise && promises && content.items.isEmpty
+        clipboard.setRemoteContent(content)
+        appleIncomingPromise = false
+        applePromisedContent = nil
+        state.lock()
+        appleClipboardGeneration &+= 1
+        appleInitialClipboardNotification = false
+        state.unlock()
+        logAppleClipboard("Apple ClipboardSend applied: payload_bytes=\(content.payloadBytes) images=\(content.hasImages)")
+        let fetches = appleDeferredFetches
+        appleDeferredFetches.removeAll()
+        for fetch in fetches { try sendWriterCommand(fetch) }
     }
 
     private func sendWriterCommand(_ command: WriterCommand) throws {
         switch command {
+        case .clipboardReset:
+            appleIncomingPromise = false
+            appleCancelledPromise = false
+            applePromisedContent = nil
+            appleDeferredFetches.removeAll()
+        case .fileData(let bytes, let completion):
+            defer { completion.signal() }
+            if appleFileTransferAllowed { try socket.writeAll(bytes) }
+        case .clipboardReceived(let content, let promises, let canRequest):
+            try applyAppleClipboard(content, promises: promises, canRequest: canRequest)
         case .status(let value):
             try socket.writeAll(AppleRFB.status(value))
+            logAppleClipboard("Apple MiscStatus sent: command=\(value)")
         case .clipboardFetch(let requestID, let promises):
             state.lock()
             let generation = appleClipboardGeneration
             let allowed = appleControlMode
             state.unlock()
             guard allowed else { return }
-            let text: String
-            if !promises, let saved = applePromisedText, saved.generation == generation {
-                text = saved.text
-            } else {
-                text = clipboard.currentText()
+            if appleIncomingPromise {
+                guard appleDeferredFetches.count < 64 else {
+                    throw RFBError.protocolError("too many clipboard fetches while waiting for promised contents")
+                }
+                appleDeferredFetches.append(command)
+                return
             }
-            applePromisedText = promises ? (generation, text) : nil
-            try socket.writeAll(AppleClipboard.message(text: text, requestID: requestID, promises: promises))
-            logger.verbose("Apple ClipboardSend sent: request=\(requestID) promises=\(promises) text_bytes=\(text.utf8.count)")
+            let content: ClipboardContent
+            let source: String
+            if !promises, let saved = applePromisedContent, saved.generation == generation {
+                content = saved.content
+                source = "saved-promise"
+            } else if let current = clipboard.currentContent() {
+                content = current
+                source = "current-pasteboard"
+            } else {
+                logAppleClipboard("Apple ClipboardFetch skipped: unsupported or oversized pasteboard")
+                return
+            }
+            applePromisedContent = promises ? (generation, content) : nil
+            try socket.writeAll(AppleClipboard.message(content: content, requestID: requestID, promises: promises))
+            logAppleClipboard("Apple ClipboardSend sent: request=\(requestID) promises=\(promises) payload_bytes=\(content.payloadBytes) images=\(content.hasImages) source=\(source)")
         }
     }
 
@@ -1440,11 +1720,28 @@ final class RFBClientSession: @unchecked Sendable {
         if watching { appleInitialClipboardNotification = false }
         state.unlock()
         guard watching else { return }
-        let changed = clipboard.localTextIfChanged() != nil
-        if changed || initial {
-            applePromisedText = nil
-            try socket.writeAll(AppleRFB.status(2))
-            logger.verbose("Apple MiscStatus: pasteboard changed")
+        let changed = clipboard.localContentIfChanged() != nil
+        if changed {
+            if appleIncomingPromise { appleCancelledPromise = true }
+            appleIncomingPromise = false
+            applePromisedContent = nil
+            state.withLock { appleClipboardGeneration &+= 1 }
+            let fetches = appleDeferredFetches
+            appleDeferredFetches.removeAll()
+            for fetch in fetches { try sendWriterCommand(fetch) }
         }
+        if changed || (initial && !appleIncomingPromise) {
+            applePromisedContent = nil
+            try socket.writeAll(AppleRFB.status(2))
+            logAppleClipboard("Apple MiscStatus: pasteboard changed initial=\(initial) local_change=\(changed)")
+        }
+    }
+
+    private func logAppleClipboard(_ message: String) {
+        guard logger.isVerbose else { return }
+        // Identify interleaved sessions and correlate client/server traces
+        // without logging clipboard contents. Time is Unix seconds with ms.
+        let timestamp = String(format: "%.3f", Date().timeIntervalSince1970)
+        logger.verbose("\(message) [client_fd=\(socket.fd) time=\(timestamp)]")
     }
 }

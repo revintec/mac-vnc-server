@@ -243,9 +243,16 @@ extension InputController {
 }
 
 protocol ClipboardBridge {
-    func currentText() -> String
-    func localTextIfChanged() -> String?
-    func setRemoteText(_ text: String)
+    /// Nil means unavailable/unsupported; it must never be sent as a clear.
+    func currentContent() -> ClipboardContent?
+    func localContentIfChanged() -> ClipboardContent?
+    func setRemoteContent(_ content: ClipboardContent)
+}
+
+extension ClipboardBridge {
+    func currentText() -> String { currentContent()?.text ?? "" }
+    func localTextIfChanged() -> String? { localContentIfChanged()?.text }
+    func setRemoteText(_ text: String) { setRemoteContent(.text(text)) }
 }
 
 enum RFBError: LocalizedError {

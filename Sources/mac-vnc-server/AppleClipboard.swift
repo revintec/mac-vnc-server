@@ -4,12 +4,22 @@ import zlib
 /// A separate zlib stream for each Apple pasteboard archive; never the framebuffer stream.
 enum AppleClipboard {
     static let textFlavor = Array("public.utf8-plain-text".utf8)
-    static let maxArchiveBytes = 16 * 1_024 * 1_024
+    static let maxArchiveBytes = 100 * 1_024 * 1_024
 
     enum Contents: Equatable {
         case text(String)
         case promisedText
         case noText
+        case content(ClipboardContent)
+
+        var supportedContent: ClipboardContent? {
+            switch self {
+            case .text(let text): return .text(text)
+            case .promisedText: return ClipboardContent(items: [[.init(type: ClipboardContent.textType, data: nil)]])
+            case .content(let content): return content
+            case .noText: return nil
+            }
+        }
     }
 
     struct Header {
@@ -27,7 +37,7 @@ enum AppleClipboard {
             uncompressedSize = Int(UInt32.be(bytes[7], bytes[8], bytes[9], bytes[10]))
             compressedSize = Int(UInt32.be(bytes[11], bytes[12], bytes[13], bytes[14]))
             guard uncompressedSize <= maxArchiveBytes, compressedSize <= maxArchiveBytes else {
-                throw RFBError.protocolError("Apple clipboard exceeds the 16 MiB archive limit")
+                throw RFBError.protocolError("Apple clipboard exceeds the 100 MiB archive limit")
             }
         }
     }
@@ -45,7 +55,34 @@ enum AppleClipboard {
     }
 
     static func message(text: String, requestID: UInt32, promises: Bool = false) throws -> [UInt8] {
-        let raw = try archive(text: text, promises: promises)
+        try message(content: .text(text), requestID: requestID, promises: promises)
+    }
+
+    static func archive(content: ClipboardContent, promises: Bool = false) throws -> [UInt8] {
+        if content.items.isEmpty { return UInt32(0).beBytes }
+        var raw: [UInt8] = []
+        for item in content.items {
+            guard raw.count <= maxArchiveBytes - 4 else {
+                throw RFBError.protocolError("Apple clipboard archive is too large")
+            }
+            raw += UInt32(item.count).beBytes
+            for flavor in item {
+                let name = Array(flavor.type.utf8)
+                let data = promises ? nil : flavor.data
+                let size = 16 + name.count + (data?.count ?? 0)
+                guard size <= maxArchiveBytes - raw.count else {
+                    throw RFBError.protocolError("Apple clipboard archive is too large")
+                }
+                raw += UInt32(name.count).beBytes + name + UInt32(0).beBytes + UInt32(0).beBytes
+                    + UInt32(data?.count ?? 0).beBytes
+                if let data { raw.append(contentsOf: data) }
+            }
+        }
+        return raw
+    }
+
+    static func message(content: ClipboardContent, requestID: UInt32, promises: Bool = false) throws -> [UInt8] {
+        let raw = try archive(content: content, promises: promises)
         let compressed = try compress(raw)
         guard compressed.count <= maxArchiveBytes else {
             throw RFBError.protocolError("compressed Apple clipboard exceeds the archive limit")
@@ -58,6 +95,12 @@ enum AppleClipboard {
         guard compressed.count == header.compressedSize else {
             throw RFBError.protocolError("Apple clipboard compressed length mismatch")
         }
+        // An empty pasteboard can be represented by just the header, with both
+        // sizes zero and no zlib stream. Only this exact pair means clear;
+        // missing compressed data for a nonempty archive remains an error.
+        if header.uncompressedSize == 0 && compressed.isEmpty {
+            return .text("")
+        }
         return try parseArchive(inflate(compressed, expectedSize: header.uncompressedSize))
     }
 
@@ -69,6 +112,7 @@ enum AppleClipboard {
         var text: String?
         var promisedText = false
         var hasFlavors = false
+        var items: [[ClipboardContent.Flavor]] = []
         // There is no outer item count. Items run to the end of the archive.
         while !reader.atEnd {
             let flavors = try reader.number()
@@ -77,6 +121,7 @@ enum AppleClipboard {
                 throw RFBError.protocolError("invalid Apple clipboard flavor count")
             }
             hasFlavors = hasFlavors || flavors > 0
+            var item: [ClipboardContent.Flavor] = []
             for _ in 0..<flavors {
                 let name = try reader.countedBytes()
                 _ = try reader.number() // reserved
@@ -89,6 +134,11 @@ enum AppleClipboard {
                     _ = try reader.countedBytes()
                 }
                 let data = try reader.countedBytes()
+                if let type = String(bytes: name, encoding: .utf8),
+                   ClipboardContent.supportedTypes.contains(type),
+                   !item.contains(where: { $0.type == type }) {
+                    item.append(.init(type: type, data: data.isEmpty ? nil : Data(data)))
+                }
                 if name.elementsEqual(textFlavor) {
                     if data.isEmpty {
                         promisedText = true
@@ -100,7 +150,10 @@ enum AppleClipboard {
                     }
                 }
             }
+            if !item.isEmpty { items.append(item) }
         }
+        let content = ClipboardContent(items: items)
+        if content.hasImages { return .content(content) }
         if let text { return .text(text) }
         if promisedText { return .promisedText }
         return hasFlavors ? .noText : .text("")
@@ -167,7 +220,7 @@ enum AppleClipboard {
     static func inflate(_ bytes: [UInt8], expectedSize: Int) throws -> [UInt8] {
         guard expectedSize >= 0, expectedSize <= maxArchiveBytes,
               bytes.count <= maxArchiveBytes, !bytes.isEmpty else {
-            throw RFBError.protocolError("invalid Apple clipboard compressed archive size")
+            throw RFBError.protocolError("invalid Apple clipboard compressed archive size: compressed_bytes=\(bytes.count) archive_bytes=\(expectedSize)")
         }
         var stream = z_stream()
         guard inflateInit_(&stream, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {

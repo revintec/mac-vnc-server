@@ -1,6 +1,6 @@
 import Foundation
 
-/// Apple's RFB extensions, deliberately limited to control and text pasteboard support.
+/// Apple's RFB extensions for control, display scaling, pasteboard and file transfers.
 /// Wire reference and interoperability limits: docs/apple-clipboard.md.
 enum AppleRFB {
     static let version = "RFB 003.889\n"
@@ -17,11 +17,17 @@ enum AppleRFB {
             && bitmap[message / 8] & (0x80 >> (message % 8)) != 0
     }
 
-    static func desktopName(_ name: String) -> [UInt8] {
+    static func desktopName(_ name: String, fileTransfer: Bool = false) -> [UInt8] {
         var bitmap = [UInt8](repeating: 0, count: 16)
-        // Do not advertise Apple's encrypted records, virtual displays or private codecs.
+        // Virtual displays and private codecs are not implemented.
         for message in [0, 2, 3, 4, 5, 6, 0x09, 0x0a, 0x0b, 0x15, 0x1f, 0x21] {
             bitmap[message / 8] |= 0x80 >> (message % 8)
+        }
+        if fileTransfer {
+            // Screen Sharing uses SetEncryption as a native-server capability
+            // gate even for plaintext sessions. This opt-in compatibility mode
+            // requires encrypt=none; encryption requests are explicitly refused.
+            for message in [0x08, 0x0e, 0x12, 0x20, 0x22] { bitmap[message / 8] |= 0x80 >> (message % 8) }
         }
         // Extended ServerInit, with control privilege available.
         return UInt16(0).beBytes + UInt32(0x12).beBytes + bitmap + Array(name.utf8)
@@ -38,5 +44,23 @@ enum AppleRFB {
 
     static func status(_ command: UInt16) -> [UInt8] {
         [0x14, 0, 0, 4, 0, 1] + command.beBytes
+    }
+
+    static let displayInfoEncoding: Int32 = 1101
+
+    /// One logical screen represents the framebuffer selected by this port.
+    /// Apple waits for this metadata before declaring a native session ready.
+    /// The rectangle describes transmitted pixels; the body retains unscaled
+    /// desktop coordinates, which Apple also uses for pointer events.
+    static func displayInfo(width: Int, height: Int, unscaledWidth: Int? = nil, unscaledHeight: Int? = nil) -> [UInt8] {
+        let nativeWidth = UInt16(clamping: unscaledWidth ?? width)
+        let nativeHeight = UInt16(clamping: unscaledHeight ?? height)
+        let width = UInt16(clamping: width), height = UInt16(clamping: height)
+        let rectangle = [UInt8](repeating: 0, count: 4) + width.beBytes + height.beBytes
+            + UInt32(bitPattern: displayInfoEncoding).beBytes
+        let header = nativeWidth.beBytes + nativeHeight.beBytes + UInt32(0).beBytes + UInt16(1).beBytes
+        let screen = UInt32(1).beBytes + nativeWidth.beBytes + nativeHeight.beBytes + UInt32(0).beBytes
+            + UInt32(0).beBytes + UInt32(0).beBytes + UInt32(nativeWidth).beBytes + UInt32(nativeHeight).beBytes
+        return [0, 0, 0, 1] + rectangle + header + screen
     }
 }

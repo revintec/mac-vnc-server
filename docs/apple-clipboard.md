@@ -1,4 +1,4 @@
-# Apple Screen Sharing text clipboard
+# Apple Screen Sharing clipboard
 
 Enable with the existing `--clipboard-sync` option. Reconnect after switching
 binaries: the Apple capabilities are negotiated at connection startup. On the
@@ -6,17 +6,20 @@ viewer, select Edit → Use Shared Clipboard.
 
 ## Scope
 
-This implements Apple's native text pasteboard exchange as an optional RFB
+This implements Apple's native text and image pasteboard exchange as an optional RFB
 3.889 profile. The server continues to support standard RFB 3.3/3.7/3.8 clients.
 Password authentication (security type 2) remains required when configured;
 None is advertised only when authentication has explicitly been disabled.
 
-The profile supports UTF-8 text, newlines, empty pasteboards, multiple-item
-incoming archives, unsupported-flavor skipping, and deferred text promises.
-It does not advertise Apple account authentication (type 30), encrypted records,
-virtual displays, private framebuffer codecs, or file transfer. Rich text and
-images are not preserved. Compressed and expanded clipboard archives are each
-limited to 16 MiB; malformed sizes, counts and compressed streams are rejected.
+The profile supports UTF-8 text, newlines, empty pasteboards, PNG, TIFF and JPEG
+representations, multiple image items, unsupported-flavor skipping, and deferred
+promises. Image bytes are preserved without transcoding. Compressed and expanded
+Apple archives are each limited to 100 MiB; classic text remains limited to 16 MiB.
+Malformed sizes, counts and compressed streams are rejected. Rich text, Apple
+account authentication, encrypted records, virtual displays and private framebuffer
+codecs remain unsupported. The separate `--file-transfer` profile enables Finder
+drag negotiation in plaintext compatibility mode and requires `?encrypt=none`;
+see [Apple file transfers](apple-file-transfer.md).
 
 ## Wire exchange
 
@@ -38,16 +41,22 @@ limited to 16 MiB; malformed sizes, counts and compressed streams are rejected.
 - When monitoring is enabled and the viewer supports the messages, emit
   MiscStatus (`0x14`) command 2 on a local change. Answer the subsequent fetch
   with ClipboardSend, echoing its request ID.
+- Starting monitoring sends an initial notification. Repeating start while
+  already monitoring does not announce a change or invalidate saved promises.
+  A stop followed by start still sends an initial notification.
 - A promises-only fetch returns the flavor with no data; the later full fetch
-  retrieves the saved text. For incoming promised text, MiscStatus command 3
+  retrieves the saved content. For incoming promised text or images, MiscStatus command 3
   requests the full contents before applying them to NSPasteboard.
 - Each ClipboardSend has a 16-byte header and its own zlib stream, flushed with
   `Z_SYNC_FLUSH`. It never shares a compressor with framebuffer encoding.
 - Archives contain a sequence of items, not an outer item count. Each item
   contains a u32 flavor count. Each flavor has a counted UTI, reserved u32,
   u32 tag count, counted key/value tags, and counted data. All counts are BE u32.
-  The text UTI is `public.utf8-plain-text` (22 bytes). An item with zero flavors
+  Supported UTIs are `public.utf8-plain-text`, `public.png`, `public.tiff` and `public.jpeg`. An item with zero flavors
   clears the pasteboard; a text flavor with zero data promises future contents.
+- A header with both archive sizes zero also clears the pasteboard. It contains
+  no zlib stream. Zero compressed bytes with a nonzero expanded size remain an
+  error; an empty payload is not an image promise.
 
 Each connection has its own framebuffer writer, compressors, negotiated
 capabilities and clipboard change cursor. Up to 32 connections can run on each
@@ -55,14 +64,20 @@ listening port; incomplete handshakes expire after 5 seconds. Standard RFB
 exclusive ClientInit requests do not evict other viewers. Apple's SetMode still
 supports control and observe only, not exclusive control.
 
+Choosing Observe keeps the client's permission to resume control. MiscStatus 9
+and 10 report control permission, not the selected mode; the server must not send
+10 in response to a voluntary Observe request, since that disables Screen
+Sharing's Control command.
+
 TCP keepalive probes start after 3 idle seconds, retry at one-second intervals,
 and drop an unreachable peer after three unanswered probes (roughly 6 seconds,
 subject to OS timer scheduling). Brief network outages may require reconnecting.
 Unacknowledged TCP data has a 6-second retransmission limit, and writes that make no progress time
 out after three seconds. These transport settings also apply to classic viewers.
 Healthy idle viewers have no application inactivity deadline. Each started client
-message has a total 5-second read deadline across its header and payload; this
-includes Apple clipboard archives, and trickled bytes do not extend the deadline.
+message normally has a total 5-second read deadline. Apple clipboard headers
+retain that deadline; the body has a fixed allowance of 5 seconds plus one second
+per MiB of compressed data. Partial progress does not extend this deadline.
 Timeouts take the same session cleanup path as an ordinary disconnect.
 
 All post-handshake writes go through that connection's framebuffer writer. It wakes
@@ -70,11 +85,63 @@ every 100 ms even without framebuffer requests, services queued clipboard
 requests between complete frames, and suppresses notifications for remote
 pasteboard writes to their originating connection. Other connected viewers can
 receive those changes. Pasteboard access is serialized across the process, with
-an independent change cursor per viewer and suppression of identical text echoes.
+an independent change cursor per viewer and suppression of identical text/image echoes.
 Disconnect cleanup waits for the connection's writer to stop, releases only its
 owned controls, and removes only its capture-rate subscription.
-Verbose logging records message types, sizes and request IDs,
-but never the clipboard text or authentication credentials.
+Verbose clipboard logging records message types, sizes, request IDs, the socket
+descriptor and a Unix timestamp in seconds. It distinguishes initial notifications
+from local pasteboard changes, repeat start commands from state transitions, and
+fetches served from a saved promise from reads of the current pasteboard. It never
+records clipboard text or authentication credentials.
+
+## Investigating a client screenshot being replaced
+
+Incoming PNG/TIFF/JPEG promises now request their full contents using MiscStatus
+command 3. Fetches arriving while those bytes are pending are deferred, so they
+cannot reply with the old server clipboard. Clipboard application and fetch replies
+share the writer queue. An explicit clear supersedes the pending image. A newer
+server copy also supersedes the requested image response. Automatic responses use
+request ID zero, so the protocol cannot unambiguously correlate several overlapping
+client generations; the next new promise begins a new exchange.
+
+Socket tests reproduced an unnecessary change notification on a repeated
+`AutoPasteboard(start)`. That case is now suppressed. Whether Screen Sharing 3.0
+on macOS 13.1 sends a repeated start, a stop/start pair, or a fetch when regaining
+focus after a screenshot has not been established. A client pasteboard trace
+showing the screenshot followed by old text does not distinguish those cases.
+
+On 2026-10-09, the user supplied server logs immediately after taking a screenshot
+on the macOS 13.1 client. They show an unsupported clipboard archive, followed by
+`invalid Apple clipboard compressed archive size`, a disconnect and new handshake,
+and then promised and full replies carrying 26 bytes of server text. Reconnection
+provides a concrete path for the old server clipboard to replace the screenshot;
+the trace does not require a focus-triggered repeat start to explain that replay.
+
+In the decoder used for that trace, the header's earlier size checks mean this
+error identifies a message with zero compressed bytes. The uncompressed size was
+not logged. The known empty-pasteboard form (both sizes zero) was incorrectly
+rejected; it is now accepted as a remote clear without disconnecting or echoing a
+notification. A regression test sends an image promise, this empty header, and a
+fetch on one socket, checking that the old promised text is invalidated and the
+session continues. The reverse-engineered reference implementation linked below
+also tests this empty-header form. The user subsequently confirmed that the
+screenshot-copy behavior was fixed on Screen Sharing 3.0/macOS 13.1. That check
+predates the new image-transfer implementation.
+
+Reproduce with the rebuilt server and `--verbose --clipboard-sync`, then inspect
+the clipboard events around the screenshot:
+
+- `AutoPasteboard` with `state_changed=false` is a repeated command; it does not
+  cause an initial notification. A real stop/start still can.
+- `MiscStatus: pasteboard changed` records `initial` and `local_change` separately.
+- `ClipboardSend received` followed by `no supported flavor` establishes
+  that an unsupported archive reached the server; it was not applied.
+- `ClipboardFetch received` followed by `ClipboardSend sent` identifies a viewer
+  request and shows whether its reply used `saved-promise` or `current-pasteboard`.
+
+Image-transfer logs record `images=true` and payload sizes without logging image
+contents. Check a screenshot in both directions after rebuilding and reconnecting;
+packet receipt alone does not prove that the viewer applied the image.
 
 ## Validation
 
@@ -93,7 +160,11 @@ capability gating, clipboard delivery without framebuffer requests, serialized
 framebuffer/clipboard replies, generic RFB fallback, and rejection of an
 authentication downgrade.
 
-The multi-client and timeout changes pass 91 tests in total. Real loopback TCP tests run
+The suite includes repeated clipboard start commands, unsupported archives,
+header-only empty pasteboards, image promise/full exchanges, named pasteboard image
+round trips, multi-client image forwarding with classic clients present, a 17 MiB
+image archive, deferred fetches, superseding clears/local copies, and rejection of
+missing data for nonempty archives. Real loopback TCP tests run
 two authenticated viewers on one listener with independent pixel formats and
 zlib streams, Apple/Apple and Apple/classic clipboard forwarding, echo
 suppression, observe-mode input cleanup, client limits, failed authentication,

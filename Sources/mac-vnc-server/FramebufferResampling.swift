@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 
 enum FramebufferResampling {
-    static func scale(_ framebuffer: Framebuffer, factor: CGFloat) throws -> Framebuffer {
+    static func scale(_ framebuffer: Framebuffer, factor: CGFloat, roundPixelDimensions: Bool = false) throws -> Framebuffer {
         guard factor > 0 else {
             throw RFBError.captureFailed("framebuffer scale must be positive")
         }
@@ -13,9 +13,9 @@ enum FramebufferResampling {
         }
 
         let targetLayout: VirtualDisplayLayout
-        if framebuffer.layout.displays.isEmpty {
+        if framebuffer.layout.displays.isEmpty || roundPixelDimensions {
             targetLayout = VirtualDisplayLayout(
-                displays: [],
+                displays: framebuffer.layout.displays,
                 origin: framebuffer.layout.origin,
                 scale: framebuffer.layout.scale * factor,
                 width: max(1, Int((CGFloat(framebuffer.width) * factor).rounded())),
