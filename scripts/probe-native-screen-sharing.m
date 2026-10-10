@@ -22,6 +22,9 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 - (void)applyURLOptions:(NSDictionary *)options;
 - (NSInteger)minimumEncryptionLevel;
 - (NSInteger)controlType;
+- (void)setControlType:(NSInteger)mode;
+- (NSInteger)controlMode;
+- (id)connectionOptions;
 + (id)keyboardEventWithKeyCode:(NSUInteger)keyCode withState:(int)state withEvent:(id)event;
 - (void)sendEvent:(id)event;
 - (void)connectToURL:(NSString *)url withPreferredCredentials:(id)credentials options:(id)options;
@@ -47,6 +50,36 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 - (id)frameBufferView;
 - (BOOL)allowsDragAndDropFileCopyToRemote;
 - (BOOL)allowsDragAndDropFileCopyFromRemote;
+@end
+
+@interface ProbeSessionView : NSView
+- (void)setDelegate:(id)delegate;
+@end
+
+// Screen Sharing 3.0 saves the view's mode when "finished connecting" resizes
+// its window, then reads that file in sessionIsReady. Model only that ordering
+// with in-memory state; no persistent preferences or files are changed.
+@interface ProbeStartupDelegate : NSObject
+@property(nonatomic, weak) id view;
+@property(nonatomic) BOOL ready;
+@property(nonatomic) BOOL finished;
+@property(nonatomic) BOOL finishedBeforeReady;
+@property(nonatomic) BOOL restoreSavedMode;
+@property(nonatomic) NSInteger savedMode;
+@end
+
+@implementation ProbeStartupDelegate
+- (void)sessionIsReady {
+    if (self.restoreSavedMode) {
+        [[[self.view session] connectionOptions] setControlType:self.savedMode];
+    }
+    self.ready = YES;
+}
+- (void)sessionDidFinishConnecting {
+    self.finishedBeforeReady |= !self.ready;
+    self.finished = YES;
+    if (self.restoreSavedMode) self.savedMode = [self.view controlMode];
+}
 @end
 
 static int testPixelPhase(id view) {
@@ -84,6 +117,8 @@ int main(int argc, char **argv) {
         Class viewClass = NSClassFromString(@"SSSessionView");
         if (!viewClass) return 2;
         BOOL restoreObserve = [initialMode isEqualToString:@"restore-observe"];
+        BOOL restoreSavedControl = [initialMode isEqualToString:@"restore-saved-control"];
+        BOOL restoreSavedObserve = [initialMode isEqualToString:@"restore-saved-observe"];
         __block BOOL restoredObserveBeforePixels = NO;
         __block NSUInteger modeCallbacks = 0;
         __block BOOL restored = NO;
@@ -124,7 +159,8 @@ int main(int argc, char **argv) {
         id options = [NSClassFromString(@"SSConnectionOptions") defaultOptions];
         [options applyURLOptions:@{@"sharePasteboard": @"0", @"disableReconnect": @"1"}];
         if (![initialMode isEqualToString:@"default"] && ![initialMode isEqualToString:@"saved-observe"]) {
-            [options applyURLOptions:@{@"control": ([initialMode isEqualToString:@"control"] || restoreObserve) ? @"1" : @"0"}];
+            [options applyURLOptions:@{@"control": ([initialMode isEqualToString:@"control"] || restoreObserve
+                || restoreSavedControl || restoreSavedObserve) ? @"1" : @"0"}];
         }
         // Exercise the supplied URL, rather than forcing plaintext through an
         // independent options override that could hide a URL parsing failure.
@@ -136,8 +172,13 @@ int main(int argc, char **argv) {
             if (![encryption isEqualToString:@"default"]) [options applyURLOptions:@{@"encrypt": encryption}];
             printf("minimumEncryptionLevel=%ld\n", (long)[options minimumEncryptionLevel]);
         }
-        BOOL expectedControl = !restoreObserve && [options controlType] != 0;
+        BOOL expectedControl = !restoreObserve && !restoreSavedObserve && [options controlType] != 0;
         id view = [[viewClass alloc] initWithFrame:NSMakeRect(0, 0, 640, 480)];
+        ProbeStartupDelegate *startup = [ProbeStartupDelegate new];
+        startup.view = view;
+        startup.restoreSavedMode = restoreSavedControl || restoreSavedObserve;
+        startup.savedMode = restoreSavedControl ? 1 : 0;
+        [(ProbeSessionView *)view setDelegate:startup];
         [view setShouldWarnUserForUnencryptedLegacyVNC:NO];
         [view setAllowsFileTransferToRemote:YES];
         [view setAllowsFileTransferFromRemote:YES];
@@ -156,7 +197,11 @@ int main(int argc, char **argv) {
         BOOL controlSupported = [view supportsControlMode];
         BOOL initialPixels = hasTestPixels(view);
         BOOL passed = [view isConnected] && controlSupported && [view sessionAllowsControl]
-            && initiallyControlling == expectedControl && initialPixels && modeCallbacks <= 2;
+            && initiallyControlling == expectedControl && initialPixels && modeCallbacks <= 2
+            && startup.ready && startup.finished && !startup.finishedBeforeReady;
+        printf("readyBeforeFinished=%d restoredModeMatches=%d\n",
+            startup.ready && startup.finished && !startup.finishedBeforeReady,
+            !startup.restoreSavedMode || startup.savedMode == expectedControl);
         printf("modeMatchesSelection=%d startupModeCallbacks=%lu expectedControl=%d\n",
             initiallyControlling == expectedControl, (unsigned long)modeCallbacks, expectedControl);
         if (restoreObserve) {

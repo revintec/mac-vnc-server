@@ -183,11 +183,10 @@ must not be used to attribute the client's earlier fallback to a missing key.
 The user subsequently supplied the actual macOS 13 file: it contained
 `controlMode=1` and `autoClipboard=true`, both while the app was open and after
 it closed. The next plain-URL connection to 5902 correctly started in Control,
-with no additional server code change. That matches the restoration branch
-and makes connection-state restoration the strongest current explanation.
-The file's contents at the time of the earlier failing connections were not
-captured, so the earlier exact mode-reset trigger remains unproven. Shared
-clipboard selection on that successful reconnect was not separately confirmed.
+with no additional server code change. A later quit/reconnect returned to
+Observe and saved `controlMode=0`, `autoClipboard=false`. The single successful
+reconnect did not establish a fix. In particular, the file can record a startup
+reset rather than cause it.
 
 A hidden Tahoe-framework probe transcribing just the 3.0 mode-restoration branch
 into the real `sessionIsReady` delegate callback produced these results against
@@ -204,7 +203,7 @@ preference writes, shared clipboard, or desktop input:
 This demonstrates that the same restoration condition can reproduce Observe
 with either server; it does not prove the macOS 13 client's earlier saved state.
 
-The copied 3.0 app launches on Tahoe but cannot complete a native session there:
+The unmodified copied 3.0 app launches on Tahoe but cannot complete a native session there:
 it calls the removed private method
 `+[SSSessionView connectionOptionsWithOptions:urlOptions:]` from `sessionIsReady`,
 raising an unrecognized-selector exception. The UI then reports the generic
@@ -212,6 +211,41 @@ viewer/server incompatibility error. Copying only the app does not bring its
 macOS 13 ScreenSharing framework, so that run cannot validate Ventura protocol
 compatibility. The local test used synthetic pixels and mock input; it was
 stopped without changing either live server.
+
+### Premature cursor update and restoration reset
+
+A disposable, instrumented copy of 3.0 reproduced the reset against synthetic
+test servers. Its connection-file reads and writes were redirected to a private
+temporary file. A compatibility adapter supplied the removed Tahoe method above,
+which runs after `restoreSavedSessionStateOptions`; it does not reproduce
+Ventura's URL-merging implementation. Both native and legacy server profiles
+could produce this sequence:
+
+1. The server sends an empty cursor framebuffer update after `SetEncodings`,
+   before the viewer has requested any pixels.
+2. `sessionDidFinishConnecting` runs while the controller is not ready and the
+   view still reports Observe and clipboard off. A window frame notification
+   calls `writeVNCFileToPath:` and overwrites the saved Control value with 0.
+3. `sessionIsReady` calls `restoreSavedSessionStateOptions`, which reads that
+   overwritten value and changes `connectionOptions.controlType` from 1 to 0.
+
+The server now retains the pending cursor until a framebuffer request is being
+served. Display metadata and encryption negotiation still proceed independently.
+With this change, the copied app restored its options and entered Control before
+the first window-state write. Two saved-Control starts and a normal Quit followed
+by reconnect without reseeding the test file all entered Control. The latter
+also exercised the app's missing-mode fallback after Quit removed the mode key.
+The saved clipboard flag survived until restoration; the test URL deliberately
+disabled clipboard sharing afterward to avoid using the general pasteboard.
+Actual clipboard selection and the complete Ventura framework still need a
+macOS 13 retest.
+
+The opt-in native probe now checks that readiness precedes connection completion
+and models the app's save/restore callbacks with in-memory Control and Observe
+values. Wire tests require cursor updates to wait for a framebuffer request,
+including repeated capability negotiation and both cursor encodings. This fixes
+the demonstrated startup overwrite; it does not override an existing saved
+Observe choice. A connection file already containing 0 can still restore it.
 
 An unshown Tahoe Screen Sharing view connected to the test server verifies that
 this combination registers file URLs, filenames and file promises as drag types,
@@ -223,8 +257,7 @@ warnings. It also sends a synthetic key down/up through the native sender into
 mock server input, exercises scaling and restores a 1728×1118 desktop, checking
 decoded pixels after repeated scaling requests. It uses no real desktop input,
 general pasteboard, or persistent client preference changes.
-The macOS 13.1 client itself has not been
-inspected, so actual Finder gestures there remain a manual interoperability test.
+Actual Finder gestures on macOS 13.1 remain a manual interoperability test.
 
 Both the reported macOS 13.1 connection and the Tahoe native probe omit the
 ViewerInfo FileCopy bit (`viewer_file_copy=false`), even when the native view

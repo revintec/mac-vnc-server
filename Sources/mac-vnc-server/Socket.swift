@@ -74,10 +74,22 @@ final class ClientSocket {
 
     // One total deadline across every field of a handshake or client message.
     // Partial progress must not let a peer extend the deadline indefinitely.
-    func withReadTimeout<T>(_ timeout: TimeInterval, operation: String, _ body: () throws -> T) rethrows -> T {
+    func withReadTimeout<T>(_ timeout: TimeInterval, operation: String,
+                            suspendingOuterDeadline: Bool = false, _ body: () throws -> T) rethrows -> T {
         let previous = readDeadline
+        let started = DispatchTime.now().uptimeNanoseconds
         readDeadline = (.now() + timeout, operation)
-        defer { readDeadline = previous }
+        defer {
+            if suspendingOuterDeadline, let previous {
+                // Waiting for human input must not consume the surrounding
+                // protocol budget. Preserve its remaining time, not a fresh
+                // timeout that partial progress could repeatedly extend.
+                let elapsed = DispatchTime.now().uptimeNanoseconds - started
+                readDeadline = (DispatchTime(uptimeNanoseconds: previous.time.uptimeNanoseconds + elapsed), previous.operation)
+            } else {
+                readDeadline = previous
+            }
+        }
         return try body()
     }
 

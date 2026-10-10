@@ -77,6 +77,26 @@ struct SocketTimeoutTests {
         #expect(try reader.readExact(1) == [7])
     }
 
+    @Test func suspendedWaitPreservesTheRemainingOuterBudget() throws {
+        let (reader, peer) = try pair()
+        defer { close(peer) }
+        var byte: UInt8 = 42
+        try reader.withReadTimeout(0.3, operation: "outer handshake") {
+            Thread.sleep(forTimeInterval: 0.15)
+            try reader.withReadTimeout(1, operation: "password entry", suspendingOuterDeadline: true) {
+                Thread.sleep(forTimeInterval: 0.4)
+                try #require(Darwin.write(peer, &byte, 1) == 1)
+                #expect(try reader.readExact(1) == [42])
+            }
+            try #require(Darwin.write(peer, &byte, 1) == 1)
+            #expect(try reader.readExact(1) == [42], "the outer budget must be paused during credential entry")
+            Thread.sleep(forTimeInterval: 0.2)
+            try #require(Darwin.write(peer, &byte, 1) == 1)
+            #expect(throws: (any Error).self) { try reader.readExact(1) }
+        }
+        #expect(try reader.readExact(1) == [42])
+    }
+
     private func pair() throws -> (ClientSocket, Int32) {
         var descriptors = [Int32](repeating: -1, count: 2)
         try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0)

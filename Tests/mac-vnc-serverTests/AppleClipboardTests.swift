@@ -361,15 +361,27 @@ struct AppleClipboardTests {
         _ = try peer.handshake(version: AppleRFB.version)
         try peer.enableAppleClipboard()
         let encodings = [2, 0, 0, 1] + UInt32(bitPattern: encoding).beBytes
+        let request: [UInt8] = [3, 0, 0, 0, 0, 0, 0, 2, 0, 1]
+        let frame: [UInt8] = [0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0, 0]
+            + [UInt8](repeating: 0, count: 8)
         for _ in 0..<2 {
             try peer.write(encodings)
+            // A pending cursor must not block clipboard replies or produce an
+            // unsolicited framebuffer update during session initialization.
+            try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 1])
+            #expect(try peer.readClipboard().1 == .text("initial"))
+            try peer.write(request)
             #expect(try peer.read(16) == [0, 0, 0, 1] + [UInt8](repeating: 0, count: 8)
                 + UInt32(bitPattern: encoding).beBytes)
+            #expect(try peer.read(frame.count) == frame)
         }
         // No cursor pseudo-encoding: do not inject a message the viewer cannot parse.
+        try peer.write(encodings)
         try peer.write([2, 0, 0, 1, 0, 0, 0, 0])
         try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 1])
         #expect(try peer.readClipboard().1 == .text("initial"))
+        try peer.write(request)
+        #expect(try peer.read(frame.count) == frame)
         #expect(!peer.hasData(timeout: 0.15))
     }
 }

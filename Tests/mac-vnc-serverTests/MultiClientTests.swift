@@ -7,7 +7,7 @@ import Testing
 @Suite(.serialized)
 struct MultiClientTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil),
-          arguments: [false, true], ["default", "observe", "control", "saved-observe", "restore-observe"])
+          arguments: [false, true], ["default", "observe", "control", "saved-observe", "restore-observe", "restore-saved-control", "restore-saved-observe"])
     func nativeScreenSharingKeepsSelectedModeAndStreams(fileTransfer: Bool, initialMode: String) throws {
         try runNativeProbe(fileTransfer: fileTransfer, initialMode: initialMode)
     }
@@ -42,6 +42,7 @@ struct MultiClientTests {
         #expect(probe.terminationStatus == 0, "\(text)")
         #expect(text.contains("controlSupported=1 controlAllowed=1"), "\(text)")
         #expect(text.contains("modeMatchesSelection=1"), "\(text)")
+        #expect(text.contains("readyBeforeFinished=1 restoredModeMatches=1"), "\(text)")
         #expect(text.contains("stableMode=1 unsolicitedModeCallbacks=0"), "\(text)")
         #expect(text.contains("streamingPixels=1"), "\(text)")
         #expect(text.contains("observing=1 canResumeControl=1 resumedControl=1"), "\(text)")
@@ -57,6 +58,37 @@ struct MultiClientTests {
             #expect(text.contains("scaling=0.50 framebuffer=864x559"), "\(text)")
             #expect(text.contains("scaling=1.00 framebuffer=1728x1118"), "\(text)")
         }
+    }
+
+    @Test(arguments: [false, true], [Int32(-239), Int32(-240)])
+    func cursorWaitsForFramebufferRequest(fileTransfer: Bool, cursor: Int32) throws {
+        let server = try MultiClientServer(fileTransfer: fileTransfer, nativePattern: true)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        let encodings: [UInt8] = [2, 0, 0, 3] + UInt32(0).beBytes
+            + UInt32(bitPattern: cursor).beBytes + UInt32(1105).beBytes
+        // Repeated capability negotiation must retain a single pending cursor
+        // without sending a framebuffer update before the viewer is ready.
+        for _ in 0..<2 {
+            try peer.write(encodings)
+            if fileTransfer {
+                let layout = AppleRFB.displayLayout(width: 2, height: 1,
+                    unscaledWidth: 2, unscaledHeight: 1, scale: 1)
+                #expect(try peer.read(layout.count) == layout)
+            }
+            #expect(!peer.hasData(timeout: 0.15), "cursor must wait for a framebuffer request")
+        }
+        try peer.write(fullUpdate)
+        let hiddenCursor = [UInt8]([0, 0, 0, 1]) + [UInt8](repeating: 0, count: 8)
+            + UInt32(bitPattern: cursor).beBytes
+        #expect(try peer.read(hiddenCursor.count) == hiddenCursor)
+        let pixels = try framePayload(peer, encoding: 0)
+        #expect(pixels.count == 8)
+        #expect(pixels[1] == 128 && pixels[2] == 192)
+        try peer.write(fullUpdate)
+        _ = try framePayload(peer, encoding: 0) // No duplicate cursor.
     }
 
     @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true], [UInt32(1101), UInt32(1105)])
@@ -348,6 +380,70 @@ struct MultiClientTests {
         // Established sessions have no handshake deadline or idle read timeout.
         try active.write(fullUpdate)
         #expect(try framePayload(active, encoding: 0).count == 8)
+    }
+
+    @Test(arguments: ["RFB 003.003\n", "RFB 003.007\n", "RFB 003.008\n", AppleRFB.version], [false, true])
+    func passwordEntryCanOutlastHandshakeBudget(version: String, fileTransfer: Bool) throws {
+        let server = try MultiClientServer(handshakeTimeout: 0.4, authenticationTimeout: 3,
+                                           fileTransfer: fileTransfer)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        let response = try authenticationResponse(peer, version: version, selectorDelay: 0.6)
+        #expect(!peer.hasData(timeout: 0.6), "the password dialog must outlive the handshake budget")
+        try peer.write(response)
+        #expect(try peer.number() == 0)
+        try peer.write([version == AppleRFB.version ? 0xc1 : 1])
+        _ = try peer.read(20)
+        _ = try peer.read(Int(peer.number()))
+        try peer.write(fullUpdate)
+        #expect(try framePayload(peer, encoding: 0).count == 8)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func authenticationResponseAndClientInitRetainHandshakeDeadline(fileTransfer: Bool, authenticated: Bool) throws {
+        let server = try MultiClientServer(handshakeTimeout: 0.3, authenticationTimeout: 2,
+                                           fileTransfer: fileTransfer)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        let response = try authenticationResponse(peer)
+        #expect(!peer.hasData(timeout: 0.5))
+        if authenticated {
+            try peer.write(response)
+            #expect(try peer.number() == 0)
+            // Authentication finished, but the viewer never sends ClientInit.
+        } else {
+            // For type 30, finish the credential block but truncate the public
+            // key, which must share the response's short protocol deadline.
+            try peer.write(Array(response.prefix(response.count > 16 ? 129 : 1)))
+        }
+        #expect(!peer.hasData(timeout: 0.1), "password entry must not exhaust the protocol budget")
+        try #require(peer.hasData(timeout: 0.7), "partial protocol work must not receive the password-entry timeout")
+        #expect(throws: (any Error).self) { try peer.read(1) }
+    }
+
+    @Test(arguments: [false, true])
+    func unusedPasswordPromptExpires(fileTransfer: Bool) throws {
+        let server = try MultiClientServer(handshakeTimeout: 0.2, authenticationTimeout: 0.7,
+                                           fileTransfer: fileTransfer)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try authenticationResponse(peer)
+        #expect(!peer.hasData(timeout: 0.3))
+        try #require(peer.hasData(timeout: 0.8), "an abandoned password prompt must expire")
+        #expect(throws: (any Error).self) { try peer.read(1) }
+    }
+
+    @Test func passwordEntryBudgetIsSharedAcrossSelectionAndChallenge() throws {
+        let server = try MultiClientServer(handshakeTimeout: 0.3, authenticationTimeout: 0.9)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try authenticationResponse(peer, version: "RFB 003.008\n", selectorDelay: 0.6)
+        try #require(peer.hasData(timeout: 0.5), "the challenge must not restart the password-entry budget")
+        #expect(throws: (any Error).self) { try peer.read(1) }
     }
 
     @Test func clientLimitRejectsOnlyTheExtraConnection() throws {
@@ -652,6 +748,38 @@ struct MultiClientTests {
 
     private var fullUpdate: [UInt8] { [3, 0, 0, 0, 0, 0, 0, 2, 0, 1] }
     private var changedStatus: [UInt8] { [0x14, 0, 0, 4, 0, 1, 0, 2] }
+    private func authenticationResponse(_ peer: ClipboardTestPeer, version: String = AppleRFB.version,
+                                        selectorDelay: TimeInterval = 0) throws -> [UInt8] {
+        #expect(try peer.read(12) == Array(AppleRFB.version.utf8))
+        try peer.write(Array(version.utf8))
+        let security: UInt8
+        if version == "RFB 003.003\n" {
+            #expect(try peer.number() == 2)
+            security = 2
+        } else {
+            #expect(try peer.read(1) == [1])
+            security = try peer.read(1)[0]
+            if version != AppleRFB.version || security == 30 {
+                if selectorDelay > 0 {
+                    #expect(!peer.hasData(timeout: selectorDelay), "allow prompting before security selection")
+                }
+                try peer.write([security])
+            }
+        }
+        if security == 30 {
+            #expect(try peer.read(4) == [0, 2] + UInt16(AppleAuth.prime.count).beBytes)
+            #expect(try peer.read(AppleAuth.prime.count) == AppleAuth.prime)
+            let serverKey = try peer.read(AppleAuth.prime.count)
+            let exchange = try AppleAuth.Exchange()
+            let key = try exchange.wrappingKey(peerKey: serverKey)
+            var credentials = [UInt8](repeating: 0, count: 128)
+            credentials.replaceSubrange(64..<72, with: "testpass".utf8)
+            return try AppleEncryption.ecb(credentials, key: key, encrypt: true) + exchange.publicKey
+        }
+        #expect(security == 2)
+        return try VNCAuth.response(challenge: peer.read(16), password: "testpass")
+    }
+
     private func fetch(_ peer: ClipboardTestPeer) throws {
         try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 1])
     }
@@ -676,7 +804,8 @@ private final class MultiClientServer: @unchecked Sendable {
     let screen: MultiClientScreen
     private let done = DispatchSemaphore(value: 0)
 
-    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5, messageTimeout: TimeInterval = 5,
+    init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5,
+         authenticationTimeout: TimeInterval = 120, messageTimeout: TimeInterval = 5,
          fileTransfer: Bool = false, width: Int = 2, height: Int = 1, nativePattern: Bool = false) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
@@ -699,7 +828,7 @@ private final class MultiClientServer: @unchecked Sendable {
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
             logger: ServerLogger(verbose: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil), maximumClients: maximumClients,
-            handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout)
+            handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout, messageTimeout: messageTimeout)
         // The listener is owned by this worker once created.
         let worker = MultiClientListener(server: server, listener: listener, done: done)
         DispatchQueue.global().async { worker.run() }

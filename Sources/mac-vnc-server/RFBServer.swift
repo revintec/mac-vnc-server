@@ -108,6 +108,7 @@ final class RFBServer: @unchecked Sendable {
     private let logger: ServerLogger
     private let maximumClients: Int
     private let handshakeTimeout: TimeInterval
+    private let authenticationTimeout: TimeInterval
     private let messageTimeout: TimeInterval
     private let lock = NSLock()
     private let workers = DispatchGroup()
@@ -122,6 +123,7 @@ final class RFBServer: @unchecked Sendable {
         logger: ServerLogger,
         maximumClients: Int = 32,
         handshakeTimeout: TimeInterval = 5,
+        authenticationTimeout: TimeInterval = 120,
         messageTimeout: TimeInterval = 5
     ) {
         self.config = config
@@ -131,6 +133,7 @@ final class RFBServer: @unchecked Sendable {
         self.logger = logger
         self.maximumClients = maximumClients
         self.handshakeTimeout = handshakeTimeout
+        self.authenticationTimeout = authenticationTimeout
         self.messageTimeout = messageTimeout
     }
 
@@ -179,7 +182,8 @@ final class RFBServer: @unchecked Sendable {
                     input: makeInput(), clipboard: makeClipboard(),
                     clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
                     adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
-                    handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout, fileTransfer: config.fileTransfer
+                    handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout,
+                    messageTimeout: messageTimeout, fileTransfer: config.fileTransfer
                 )
                 workers.enter()
                 DispatchQueue.global(qos: .userInteractive).async { [self] in
@@ -376,6 +380,7 @@ final class RFBClientSession: @unchecked Sendable {
 
     private let socket: ClientSocket
     private let handshakeTimeout: TimeInterval
+    private let authenticationTimeout: TimeInterval
     private let messageTimeout: TimeInterval
     private let writer = DispatchGroup()
     private let password: String?
@@ -466,10 +471,12 @@ final class RFBClientSession: @unchecked Sendable {
         adaptiveFrameRate: Bool,
         logger: ServerLogger,
         handshakeTimeout: TimeInterval = 5,
+        authenticationTimeout: TimeInterval = 120,
         messageTimeout: TimeInterval = 5,
         fileTransfer: Bool = false
     ) throws {
         self.handshakeTimeout = handshakeTimeout
+        self.authenticationTimeout = authenticationTimeout
         self.messageTimeout = messageTimeout
         self.socket = socket
         self.password = password
@@ -630,11 +637,17 @@ final class RFBClientSession: @unchecked Sendable {
         }
         let isRFB33 = versionText == "RFB 003.003\n"
         logger.verbose("RFB handshake: viewer selected \(versionText.trimmingCharacters(in: .whitespacesAndNewlines))")
+        // Some viewers prompt before selecting a security type, others after
+        // receiving its challenge. Both pauses share one password-entry limit.
+        let authenticationDeadline = DispatchTime.now() + authenticationTimeout
+        if password != nil {
+            logger.verbose("RFB authentication: password_entry_timeout=\(authenticationTimeout)s")
+        }
 
         if isRFB33 {
             if let password {
                 try socket.writeAll(UInt32(2).beBytes)
-                try authenticate(password: password)
+                try authenticate(password: password, deadline: authenticationDeadline)
             } else {
                 try socket.writeAll(UInt32(1).beBytes)
             }
@@ -653,8 +666,14 @@ final class RFBClientSession: @unchecked Sendable {
             // Apple's viewer implicitly selects the single classic security type
             // in 3.889 and waits for the challenge (or None's result) immediately.
             // Standard 3.7/3.8 viewers still send the one-byte selector.
-            let selectedSecurity: UInt8 = versionText == AppleRFB.version && !appleAuthentication
-                ? (password == nil ? 1 : 2) : try socket.readExact(1)[0]
+            let selectedSecurity: UInt8
+            if versionText == AppleRFB.version && !appleAuthentication {
+                selectedSecurity = password == nil ? 1 : 2
+            } else if password != nil {
+                selectedSecurity = try readAuthenticationBytes(1, deadline: authenticationDeadline)[0]
+            } else {
+                selectedSecurity = try socket.readExact(1)[0]
+            }
             guard !appleAuthentication || selectedSecurity == 30 else {
                 throw RFBError.protocolError("security type was not offered")
             }
@@ -673,12 +692,12 @@ final class RFBClientSession: @unchecked Sendable {
                     try socket.writeAll(UInt32(1).beBytes)
                     throw RFBError.authenticationFailed
                 }
-                try authenticate(password: password)
+                try authenticate(password: password, deadline: authenticationDeadline)
             case 30:
                 guard appleAuthentication, let password else { throw RFBError.authenticationFailed }
                 let exchange = try AppleAuth.Exchange()
                 try socket.writeAll(exchange.challenge)
-                let credentials = try socket.readExact(128)
+                let credentials = try readAuthenticationBytes(128, deadline: authenticationDeadline)
                 let peerKey = try socket.readExact(AppleAuth.prime.count)
                 do {
                     appleWrappingKey = try exchange.authenticate(credentials: credentials, peerKey: peerKey, password: password)
@@ -703,7 +722,23 @@ final class RFBClientSession: @unchecked Sendable {
         logger.info("client connected: \(versionText.trimmingCharacters(in: .whitespacesAndNewlines)), framebuffer \(initialFrame.width)x\(initialFrame.height), clipboard=\(clipboardSync ? (usesAppleExtensions ? "apple" : "classic") : "off")")
     }
 
-    private func authenticate(password: String) throws {
+    private func readAuthenticationBytes(_ count: Int, deadline: DispatchTime) throws -> [UInt8] {
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now < deadline.uptimeNanoseconds else {
+            throw RFBError.socketError("RFB password entry timed out")
+        }
+        let remaining = Double(deadline.uptimeNanoseconds - now) / 1_000_000_000
+        // Suspend the handshake budget only until the response starts. The
+        // remaining bytes (including Apple's public key) use its original
+        // deadline, so a partial response cannot hold a client slot for minutes.
+        let first = try socket.withReadTimeout(remaining, operation: "RFB password entry",
+                                              suspendingOuterDeadline: true) {
+            try socket.readExact(1)
+        }
+        return try first + socket.readExact(count - 1)
+    }
+
+    private func authenticate(password: String, deadline: DispatchTime) throws {
         var challenge = [UInt8](repeating: 0, count: 16)
         let status = SecRandomCopyBytes(kSecRandomDefault, challenge.count, &challenge)
         if status != errSecSuccess {
@@ -713,7 +748,7 @@ final class RFBClientSession: @unchecked Sendable {
         }
 
         try socket.writeAll(challenge)
-        let response = try socket.readExact(16)
+        let response = try readAuthenticationBytes(16, deadline: deadline)
         if try VNCAuth.response(challenge: challenge, password: password) == response {
             try socket.writeAll(UInt32(0).beBytes)
         } else {
@@ -815,7 +850,7 @@ final class RFBClientSession: @unchecked Sendable {
         while true {
             state.lock()
             let automaticUpdateDue = appleAutomaticUpdate != nil && Date() >= appleNextPush
-            if latestUpdateRequest == nil && activeUpdateRequest == nil && !automaticUpdateDue && writerCommands.isEmpty && pendingCursorEncoding == nil && !pendingAppleDisplayInfo && pendingAppleFramebufferScale == nil && !stopped {
+            if latestUpdateRequest == nil && activeUpdateRequest == nil && !automaticUpdateDue && writerCommands.isEmpty && !pendingAppleDisplayInfo && pendingAppleFramebufferScale == nil && !stopped {
                 // Pasteboard monitoring must keep running without framebuffer requests.
                 _ = state.wait(until: Date().addingTimeInterval(0.1))
             }
@@ -825,8 +860,6 @@ final class RFBClientSession: @unchecked Sendable {
             }
             let commands = writerCommands
             writerCommands.removeAll(keepingCapacity: true)
-            let cursorEncoding = pendingCursorEncoding
-            pendingCursorEncoding = nil
             let displayInfo = pendingAppleDisplayInfo
             pendingAppleDisplayInfo = false
             let requestedScale = pendingAppleFramebufferScale
@@ -847,6 +880,12 @@ final class RFBClientSession: @unchecked Sendable {
             } else {
                 request = nil
             }
+            // An unsolicited empty cursor can make Screen Sharing report
+            // "finished connecting" before sessionIsReady restores its mode
+            // and clipboard settings. Keep it pending until the viewer asks
+            // for pixels, after it has initialized the session.
+            let cursorEncoding = request == nil ? nil : pendingCursorEncoding
+            if request != nil { pendingCursorEncoding = nil }
             state.unlock()
 
             // Only this thread writes after the handshake. Clipboard cannot split a frame.
