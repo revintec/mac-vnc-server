@@ -17,7 +17,7 @@ enum AppleRFB {
             && bitmap[message / 8] & (0x80 >> (message % 8)) != 0
     }
 
-    static func desktopName(_ name: String, fileTransfer: Bool = false) -> [UInt8] {
+    static func desktopName(_ name: String, fileTransfer: Bool = false, allowEncryptedInput: Bool = true) -> [UInt8] {
         var bitmap = [UInt8](repeating: 0, count: 16)
         // Virtual displays and private codecs are not implemented.
         for message in [0, 2, 3, 4, 5, 6, 0x09, 0x0a, 0x0b, 0x15, 0x1f, 0x21] {
@@ -25,9 +25,11 @@ enum AppleRFB {
         }
         if fileTransfer {
             // Screen Sharing uses SetEncryption as a native-server capability
-            // gate even when it does not request encrypted records. Password
-            // sessions use type 30 so encoding 1103 has an authentication key.
-            for message in [0x08, 0x0e, 0x10, 0x12, 0x20, 0x22] { bitmap[message / 8] |= 0x80 >> (message % 8) }
+            // gate even when it does not request encrypted records.
+            for message in [0x08, 0x0e, 0x12, 0x20, 0x22] { bitmap[message / 8] |= 0x80 >> (message % 8) }
+            // Plaintext sessions omit encrypted input and use security type 2.
+            // Type 30 enables encrypted keys even when this bit is omitted.
+            if allowEncryptedInput { bitmap[0x10 / 8] |= 0x80 >> (0x10 % 8) }
         }
         // Extended ServerInit, with control privilege available.
         return UInt16(0).beBytes + UInt32(0x12).beBytes + bitmap + Array(name.utf8)

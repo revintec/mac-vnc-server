@@ -243,6 +243,8 @@ Options:
 | `--service-restart` | — | Restart the registered per-user macOS LaunchAgent. |
 | `--verbose` | off | Enable periodic framebuffer-update logs on stdout. |
 | `--clipboard-sync` | off | Share text and PNG/TIFF/JPEG images with Apple Screen Sharing; text with classic VNC. |
+| `--cursor auto\|embedded` | `auto` | Send system cursor shapes to RichCursor viewers for local pointer motion. Fall back to embedded rendering when unavailable, for other viewers, and in Apple Observe mode. |
+| `--no-encryption` | off | Require plaintext session traffic while retaining password authentication. With `--file-transfer`, experimentally suppress the native viewer's encryption key exchange on a plain URL. Encrypted traffic is refused. |
 | `--file-transfer` | off | Enable Apple file/folder drag and drop and Apple authentication/encryption negotiation; see below. |
 | `--no-adaptive` | off | Disable adaptive FPS, compression, and automatic scale changes. |
 
@@ -324,7 +326,9 @@ Clients that advertise the standard `DesktopSize` pseudo-encoding can also enter
 Zlib is kept as a persistent stream per VNC connection, which is required for stable compressed updates with Apple Screen Sharing.
 Adaptive compression prioritizes sender throughput: it uses level 1 when encoding is the bottleneck and at most level 3 when the network is the bottleneck. It does not automatically switch to high compression levels during video or animation.
 ZRLE uses lossless solid-color, palette, packed-palette, and run-length tile modes, selecting the smallest representation for each changed tile. Dirty regions use smaller tiles when appropriate, and framebuffer update rectangles are batched into fewer socket writes.
-The cursor is excluded from captured frames so the VNC client can render a single local cursor. This avoids showing both the captured macOS cursor and the client's pointer at the same time; the server does not synthesize a separate RichCursor shape because ScreenCaptureKit does not expose that shape through a stable public API.
+With `--cursor auto` (the default), the server reads the system cursor through AppKit and excludes it from ScreenCaptureKit frames. RichCursor viewers receive shape/hotspot updates and move the cursor locally, without waiting for a round trip or another compressed frame. If cursor sampling is unavailable at startup, the server uses embedded capture. Viewers without RichCursor and Apple Observe sessions receive a composited cursor. Use `--cursor embedded` to retain capture-based rendering throughout.
+
+The BGRX pixel-copy path supports Screen Sharing's depth-32 format as well as depth 24. Large visible scroll updates are coalesced and sent in one framebuffer update. See [performance measurements and limitations](docs/performance.md) for the benchmark, encryption policy, and why offscreen application content cannot be prefetched through RFB.
 
 ### Multiple clients
 
@@ -373,7 +377,15 @@ Diffie–Hellman authentication: enter any username and the configured server
 password in its login dialog. The username is only a label, not a macOS account
 login. Standard VNC clients continue to use the VNC password method.
 The server supports Apple's AES record encryption and encrypted input events,
-so `encrypt=none` is not required. Control permission is available from startup;
+so connect using the plain URL above. For experimental plaintext operation, add
+`--no-encryption` to the server's `--file-transfer` options and keep the same plain
+URL. This selects VNC password authentication and consumes the viewer's encryption
+request without sending keys. Tahoe's native viewer then keeps streaming in
+plaintext and enables both file-drop directions. This relies on undocumented
+behavior; it still needs a Finder test with Screen Sharing 3.0 on macOS 13.
+All native interoperability tests use plain URLs and the app's encryption default.
+See [plaintext validation and client limitations](docs/apple-file-transfer.md#plaintext-validation).
+Control permission is available from startup;
 Screen Sharing's selected mode is respected, including a saved Observe choice. This legacy protocol does not
 authenticate the server's identity. Use SSH or a VPN for a trusted channel over
 untrusted networks. The `--no-password` profile cannot negotiate Apple encryption.
@@ -390,7 +402,7 @@ remain a manual interoperability check. Receiving symbolic links is unsupported.
 See [Apple file transfers](docs/apple-file-transfer.md) for the protocol and limits.
 
 
-Mouse clicks carry macOS click counts, using the server Mac's double-click interval and desktop-point coordinates. Apple RFB 3.889's right/middle button ordering is translated before posting events. ScreenCaptureKit includes the actual system cursor in the captured pixels, including I-beam and resize shapes. Viewers advertising RichCursor or XCursor receive an empty local cursor to prevent a duplicate overlay. Cursor feedback therefore follows the framebuffer update rate.
+Mouse clicks carry macOS click counts, using the server Mac's double-click interval and desktop-point coordinates. Apple RFB 3.889's right/middle button ordering is translated before posting events. Client cursor mode sends real system shapes, including I-beam and resize cursors; shape sampling runs at approximately 30 Hz, while pointer movement is local to the viewer. Cursor updates wait for a framebuffer request to preserve Screen Sharing's startup ordering. Embedded rendering hides any negotiated viewer overlay to prevent a duplicate cursor.
 
 ## GitHub Actions
 

@@ -6,7 +6,9 @@ import Foundation
 import ScreenCaptureKit
 
 final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, FramebufferSequenceSource, InputRecoverySource, CaptureFrameRateController {
-    let includesCursor = true
+    let includesCursor: Bool
+    private let cursorMonitor: MacCursorMonitor?
+    var cursorSnapshot: CursorSnapshot? { cursorMonitor?.snapshot }
     private let scale: CGFloat
     private let fps: Int
     private let displaySelection: DisplaySelection
@@ -32,7 +34,8 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         scale: Double,
         fps: Int,
         displaySelection: DisplaySelection,
-        logger: ServerLogger
+        logger: ServerLogger,
+        cursorMode: CursorMode = .auto
     ) async throws {
         self.scale = CGFloat(scale)
         self.fps = fps
@@ -41,11 +44,16 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         desiredCaptureFPS = fps
         captureRateTask = nil
 
+        cursorMonitor = cursorMode == .embedded ? nil : await MacCursorMonitor.start()
+        includesCursor = cursorMonitor == nil
+        logger.info("cursor: \(includesCursor ? "embedded in framebuffer" : "client-rendered shapes; embedded fallback for viewers without RichCursor")")
+
         let eventSink = StreamEventSink()
         let started = try await Self.start(
             scale: self.scale,
             fps: fps,
             displaySelection: displaySelection,
+            includesCursor: includesCursor,
             eventSink: eventSink,
             logger: logger
         )
@@ -258,6 +266,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         scale: CGFloat,
         fps: Int,
         displaySelection: DisplaySelection,
+        includesCursor: Bool,
         eventSink: StreamEventSink,
         logger: ServerLogger
     ) async throws -> StartedCapture {
@@ -298,9 +307,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                 config.pixelFormat = kCVPixelFormatType_32BGRA
                 config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
                 config.queueDepth = 3
-                // Capture the real system cursor, including I-beam and resize shapes.
-                // RFB viewers with cursor support are told to hide their extra local cursor.
-                config.showsCursor = true
+                config.showsCursor = includesCursor
 
                 let delegate = ScreenCaptureStreamDelegate(eventSink: eventSink)
                 let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
@@ -371,6 +378,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                     scale: scale,
                     fps: fps,
                     displaySelection: displaySelection,
+                    includesCursor: includesCursor,
                     eventSink: streamEventSink,
                     logger: logger
                 )
@@ -536,7 +544,7 @@ private struct DisplayFrame {
     let dirtyRects: [Rect]?
 }
 
-private final class StreamingFrameStore: @unchecked Sendable {
+final class StreamingFrameStore: @unchecked Sendable {
     private let condition = NSCondition()
     private let layout: VirtualDisplayLayout
     private let expectedDisplayIDs: Set<CGDirectDisplayID>
@@ -650,8 +658,7 @@ private final class StreamingFrameStore: @unchecked Sendable {
            let display = layout.displays.first,
            let frame = currentFrames[display.id],
            frame.width == layout.width,
-           frame.height == layout.height,
-           frame.bytesPerRow == layout.width * 4 {
+           frame.height == layout.height {
             return Framebuffer(
                 width: layout.width,
                 height: layout.height,
@@ -807,6 +814,7 @@ final class SelectedDisplayFramebufferSource: @unchecked Sendable, FramebufferSo
     private let displayIndex: Int?
 
     var includesCursor: Bool { source.includesCursor }
+    var cursorSnapshot: CursorSnapshot? { source.cursorSnapshot }
 
     init(source: StreamingScreenCapture, displayIndex: Int?) {
         self.source = source

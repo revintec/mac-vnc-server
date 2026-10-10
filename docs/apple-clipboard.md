@@ -15,7 +15,8 @@ to bypass that choice.
 This implements Apple's native text and image pasteboard exchange as an optional RFB
 3.889 profile. The server continues to support standard RFB 3.3/3.7/3.8 clients.
 Password authentication remains required when configured: security type 2 for
-the clipboard profile, or Apple type 30 with `--file-transfer`.
+the clipboard profile and `--no-encryption`, or Apple type 30 with
+`--file-transfer` when encryption is allowed.
 None is advertised only when authentication has explicitly been disabled.
 
 The profile supports UTF-8 text, newlines, empty pasteboards, PNG, TIFF and JPEG
@@ -211,14 +212,14 @@ that resets after a drag, timeout, button change or disconnect. Matching release
 carry the same count. Apple 3.889's left/right/middle bits are translated to the
 input bridge's standard RFB left/middle/right order.
 
-ScreenCaptureKit now includes the actual cursor in its frames. The RFB writer
-sends a zero-sized RichCursor or XCursor only if the viewer advertised it and the
-capture source includes the cursor. That prevents duplicate client overlays and
-preserves system cursor shapes without private cursor APIs. Pointer movement is
-visible at the stream's frame rate. Tests verify AppKit's interpretation of a
-double-click, timing/drag resets, button mapping, disconnect releases, and cursor
-message framing/capability gating. These follow-up changes still need a check in
-the user's live remote session after restarting the rebuilt server.
+`--cursor auto` now samples the system cursor through AppKit and sends RichCursor
+shapes to controlling viewers. Pointer movement is local; cursor images and
+hotspots change independently of captured desktop pixels. Observers and viewers
+without RichCursor receive a composited cursor. `--cursor embedded`, or an
+unavailable system cursor at startup, retains ScreenCaptureKit's embedded cursor
+and hides negotiated viewer overlays. Cursor messages remain gated by framebuffer
+requests so they cannot trigger premature Screen Sharing startup completion.
+See [performance notes](performance.md) for sampling, compatibility, and tests.
 
 For the target client, verify an enabled Use Shared Clipboard menu, then paste
 ASCII, Unicode and multiline text in both directions, test stop/start and

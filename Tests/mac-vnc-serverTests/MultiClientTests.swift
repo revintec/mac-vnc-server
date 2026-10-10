@@ -12,33 +12,52 @@ struct MultiClientTests {
         try runNativeProbe(fileTransfer: fileTransfer, initialMode: initialMode)
     }
 
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil),
-          arguments: ["default", "keystrokes", "all"])
-    func nativeScreenSharingNegotiatesEncryptionWithoutURLOverride(encryption: String) throws {
-        try runNativeProbe(fileTransfer: true, initialMode: "default", encryption: encryption)
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil))
+    func nativeScreenSharingNegotiatesEncryptionWithAppDefaults() throws {
+        try runNativeProbe(fileTransfer: true, initialMode: "default")
     }
 
-    private func runNativeProbe(fileTransfer: Bool, initialMode: String, encryption: String? = nil) throws {
-        let server = try MultiClientServer(fileTransfer: fileTransfer, width: 1728, height: 1118, nativePattern: true)
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil), arguments: [false, true])
+    func nativeScreenSharingStreamsWithClientCursor(fileTransfer: Bool) throws {
+        try runNativeProbe(fileTransfer: fileTransfer, initialMode: "restore-saved-control",
+            clientCursor: true)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil))
+    func nativeScreenSharingUsesPlaintextWithAppDefaults() throws {
+        // Retain the app's encryptionLevel=2 and plain URL. The server consumes
+        // the encryption request without keys; the native client stays plaintext.
+        try runNativeProbe(fileTransfer: true, initialMode: "default",
+            allowEncryption: false)
+    }
+
+    private func runNativeProbe(fileTransfer: Bool, initialMode: String,
+                                clientCursor: Bool = false, allowEncryption: Bool = true) throws {
+        let server = try MultiClientServer(fileTransfer: fileTransfer, width: 1728, height: 1118,
+            nativePattern: true, clientCursor: clientCursor, allowEncryption: allowEncryption)
         defer { server.finish() }
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"]))
-        probe.arguments = ["vnc://127.0.0.1:\(server.port)/" + (encryption == nil ? "?encrypt=none" : ""),
+        probe.arguments = ["vnc://127.0.0.1:\(server.port)/",
                            fileTransfer ? "1" : "0", initialMode]
-        if let encryption { probe.arguments?.append(encryption) }
+        var environment = ProcessInfo.processInfo.environment
+        if clientCursor { environment["MAC_VNC_NATIVE_CURSOR"] = "1" }
+        if !allowEncryption { environment["MAC_VNC_NATIVE_STREAM_SECONDS"] = "20" }
+        probe.environment = environment
         let output = Pipe()
         probe.standardOutput = output
         probe.standardError = output
         let finished = DispatchSemaphore(value: 0)
         probe.terminationHandler = { _ in finished.signal() }
         try probe.run()
-        guard finished.wait(timeout: .now() + 45) == .success else {
+        guard finished.wait(timeout: .now() + 60) == .success else {
             probe.terminate()
             Issue.record("native Screen Sharing probe timed out")
             return
         }
         let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         if ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil { print(text) }
+        #expect(text.contains("minimumEncryptionLevel=2 plainURL=1"), "\(text)")
         #expect(probe.terminationStatus == 0, "\(text)")
         #expect(text.contains("controlSupported=1 controlAllowed=1"), "\(text)")
         #expect(text.contains("modeMatchesSelection=1"), "\(text)")
@@ -47,6 +66,7 @@ struct MultiClientTests {
         #expect(text.contains("streamingPixels=1"), "\(text)")
         #expect(text.contains("observing=1 canResumeControl=1 resumedControl=1"), "\(text)")
         #expect(text.contains("initialPixels=1"), "\(text)")
+        if clientCursor { #expect(text.contains("clientCursorReceived=1"), "\(text)") }
         #expect(server.input.snapshot.keyTransitions == [true, false], "native key down/up must reach mock input")
         #expect(server.input.snapshot.keySymbols == [0x61, 0x61])
         if initialMode == "restore-observe" {
@@ -89,6 +109,41 @@ struct MultiClientTests {
         #expect(pixels[1] == 128 && pixels[2] == 192)
         try peer.write(fullUpdate)
         _ = try framePayload(peer, encoding: 0) // No duplicate cursor.
+    }
+
+    @Test func clientCursorIsRequestedOnceAndUpdatesWithoutNewScreenPixels() throws {
+        let server = try MultiClientServer(clientCursor: true)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.write([2, 0, 0, 2] + UInt32(0).beBytes + UInt32(bitPattern: Int32(-239)).beBytes)
+        #expect(!peer.hasData(timeout: 0.15))
+        try peer.write([3, 0, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(try peer.read(4) == [0, 0, 0, 2])
+        let cursor = try #require(server.screen.cursorSnapshot).image.richCursorRectangle(format: .serverDefault)
+        #expect(try peer.read(cursor.count) == cursor)
+        _ = try peer.read(12 + 8) // Full raw pixels follow the cursor in the same update.
+        try peer.write([3, 1, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(try peer.read(4) == [0, 0, 0, 0])
+        server.screen.cursorImage = .hidden
+        try peer.write([3, 1, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(try peer.read(4) == [0, 0, 0, 1])
+        #expect(try peer.read(12) == CursorImage.hidden.richCursorRectangle(format: .serverDefault))
+    }
+
+    @Test func clientCursorFallsBackForViewerWithoutRichCursor() throws {
+        let server = try MultiClientServer(clientCursor: true)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.write([2, 0, 0, 1] + UInt32(0).beBytes)
+        try peer.write([3, 0, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(try framePayload(peer, encoding: 0) == [0, 0, 255, 0, 0, 0, 0, 0])
+        server.screen.cursorImage = .hidden
+        try peer.write([3, 1, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(try framePayload(peer, encoding: 0) == [UInt8](repeating: 0, count: 8))
     }
 
     @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true], [UInt32(1101), UInt32(1105)])
@@ -806,7 +861,8 @@ private final class MultiClientServer: @unchecked Sendable {
 
     init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5,
          authenticationTimeout: TimeInterval = 120, messageTimeout: TimeInterval = 5,
-         fileTransfer: Bool = false, width: Int = 2, height: Int = 1, nativePattern: Bool = false) throws {
+         fileTransfer: Bool = false, width: Int = 2, height: Int = 1, nativePattern: Bool = false,
+         clientCursor: Bool = false, allowEncryption: Bool = true) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)
@@ -821,9 +877,10 @@ private final class MultiClientServer: @unchecked Sendable {
         let config = ServerConfig(bindAddress: "127.0.0.1", port: port, password: "testpass",
             passwordFromConfig: false, fps: 30, scale: 1, encodingPreference: .auto,
             displaySelection: .all, verbose: false, clipboardSync: true,
-            adaptiveStreaming: false, adaptiveFrameRate: false, fileTransfer: fileTransfer)
+            adaptiveStreaming: false, adaptiveFrameRate: false, fileTransfer: fileTransfer,
+            allowEncryption: allowEncryption)
         let inputs = SharedInputController(input: input)
-        screen = MultiClientScreen(width: width, height: height, nativePattern: nativePattern)
+        screen = MultiClientScreen(width: width, height: height, nativePattern: nativePattern, clientCursor: clientCursor)
         server = RFBServer(config: config, capture: screen,
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
@@ -879,14 +936,24 @@ private final class MultiClientScreen: FramebufferSource {
     private let lock = NSLock()
     private var size: (width: Int, height: Int)
     let nativePattern: Bool
-    init(width: Int, height: Int, nativePattern: Bool) {
+    let clientCursor: Bool
+    private var image = CursorImage(width: 1, height: 1, hotX: 0, hotY: 0, bgra: [0, 0, 255, 255])
+    var cursorImage: CursorImage {
+        get { lock.withLock { image } }
+        set { lock.withLock { image = newValue } }
+    }
+    var cursorSnapshot: CursorSnapshot? {
+        clientCursor ? CursorSnapshot(image: cursorImage, position: .zero) : nil
+    }
+    init(width: Int, height: Int, nativePattern: Bool, clientCursor: Bool) {
         size = (width, height)
         self.nativePattern = nativePattern
+        self.clientCursor = clientCursor
     }
     func resize(width: Int, height: Int) {
         lock.withLock { size = (width, height) }
     }
-    var includesCursor: Bool { nativePattern }
+    var includesCursor: Bool { nativePattern && !clientCursor }
     func capture() throws -> Framebuffer {
         let (width, height) = lock.withLock { size }
         var pixels = [UInt8](repeating: 0, count: width * height * 4)

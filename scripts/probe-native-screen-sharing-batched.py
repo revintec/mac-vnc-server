@@ -84,12 +84,12 @@ def relay_server(server, client):
 
 
 def main():
-    if len(sys.argv) not in (4, 5):
+    if len(sys.argv) != 4:
         return 2
     native = os.environ.get("MAC_VNC_NATIVE_PROBE_BINARY", "/tmp/mac-vnc-native-control-probe")
     url = urllib.parse.urlsplit(sys.argv[1])
-    if url.hostname != "127.0.0.1" or url.port is None:
-        raise ValueError("the batching probe accepts only loopback test servers")
+    if url.scheme != "vnc" or url.hostname != "127.0.0.1" or url.port is None or url.query or url.fragment:
+        raise ValueError("the batching probe accepts only plain VNC URLs to loopback test servers")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -103,7 +103,7 @@ def main():
                     server.settimeout(None)
                     for relay, pair in ((relay_client, (client, server)), (relay_server, (server, client))):
                         threading.Thread(target=relay, args=pair, daemon=True).start()
-                    return probe.wait(timeout=44)
+                    return probe.wait(timeout=59)
             finally:
                 if probe.poll() is None:
                     probe.kill()

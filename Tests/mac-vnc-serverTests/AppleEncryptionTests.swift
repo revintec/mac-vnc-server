@@ -85,7 +85,7 @@ struct AppleEncryptionTests {
     }
 
     @Test func chunkedSocketWritesCanSpanRecordsAndKeepTheNextMessageAligned() throws {
-        let link = try EncryptedTestLink()
+        let link = try RecordTestLink()
         let chunks = [[UInt8](repeating: 0, count: 16), [],
                       [UInt8](repeating: 0xab, count: 200_000), [1, 2, 3]]
         #expect(try link.transfer(chunks) == chunks.flatMap { $0 })
@@ -200,12 +200,12 @@ struct AppleEncryptionTests {
 
 /// Bounded test-only transport. Each direction has one owner and transfer()
 /// waits for the writer before returning or accepting another message.
-final class EncryptedTestLink: @unchecked Sendable {
+final class RecordTestLink: @unchecked Sendable {
     private let lock = NSLock()
     private let sender: ClientSocket
     private let receiver: ClientSocket
 
-    init() throws {
+    init(encrypted: Bool = true) throws {
         var fds = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
             throw RFBError.socketError("test socketpair failed")
@@ -216,10 +216,12 @@ final class EncryptedTestLink: @unchecked Sendable {
         }
         sender = try ClientSocket(fd: fds[0])
         receiver = try ClientSocket(fd: fds[1])
-        let keys = try AppleEncryption.Keys.random()
-        sender.setAppleRecordWrites(try AppleEncryption.Cipher(keys: keys, encrypt: true))
-        try receiver.prepareAppleRecordReads(keys: keys, timeout: 3)
-        try receiver.enableAppleRecordReads(true)
+        if encrypted {
+            let keys = try AppleEncryption.Keys.random()
+            sender.setAppleRecordWrites(try AppleEncryption.Cipher(keys: keys, encrypt: true))
+            try receiver.prepareAppleRecordReads(keys: keys, timeout: 3)
+            try receiver.enableAppleRecordReads(true)
+        }
     }
 
     func transfer(_ chunks: [[UInt8]]) throws -> [UInt8] {
@@ -231,7 +233,7 @@ final class EncryptedTestLink: @unchecked Sendable {
                 catch { Issue.record(error); sender.shutdown() }
             }
             defer { #expect(done.wait(timeout: .now() + 4) == .success) }
-            return try receiver.withReadTimeout(3, operation: "encrypted test link") {
+            return try receiver.withReadTimeout(3, operation: "test record link") {
                 try receiver.readExact(chunks.reduce(0) { $0 + $1.count })
             }
         }

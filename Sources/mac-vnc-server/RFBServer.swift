@@ -14,6 +14,8 @@ struct ServerConfig {
     let adaptiveStreaming: Bool
     let adaptiveFrameRate: Bool
     var fileTransfer = false
+    var cursorMode: CursorMode = .auto
+    var allowEncryption = true
 }
 
 enum DisplaySelection: Equatable {
@@ -149,11 +151,18 @@ final class RFBServer: @unchecked Sendable {
         logger.info("fps=\(fpsDescription) scale=\(config.scale) encoding=\(config.encodingPreference.rawValue) display=\(config.displaySelection.description)")
         logger.info("password configured: \(config.password != nil)")
         logger.info("clipboard sync: \(config.clipboardSync ? "enabled" : "disabled")")
+        let encryptionDescription = !config.allowEncryption ? "disabled by server policy"
+            : (config.fileTransfer ? "negotiated with viewer" : "disabled (basic VNC profile)")
+        logger.info("session encryption: \(encryptionDescription)")
         if config.fileTransfer {
             logger.info("Apple file transfer backend: \(NativeTransferProcess.available ? "enabled" : "unavailable: native helpers missing")")
-            logger.info("Apple file drag and drop: enabled; Apple record encryption supported with password authentication")
+            logger.info(config.allowEncryption
+                ? "Apple file drag and drop: enabled; encryption negotiated with viewer"
+                : "Apple file drag and drop: experimental plaintext mode; encryption key exchange suppressed")
             if config.password != nil {
-                logger.info("Screen Sharing login: any username and the configured server password (Apple authentication)")
+                logger.info(config.allowEncryption
+                    ? "Screen Sharing login: any username and the configured server password (Apple authentication)"
+                    : "Screen Sharing login: configured server password (VNC authentication)")
             }
         }
         logger.info("shared desktop: up to \(maximumClients) concurrent clients per port")
@@ -183,7 +192,8 @@ final class RFBServer: @unchecked Sendable {
                     clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
                     adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
                     handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout,
-                    messageTimeout: messageTimeout, fileTransfer: config.fileTransfer
+                    messageTimeout: messageTimeout, fileTransfer: config.fileTransfer,
+                    allowEncryption: config.allowEncryption
                 )
                 workers.enter()
                 DispatchQueue.global(qos: .userInteractive).async { [self] in
@@ -366,6 +376,7 @@ final class RFBClientSession: @unchecked Sendable {
         let framebuffer: Framebuffer
         let sourceLayout: VirtualDisplayLayout
         let encoding: RFBEncoding
+        let pixelFormat: PixelFormat
         let rects: [Rect]
         let encodedRects: [[UInt8]]
         let desktopSizeChanged: Bool
@@ -392,6 +403,7 @@ final class RFBClientSession: @unchecked Sendable {
     private let clipboard: ClipboardBridge
     private let clipboardSync: Bool
     private let fileTransferEnabled: Bool
+    private let allowEncryption: Bool
     private var fileTransfer: MacFileTransfer?
     private let adaptiveStreaming: Bool
     private let adaptiveFrameRate: Bool
@@ -400,6 +412,8 @@ final class RFBClientSession: @unchecked Sendable {
     private var clientCapabilities = RFBClientCapabilities(encodings: [RFBEncoding.raw.rawValue])
     private var previousFramebuffer: Framebuffer?
     private var currentLayout = VirtualDisplayLayout.empty
+    private var lastCursorImage: CursorImage?
+    private var lastCursorFormat: PixelFormat?
     private var lastFramebufferUpdate = Date.distantPast
     private var hasSentFramebufferUpdate = false
     private let zrleEncoder: ZRLEEncoder
@@ -473,7 +487,8 @@ final class RFBClientSession: @unchecked Sendable {
         handshakeTimeout: TimeInterval = 5,
         authenticationTimeout: TimeInterval = 120,
         messageTimeout: TimeInterval = 5,
-        fileTransfer: Bool = false
+        fileTransfer: Bool = false,
+        allowEncryption: Bool = true
     ) throws {
         self.handshakeTimeout = handshakeTimeout
         self.authenticationTimeout = authenticationTimeout
@@ -488,6 +503,7 @@ final class RFBClientSession: @unchecked Sendable {
         self.clipboard = clipboard
         self.clipboardSync = clipboardSync
         fileTransferEnabled = fileTransfer && NativeTransferProcess.available
+        self.allowEncryption = allowEncryption
         self.adaptiveStreaming = adaptiveStreaming
         self.adaptiveFrameRate = adaptiveFrameRate
         self.logger = logger
@@ -652,14 +668,17 @@ final class RFBClientSession: @unchecked Sendable {
                 try socket.writeAll(UInt32(1).beBytes)
             }
         } else {
-            let appleAuthentication = versionText == AppleRFB.version && fileTransferEnabled && password != nil
+            let appleAuthentication = versionText == AppleRFB.version && fileTransferEnabled
+                && allowEncryption && password != nil
             if password == nil {
                 try socket.writeAll([1, 1])
             } else {
                 // Never offer None alongside a configured password.
-                // Apple's file-transfer profile requests encryption. Type 2
-                // leaves its viewer's wrapping cipher uninitialized, so this
-                // profile uses type 30 with the same configured password.
+                // Use type 30 when the native profile can negotiate encryption:
+                // type 2 does not initialize the viewer's wrapping cipher.
+                // Explicit plaintext sessions retain classic VNC authentication.
+                // Type 30 also enables per-event encryption without records,
+                // independent of the EncryptedInputEvent capability bit.
                 try socket.writeAll([1, appleAuthentication ? 30 : 2])
             }
 
@@ -762,7 +781,9 @@ final class RFBClientSession: @unchecked Sendable {
         bytes += UInt16(framebuffer.width).beBytes
         bytes += UInt16(framebuffer.height).beBytes
         bytes += PixelFormat.serverDefault.bytes
-        let name = usesAppleExtensions ? AppleRFB.desktopName("mac-vnc-server", fileTransfer: fileTransferEnabled) : Array("mac-vnc-server".utf8)
+        let name = usesAppleExtensions
+            ? AppleRFB.desktopName("mac-vnc-server", fileTransfer: fileTransferEnabled, allowEncryptedInput: allowEncryption)
+            : Array("mac-vnc-server".utf8)
         bytes += UInt32(name.count).beBytes
         bytes += Array(name)
         try socket.writeAll(bytes)
@@ -795,7 +816,7 @@ final class RFBClientSession: @unchecked Sendable {
         pendingAppleDisplayInfo = usesAppleExtensions && fileTransferEnabled
             && AppleRFB.preferredDisplayEncoding(in: encodings) != nil
         if pendingAppleDisplayInfo { state.signal() }
-        if capture.includesCursor {
+        if capture.includesCursor || capture.cursorSnapshot != nil {
             pendingCursorEncoding = capabilities.supportsRichCursor ? RFBPseudoEncoding.richCursor
                 : (capabilities.supportsXCursor ? RFBPseudoEncoding.xCursor : nil)
             state.signal()
@@ -897,16 +918,16 @@ final class RFBClientSession: @unchecked Sendable {
                 let captured = try captureClientFramebuffer()
                 try sendAppleDisplayInfo(framebuffer: captured.framebuffer, sourceLayout: captured.sourceLayout)
             }
-            if let cursorEncoding {
-                // A zero-sized cursor hides the viewer's local overlay. The real
-                // cursor is already in ScreenCaptureKit's framebuffer pixels.
+            if let cursorEncoding, capture.includesCursor || cursorEncoding == RFBPseudoEncoding.xCursor {
+                // A zero-sized cursor hides the viewer's local overlay when
+                // the cursor is captured or composited into the framebuffer.
                 try socket.writeAll([0, 0, 0, 1] + [UInt8](repeating: 0, count: 8)
                     + UInt32(bitPattern: cursorEncoding).beBytes)
                 logger.verbose("cursor: embedded in framebuffer; viewer overlay hidden")
             }
             try sendClipboardChangeIfNeeded()
             if let request {
-                try sendFramebufferUpdate(request, unsolicited: unsolicited)
+                try sendFramebufferUpdate(request, unsolicited: unsolicited, forceCursor: cursorEncoding != nil)
                 if usesAppleExtensions {
                     state.lock()
                     appleNextPush = Date().addingTimeInterval(applePushInterval)
@@ -955,7 +976,11 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private func captureClientFramebuffer() throws -> (framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout) {
-        let captured = try capture.capture()
+        var captured = try capture.capture()
+        if !capture.includesCursor, !state.withLock({ usesClientCursorLocked }),
+           let cursor = capture.cursorSnapshot {
+            captured = try cursor.composited(over: captured)
+        }
         let scale = state.withLock { CGFloat(usesAppleExtensions ? appleFramebufferScale : adaptiveScale) }
         // Legacy DisplayInfo records infer scaled bounds by rounding the
         // original pixel dimensions, including on physical Retina displays.
@@ -964,7 +989,12 @@ final class RFBClientSession: @unchecked Sendable {
         return (framebuffer, captured.layout)
     }
 
-    private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false) throws {
+    private var usesClientCursorLocked: Bool {
+        clientCapabilities.supportsRichCursor && (!usesAppleExtensions || appleControlMode)
+    }
+
+    private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false,
+                                       forceCursor: Bool = false) throws {
         frameHadNetworkStall = false
         throttleFrameRate()
         let frameStarted = Date()
@@ -1015,7 +1045,23 @@ final class RFBClientSession: @unchecked Sendable {
             break
         }
 
-        if unsolicited && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged {
+        // Include the cursor in a requested update, after display initialization.
+        // Sending it during SetEncodings can trigger Screen Sharing's startup race.
+        var cursorRectangle: [UInt8]?
+        var cursorImage: CursorImage?
+        let cursorFormat = prepared.pixelFormat
+        if !capture.includesCursor, state.withLock({ clientCapabilities.supportsRichCursor }),
+           let cursor = capture.cursorSnapshot {
+            // Observers need to see the host's actual cursor position. RichCursor
+            // alone conveys the shape, not another user's pointer movement.
+            let image = state.withLock({ usesClientCursorLocked })
+                ? try cursor.image.scaled(by: prepared.framebuffer.layout.scale) : .hidden
+            if forceCursor || image != lastCursorImage || cursorFormat != lastCursorFormat {
+                cursorRectangle = try image.richCursorRectangle(format: cursorFormat)
+                cursorImage = image
+            }
+        }
+        if unsolicited && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && cursorRectangle == nil {
             return
         }
 
@@ -1040,21 +1086,26 @@ final class RFBClientSession: @unchecked Sendable {
             return
         }
 
-        let rectCount = prepared.encodedRects.count
+        let rectCount = prepared.encodedRects.count + (cursorRectangle == nil ? 0 : 1)
         guard rectCount <= Int(UInt16.max) else {
             throw RFBError.protocolError("too many rectangles in framebuffer update")
         }
         let header = [0, 0] + UInt16(rectCount).beBytes
         let writeStarted = DispatchTime.now().uptimeNanoseconds
         var updateChunks = [[UInt8]]()
-        updateChunks.reserveCapacity(1 + prepared.encodedRects.count)
+        updateChunks.reserveCapacity(1 + rectCount)
         updateChunks.append(header)
+        if let cursorRectangle { updateChunks.append(cursorRectangle) }
         updateChunks.append(contentsOf: prepared.encodedRects)
         try socket.writeAll(updateChunks, onStall: { [self] in
             noteNetworkStall()
         })
         let updateBytes = updateChunks.reduce(0) { $0 + $1.count }
         let writeDuration = elapsedSeconds(since: writeStarted)
+        if let cursorImage {
+            lastCursorImage = cursorImage
+            lastCursorFormat = cursorFormat
+        }
 
         let frameDuration = Date().timeIntervalSince(frameStarted)
         state.lock()
@@ -1216,7 +1267,8 @@ final class RFBClientSession: @unchecked Sendable {
             }
             encodeDuration += elapsedSeconds(since: encodeStarted)
             changedPixels += rect.width * rect.height
-            uncompressedBytes += rect.width * rect.height * format.cPixelByteCount
+            let bytesPerPixel = encoding == .zrle ? format.cPixelByteCount : Int(format.bitsPerPixel / 8)
+            uncompressedBytes += rect.width * rect.height * bytesPerPixel
             let encodedPayloadBytes: Int
             switch encoding {
             case .zlib, .zrle:
@@ -1241,6 +1293,7 @@ final class RFBClientSession: @unchecked Sendable {
             framebuffer: framebuffer,
             sourceLayout: sourceLayout,
             encoding: encoding,
+            pixelFormat: format,
             rects: rects,
             encodedRects: encodedRects,
             desktopSizeChanged: resizeUpdate,
@@ -1490,6 +1543,7 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private func handleAppleEncryptedInput() throws {
+        try requireSessionEncryptionAllowed()
         // This per-event ECB envelope is separate from the CBC record layer.
         // Screen Sharing can send it before enabling incoming records, and
         // continues to use it when only server-to-viewer records are enabled.
@@ -1621,6 +1675,15 @@ final class RFBClientSession: @unchecked Sendable {
             guard level <= 1, methods.contains(1) else {
                 throw RFBError.protocolError("unsupported Apple encryption level or cipher method")
             }
+            if !allowEncryption {
+                // A native viewer requests encryption on a plain URL even after
+                // type 2 authentication. It stays in plaintext until encoding
+                // 1103 supplies keys. Consume the entire request so framing is
+                // preserved, but do not send keys or arm either record cipher.
+                // This undocumented fallback is only for explicit --no-encryption.
+                logger.verbose("Apple SetEncryption: \(request) ignored by --no-encryption; session remains plaintext [client_fd=\(socket.fd)]")
+                return
+            }
             guard let appleWrappingKey else {
                 throw RFBError.protocolError("Apple encryption requires password authentication with security type 30")
             }
@@ -1638,11 +1701,18 @@ final class RFBClientSession: @unchecked Sendable {
             let enabled = UInt16.be(body[0], body[1])
             request += " enabled=\(enabled)"
             guard enabled <= 1 else { throw RFBError.protocolError("invalid Apple inbound encryption mode") }
+            if enabled == 1 { try requireSessionEncryptionAllowed() }
             try socket.enableAppleRecordReads(enabled == 1)
         } else {
             throw RFBError.protocolError("unsupported Apple encryption command \(command)")
         }
         logger.verbose("Apple SetEncryption: \(request) [client_fd=\(socket.fd)]")
+    }
+
+    private func requireSessionEncryptionAllowed() throws {
+        guard allowEncryption else {
+            throw RFBError.protocolError("viewer attempted encrypted traffic but --no-encryption is set")
+        }
     }
 
     private func handleAppleSetServerScaling() throws {

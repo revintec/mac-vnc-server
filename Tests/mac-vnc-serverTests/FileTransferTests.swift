@@ -106,6 +106,50 @@ struct FileTransferTests {
     }
 
     @Test(.enabled(if: NativeTransferProcess.available))
+    func plaintextPolicyRetainsNativeCapabilitiesAuthenticationAndClipboard() throws {
+        let peer = try ClipboardTestPeer(fileTransfer: true, allowEncryption: false)
+        defer { peer.finish() }
+        let name = try peer.handshake(version: AppleRFB.version)
+        #expect(peer.appleWrappingKey == nil) // Type 2 password authentication, no AES session key.
+        for message in [0x0e, 0x12, 0x20, 0x22] {
+            #expect(AppleRFB.supports(message, bitmap: Array(name[6..<22])))
+        }
+        #expect(!AppleRFB.supports(0x10, bitmap: Array(name[6..<22])))
+        // Disabling records is legal even when enabling them is forbidden.
+        try peer.write([0x12, 0, 0, 2, 0, 0, 0, 0])
+        try peer.enableAppleClipboard()
+        try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 42])
+        #expect(try peer.readClipboard().1 == .text("initial"))
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [UInt16(0), UInt16(1)])
+    func plaintextPolicyConsumesKeyRequestsWithoutChangingFraming(level: UInt16) throws {
+        let peer = try ClipboardTestPeer(fileTransfer: true, allowEncryption: false)
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        // Send twice to cover a repeated request. No encoding-1103 reply should
+        // precede the next ordinary clipboard response, and no cipher is armed.
+        let request = [UInt8(0x12), 0, 0, 1] + level.beBytes + [0, 1, 0, 0, 0, 1]
+        try peer.write(request + request)
+        try peer.enableAppleClipboard()
+        try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 42])
+        #expect(try peer.readClipboard().1 == .text("initial"))
+        #expect(peer.appleWrappingKey == nil)
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [
+        [UInt8(0x12), 0, 0, 2, 0, 1, 0, 0], // incoming records
+        [UInt8(0x10), 0] + [UInt8](repeating: 0, count: 16) // encrypted input
+    ])
+    func plaintextPolicyRefusesEncryptedTraffic(request: [UInt8]) throws {
+        let peer = try ClipboardTestPeer(fileTransfer: true, allowEncryption: false)
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.write(request)
+        #expect(throws: (any Error).self) { try peer.read(1) }
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available))
     func oversizedEncryptionMethodListIsRejectedWithoutWaitingForItsBody() throws {
         let peer = try ClipboardTestPeer(fileTransfer: true)
         defer { peer.finish() }
@@ -251,8 +295,8 @@ struct FileTransferTests {
         #expect(input.masks.last == 0)
     }
 
-    @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true])
-    func negotiatedDragAuthorizesNativeFileCopy(toServer: Bool) throws {
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true], [false, true])
+    func negotiatedDragAuthorizesNativeFileCopy(toServer: Bool, encrypted: Bool) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-vnc-drag-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -261,8 +305,8 @@ struct FileTransferTests {
         let helper = try DragTestHelper()
         let result = FileTransferTestResult()
         let dragResult = FileTransferTestResult()
-        let upload = try EncryptedTestLink()
-        let download = try EncryptedTestLink()
+        let upload = try RecordTestLink(encrypted: encrypted)
+        let download = try RecordTestLink(encrypted: encrypted)
         let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(),
             makeDragHelper: { helper }) { bytes in
                 let bytes = try download.transfer([bytes])

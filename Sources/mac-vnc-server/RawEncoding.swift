@@ -114,7 +114,7 @@ enum RawEncoding {
         }
 
         output.removeAll(keepingCapacity: true)
-        if pixelFormat == .serverDefault {
+        if pixelFormat.usesBGRX8888 {
             encodeServerDefault(rect: rect, framebuffer: framebuffer, into: &output)
             return
         }

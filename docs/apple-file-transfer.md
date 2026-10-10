@@ -17,24 +17,35 @@ open -a "Screen Sharing" 'vnc://SERVER_IP:5900/'
 Replace the address and port. In control mode, drag local Finder items into
 remote Finder/the remote desktop, or remote Finder items out into local Finder.
 Shared Clipboard is a separate feature and is not required for file transfer.
-Files are copied; the originals are retained. With a configured password, Apple
-viewers use security type 30 (Diffie–Hellman), which initializes the wrapping key
+Files are copied; the originals are retained. With a configured password and
+encryption allowed (the default), Apple viewers use security type 30 (Diffie–Hellman), which initializes the wrapping key
 needed by Apple's record encryption. Enter any username and the existing server
 password in Screen Sharing's login dialog. The username is a label; this server
 does not authenticate macOS accounts. Standard VNC viewers retain security type 2.
 
-Earlier versions refused SetEncryption and required `encrypt=none`. Simply
+Earlier versions refused SetEncryption and depended on a client URL override. Simply
 implementing the record cipher with type 2 still fails in the native viewer:
 that authentication path leaves its wrapping cipher uninitialized. The type 30
 exchange fixes this prerequisite, and the server now handles SetEncryption
-without a URL override. Native Tahoe tests cover the default, keystroke and
-all-traffic encryption options; only the last requests records on that client.
+without a URL override. Native Tahoe tests use a plain URL and register the
+Screen Sharing 3.0 app's encryption default, which requests encrypted records.
 The macOS 13.1 client needs a manual retest with the plain URL.
 
 Apple's legacy protocol does not authenticate the server's identity. Encryption
 is selected by the viewer, not forced by this option. SSH or a VPN supplies a
 trusted channel over untrusted networks. `--no-password` continues to offer None
 authentication and cannot negotiate Apple's record encryption.
+
+`--file-transfer --no-encryption` selects an experimental plaintext server mode
+using the same plain URL. It retains native capabilities and classic VNC password
+authentication. The client still requests encryption, but the server consumes
+that request without sending encryption keys or enabling encrypted records.
+Tahoe's native viewer continues in plaintext, including key input and file-drop
+registration. This behavior is undocumented and has not been verified with real
+Finder gestures on macOS 13. The normal mode honors encryption requests; the
+explicit plaintext mode does not satisfy the client's encryption preference.
+With file transfer disabled, framebuffer traffic is already unencrypted, including
+with text/image clipboard sharing. See [performance measurements](performance.md).
 
 Use Shared Clipboard remains a client preference. Advertising Control permission
 does not select it. See [clipboard behavior](apple-clipboard.md).
@@ -109,7 +120,72 @@ missed by the helper-only tests:
   file types. FileCopy (`0x22`) and DropEvent (`0x20`) capabilities alone do not
   enable the file-drop target.
 - The client separately checks its minimum encryption preference before asking
-  for encrypted records. The `encrypt=none` URL option suppresses that request.
+  for encrypted records. Screen Sharing 3.0's app default requests encryption.
+
+### Plaintext validation
+
+All further interoperability work uses plain `vnc://HOST:PORT/` URLs and the
+app's normal encryption setting. No URL query or equivalent encryption override
+is used to make a test pass. The native probe rejects URLs with query parameters
+and no longer accepts an encryption override argument.
+
+The user-provided Screen Sharing 3.0 build 585.1 registers app default
+`encryptionLevel=2` in `registerAppDefaults` (ARM64 `0x10000bf18`–`0x10000bf30`).
+The probe registers that same default in its disposable process without writing
+persistent preferences. This is different from the bare framework's default of 0.
+The framework requests SetEncryption level 1 when the configured minimum is 2
+and command `0x12` is supported. `_RFBSetEncryptionLevel` offers only AES method 1
+on this path; no plaintext cipher is offered. However, the client does not begin
+using encrypted records until it receives the server's encoding-1103 key reply.
+
+The plain-URL native tests compare three outcomes:
+
+| Server profile | Result with app defaults |
+| --- | --- |
+| Basic profile, no encryption capability | Desktop and input work; legacy VNC mode has no Finder file drops. |
+| Native file-transfer profile, encryption allowed | Encrypted streaming, key input, scaling, and both file-drop directions are enabled. |
+| Native file-transfer profile, encryption request explicitly rejected | The viewer requests encryption even with type 2 authentication; rejection disconnects the session before a frame. |
+| Native file-transfer profile, key reply suppressed | The viewer requests encryption, but continues streaming, input, scaling and file-drop registration in plaintext when no keys are sent. |
+
+The last case was first tested in a disposable server copy. It showed that
+disconnecting on an encryption request was our server's policy, not proof that
+the viewer enforces encrypted traffic. The `--no-encryption` implementation now
+fully parses valid SetEncryption command-1 messages and leaves them unanswered.
+It logs that the session remains plaintext, never initializes the AES session key
+or either record cipher, and rejects attempts to enable encrypted records or send
+encrypted input. Repeated key requests must not desynchronize subsequent messages.
+This is an explicit, undocumented compatibility mode, not a negotiated null cipher.
+
+Earlier tests used a URL override or the bare framework's plaintext default.
+They established that file-copy payloads and native drop registration do not
+inherently require encrypted records, but did not meet the unchanged-app/plain-URL
+requirement. Helper tests also copied and verified contents over plaintext
+sockets in both directions; they substitute the desktop drag helper and therefore
+do not validate real Finder gestures. Those results must not be cited as evidence
+that the app's default plain-URL session supports plaintext file drops.
+
+Type 30 authentication additionally encrypts keystrokes independently of record
+encryption; removing the EncryptedInputEvent capability does not prevent that.
+Selecting type 2 avoids that input cipher but does not stop the app's default
+request for record encryption; suppressing the key reply is also necessary.
+The native plaintext test exercises 20 seconds of changing pixels before keyboard
+input and scaling, with the original encryption default still set to 2.
+The copied app cannot run unmodified against Tahoe's private
+framework, as described below, so actual Finder gestures on macOS 13.1 remain a
+manual interoperability check. The native tests use Tahoe's framework and a hidden
+view, synthetic pixels, private pasteboards and mock input.
+
+Reproduce the native-view comparison:
+
+```sh
+xcrun clang -fobjc-arc -framework AppKit scripts/probe-native-screen-sharing.m -o /tmp/mac-vnc-plain-url-probe
+MAC_VNC_NATIVE_PROBE=/tmp/mac-vnc-plain-url-probe swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing --filter 'nativeScreenSharingNegotiatesEncryptionWithAppDefaults|nativeScreenSharingUsesPlaintextWithAppDefaults|nativeScreenSharingStreamsWithClientCursor'
+```
+
+Reproduce the plaintext/encrypted file-copy and policy tests with the same
+`swift test` compiler options and `--filter 'negotiatedDragAuthorizesNativeFileCopy|plaintextPolicy'`.
+
+### Display negotiation
 
 The opt-in file-transfer profile advertises and implements `0x12` to enter the
 native UI path. The viewer then waits for display metadata before completing
@@ -276,8 +352,8 @@ client that never sends a drag from one whose message is rejected by the server.
 
 ### Authentication and encrypted records
 
-Apple viewers with a configured password are offered only type 30 for this
-profile. Offering type 2 alongside it lets saved VNC credentials select a path
+Apple viewers with a configured password and encryption allowed are offered only
+type 30 for this profile. Offering type 2 alongside it lets saved VNC credentials select a path
 that cannot initialize Apple's record keys. The server sends RFC 3526 group 14,
 generator 2, and a fresh 2048-bit public key. macOS Security's SecDH functions
 generate the private key and validate/compute the peer exchange; these exported
@@ -317,8 +393,10 @@ Tests cover independent OpenSSL record and event vectors, encrypted key/pointer
 input before and after repeated rekeying, Observe input gating, split/combined messages,
 large clipboard uploads/downloads, chunked writes, invalid keys and credentials,
 tampering/replay, malformed negotiation and actual partial-record disconnection.
-Both directions of negotiated native file-copy tests pass through encrypted test
-sockets. The hidden native view verifies sustained decoded pixels, stable modes,
+Both directions of negotiated native file-copy tests pass through plaintext and
+encrypted test sockets and compare received file contents. These tests substitute
+the desktop drag helper, while retaining the native file send/receive helpers.
+The hidden native view verifies sustained decoded pixels, stable modes,
 key input, scaling and file-drop registration with encryption enabled and no
 encryption URL override.
 

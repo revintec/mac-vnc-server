@@ -74,7 +74,8 @@ enum CLICommand {
             scale: config.scale,
             fps: config.fps,
             displaySelection: .all,
-            logger: sharedLogger
+            logger: sharedLogger,
+            cursorMode: config.cursorMode
         )
 
         for config in configs {
@@ -133,7 +134,8 @@ enum CLICommand {
                 scale: config.scale,
                 fps: config.fps,
                 displaySelection: config.displaySelection,
-                logger: logger
+                logger: logger,
+                cursorMode: config.cursorMode
             )
         }
         let server = RFBServer(
@@ -210,6 +212,8 @@ enum CLI {
         var verbose = false
         var clipboardSync = false
         var fileTransfer = false
+        var cursorMode = CursorMode.auto
+        var allowEncryption = true
         var adaptiveStreaming = true
         var adaptiveFrameRate = true
         var registerService = false
@@ -281,6 +285,12 @@ enum CLI {
                 } else {
                     throw CLIError.invalidArgument("--display requires all or a 1-based display number")
                 }
+            case "--cursor":
+                index += 1
+                guard index < arguments.count, let parsed = CursorMode(rawValue: arguments[index]) else {
+                    throw CLIError.invalidArgument("--cursor must be auto or embedded")
+                }
+                cursorMode = parsed
             case "--verbose":
                 verbose = true
             case "--service":
@@ -288,6 +298,8 @@ enum CLI {
                 serviceFlagIndices.insert(index)
             case "--file-transfer":
                 fileTransfer = true
+            case "--no-encryption":
+                allowEncryption = false
             case "--clipboard-sync":
                 clipboardSync = true
             case "--no-adaptive":
@@ -321,7 +333,9 @@ enum CLI {
             clipboardSync: clipboardSync,
             adaptiveStreaming: adaptiveStreaming,
             adaptiveFrameRate: adaptiveFrameRate,
-            fileTransfer: fileTransfer
+            fileTransfer: fileTransfer,
+            cursorMode: cursorMode,
+            allowEncryption: allowEncryption
         )
         return ParsedRun(
             config: config,
@@ -352,6 +366,7 @@ enum CLI {
       mac-vnc-server run [--service] [--bind 127.0.0.1] [--port 5900] [--password value]
                           [--fps auto|1...120] [--scale 1.0] [--encoding auto|zrle|zlib|raw]
                           [--display all|number] [--verbose] [--clipboard-sync] [--file-transfer] [--no-adaptive]
+                          [--cursor auto|embedded] [--no-encryption]
       mac-vnc-server --service-restart
       mac-vnc-server permissions
       mac-vnc-server diagnose
@@ -363,9 +378,13 @@ enum CLI {
     Without --display, port 5900 serves all displays and 5901, 5902, ... serve each display.
     Use --display all to keep only the single combined-display server, or --display 1 for one display.
     Use --verbose to enable periodic framebuffer update logs.
+    Cursor defaults to client rendering when available; --cursor embedded includes it in captured frames.
+    Use --no-encryption to require plaintext session traffic; password authentication is retained.
+    With --file-transfer, --no-encryption enables experimental plaintext operation on a plain VNC URL.
+    It suppresses the viewer's encryption key exchange; encrypted traffic is refused.
     Use --clipboard-sync for text and images with Apple Screen Sharing (text with classic VNC).
     Use --file-transfer for Finder file/folder drag and drop with vnc://HOST:PORT/.
-    Screen Sharing uses Apple authentication: any username and the configured server password.
+    Otherwise file transfer uses Apple authentication: any username and the configured server password.
     Use --no-adaptive to disable adaptive FPS, compression, and scale changes.
     Use --service to install and start a per-user LaunchAgent that runs in the UI session.
     Use --service-restart to restart the registered LaunchAgent.
@@ -408,7 +427,9 @@ private extension ServerConfig {
             clipboardSync: clipboardSync,
             adaptiveStreaming: adaptiveStreaming,
             adaptiveFrameRate: adaptiveFrameRate,
-            fileTransfer: fileTransfer
+            fileTransfer: fileTransfer,
+            cursorMode: cursorMode,
+            allowEncryption: allowEncryption
         )
     }
 
@@ -426,7 +447,9 @@ private extension ServerConfig {
             clipboardSync: clipboardSync,
             adaptiveStreaming: adaptiveStreaming,
             adaptiveFrameRate: adaptiveFrameRate,
-            fileTransfer: fileTransfer
+            fileTransfer: fileTransfer,
+            cursorMode: cursorMode,
+            allowEncryption: allowEncryption
         )
     }
 }

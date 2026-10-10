@@ -82,24 +82,28 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 }
 @end
 
-static int testPixelPhase(id view) {
+static BOOL readTestPixel(id view, int x, int y, uint8_t pixel[4]) {
     ProbeFramebuffer *buffer = [[view session] frameBuffer];
-    if (!buffer) return -1;
+    if (!buffer) return NO;
     [buffer lock];
     CGImageRef image = [buffer newCGImage];
-    uint8_t pixel[4] = {0};
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
     CGContextRef context = CGBitmapContextCreate(pixel, 1, 1, 8, 4, colorSpace,
         kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-    // The source animates a small corner patch so even debug builds can
-    // deliver repeated updates without re-encoding an entire desktop.
-    CGImageRef sample = image ? CGImageCreateWithImageInRect(image, CGRectMake(0, 0, 1, 1)) : NULL;
+    CGImageRef sample = image ? CGImageCreateWithImageInRect(image, CGRectMake(x, y, 1, 1)) : NULL;
     if (sample && context) CGContextDrawImage(context, CGRectMake(0, 0, 1, 1), sample);
     if (sample) CGImageRelease(sample);
     if (context) CGContextRelease(context);
     CGColorSpaceRelease(colorSpace);
     if (image) CGImageRelease(image);
     [buffer unlock];
+    return YES;
+}
+
+static int testPixelPhase(id view) {
+    uint8_t pixel[4] = {0};
+    // Stay inside the animated 64x64 patch, away from the test cursor at 0,0.
+    if (!readTestPixel(view, 32, 32, pixel)) return -1;
     if (abs((int)pixel[0] - 192) >= 8 || abs((int)pixel[1] - 128) >= 8) return -1;
     if (abs((int)pixel[2] - 64) < 8) return 0;
     if (abs((int)pixel[2] - 160) < 8) return 1;
@@ -110,12 +114,13 @@ static BOOL hasTestPixels(id view) { return testPixelPhase(view) >= 0; }
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        if (argc != 4 && argc != 5) return 2;
+        if (argc != 4) return 2;
         BOOL fileTransfer = atoi(argv[2]) != 0;
         NSString *initialMode = [NSString stringWithUTF8String:argv[3]];
         if (!dlopen("/System/Library/PrivateFrameworks/ScreenSharing.framework/Versions/A/ScreenSharing", RTLD_LAZY | RTLD_LOCAL)) return 2;
         Class viewClass = NSClassFromString(@"SSSessionView");
         if (!viewClass) return 2;
+        BOOL expectClientCursor = getenv("MAC_VNC_NATIVE_CURSOR") != NULL;
         BOOL restoreObserve = [initialMode isEqualToString:@"restore-observe"];
         BOOL restoreSavedControl = [initialMode isEqualToString:@"restore-saved-control"];
         BOOL restoreSavedObserve = [initialMode isEqualToString:@"restore-saved-observe"];
@@ -150,6 +155,10 @@ int main(int argc, char **argv) {
         }));
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        // Match Screen Sharing 3.0's registerAppDefaults. The bare framework
+        // defaults to 0, which would falsely suggest plaintext compatibility.
+        // Registration is process-local and does not write client preferences.
+        [NSUserDefaults.standardUserDefaults registerDefaults:@{@"encryptionLevel": @2}];
         // Test a saved Observe preference separately from the actual default.
         // This override exists only in the disposable probe process.
         if ([initialMode isEqualToString:@"saved-observe"]) {
@@ -162,16 +171,13 @@ int main(int argc, char **argv) {
             [options applyURLOptions:@{@"control": ([initialMode isEqualToString:@"control"] || restoreObserve
                 || restoreSavedControl || restoreSavedObserve) ? @"1" : @"0"}];
         }
-        // Exercise the supplied URL, rather than forcing plaintext through an
-        // independent options override that could hide a URL parsing failure.
+        // All interoperability tests use plain URLs and the app's encryption
+        // default. Reject query overrides rather than silently testing a workaround.
         NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:argv[1]]];
+        if (![url.scheme isEqualToString:@"vnc"] || url.query != nil || url.fragment != nil) return 2;
         [options applyURLOptions:[NSClassFromString(@"SSAddress") optionsFromURL:url]];
-        if (argc == 4 && [options minimumEncryptionLevel] != 0) return 2;
-        if (argc == 5) {
-            NSString *encryption = [NSString stringWithUTF8String:argv[4]];
-            if (![encryption isEqualToString:@"default"]) [options applyURLOptions:@{@"encrypt": encryption}];
-            printf("minimumEncryptionLevel=%ld\n", (long)[options minimumEncryptionLevel]);
-        }
+        printf("minimumEncryptionLevel=%ld plainURL=1\n", (long)[options minimumEncryptionLevel]);
+        if ([options minimumEncryptionLevel] != 2) return 2;
         BOOL expectedControl = !restoreObserve && !restoreSavedObserve && [options controlType] != 0;
         id view = [[viewClass alloc] initWithFrame:NSMakeRect(0, 0, 640, 480)];
         ProbeStartupDelegate *startup = [ProbeStartupDelegate new];
@@ -209,6 +215,15 @@ int main(int argc, char **argv) {
             passed = passed && restoredObserveBeforePixels;
         }
         printf("initialPixels=%d\n", initialPixels);
+        if (expectClientCursor) {
+            // RichCursor is drawn by the viewer into its framebuffer. The
+            // server's desktop has no red pixels; only the cursor is red.
+            uint8_t pixel[4] = {0};
+            BOOL received = readTestPixel(view, 0, 0, pixel)
+                && pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0;
+            printf("clientCursorReceived=%d\n", received);
+            passed = passed && received;
+        }
         if (fileTransfer) {
             id session = [view session];
             printf("displayLayoutVersion=%ld reliableDisplayState=%d onConsole=%d virtualDisplay=%d\n",
@@ -225,7 +240,10 @@ int main(int argc, char **argv) {
         NSUInteger callbacksBefore = modeCallbacks;
         int previousPhase = testPixelPhase(view), pixelChanges = 0;
         BOOL stableMode = YES, validPixels = YES;
-        NSDate *streamDeadline = [NSDate dateWithTimeIntervalSinceNow:6];
+        const char *streamDuration = getenv("MAC_VNC_NATIVE_STREAM_SECONDS");
+        int streamSeconds = streamDuration ? atoi(streamDuration) : 6;
+        if (streamSeconds < 6 || streamSeconds > 20) return 2;
+        NSDate *streamDeadline = [NSDate dateWithTimeIntervalSinceNow:streamSeconds];
         while (streamDeadline.timeIntervalSinceNow > 0 && [view isConnected]) {
             [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
             int phase = testPixelPhase(view);

@@ -444,7 +444,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
     }
 
     init(password: String? = "testpass", includesCursor: Bool = false, fileTransfer: Bool = false,
-         messageTimeout: TimeInterval = 5) throws {
+         messageTimeout: TimeInterval = 5, allowEncryption: Bool = true) throws {
         self.password = password
         var fds = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
@@ -460,7 +460,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
             encodingPreference: .raw, capture: ClipboardTestScreen(includesCursor: includesCursor), input: ClipboardTestInput(),
             clipboard: clipboard, clipboardSync: true, adaptiveStreaming: false,
             adaptiveFrameRate: false, logger: ServerLogger(verbose: false), messageTimeout: messageTimeout,
-            fileTransfer: fileTransfer)
+            fileTransfer: fileTransfer, allowEncryption: allowEncryption)
         DispatchQueue.global().async { [self] in
             defer { done.signal() }
             try? session.run()

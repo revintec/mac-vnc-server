@@ -81,6 +81,14 @@ struct PixelFormat: Equatable {
         ]
     }
 
+    /// Screen Sharing asks for depth 32 with the same BGRX layout as depth 24.
+    /// Depth describes significant bits, not a different pixel byte order.
+    var usesBGRX8888: Bool {
+        bitsPerPixel == 32 && !bigEndian && trueColor
+            && redMax == 255 && greenMax == 255 && blueMax == 255
+            && redShift == 16 && greenShift == 8 && blueShift == 0
+    }
+
     func pixelBytes(red: UInt8, green: UInt8, blue: UInt8) -> [UInt8] {
         var bytes: [UInt8] = []
         bytes.reserveCapacity(Int(bitsPerPixel / 8))
@@ -206,11 +214,13 @@ struct Rect: Equatable {
 
 protocol FramebufferSource {
     var includesCursor: Bool { get }
+    var cursorSnapshot: CursorSnapshot? { get }
     func capture() throws -> Framebuffer
 }
 
 extension FramebufferSource {
     var includesCursor: Bool { false }
+    var cursorSnapshot: CursorSnapshot? { nil }
 }
 
 protocol FramebufferSequenceSource {
