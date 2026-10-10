@@ -364,7 +364,8 @@ enum CLI {
     Use --display all to keep only the single combined-display server, or --display 1 for one display.
     Use --verbose to enable periodic framebuffer update logs.
     Use --clipboard-sync for text and images with Apple Screen Sharing (text with classic VNC).
-    Use --file-transfer for Finder file/folder drag and drop; Screen Sharing must connect with vnc://HOST:PORT/?encrypt=none.
+    Use --file-transfer for Finder file/folder drag and drop with vnc://HOST:PORT/.
+    Screen Sharing uses Apple authentication: any username and the configured server password.
     Use --no-adaptive to disable adaptive FPS, compression, and scale changes.
     Use --service to install and start a per-user LaunchAgent that runs in the UI session.
     Use --service-restart to restart the registered LaunchAgent.

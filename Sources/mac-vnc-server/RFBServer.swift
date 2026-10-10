@@ -148,10 +148,13 @@ final class RFBServer: @unchecked Sendable {
         logger.info("clipboard sync: \(config.clipboardSync ? "enabled" : "disabled")")
         if config.fileTransfer {
             logger.info("Apple file transfer backend: \(NativeTransferProcess.available ? "enabled" : "unavailable: native helpers missing")")
-            logger.info("Apple file drag and drop: plaintext compatibility mode (client requires encrypt=none)")
+            logger.info("Apple file drag and drop: enabled; Apple record encryption supported with password authentication")
+            if config.password != nil {
+                logger.info("Screen Sharing login: any username and the configured server password (Apple authentication)")
+            }
         }
         logger.info("shared desktop: up to \(maximumClients) concurrent clients per port")
-        let connectionSuffix = config.fileTransfer ? "/?encrypt=none" : ""
+        let connectionSuffix = config.fileTransfer ? "/" : ""
         logger.info("Connect with vnc://\(config.bindAddress == "0.0.0.0" ? "127.0.0.1" : config.bindAddress):\(config.port)\(connectionSuffix)")
 
         while !lock.withLock({ stopped }) {
@@ -399,6 +402,7 @@ final class RFBClientSession: @unchecked Sendable {
     private let state = NSCondition()
     private var stopped = false
     private var latestUpdateRequest: FramebufferUpdateRequest?
+    private var updateRequestsReceived = 0
     private var activeUpdateRequest: FramebufferUpdateRequest?
     private var writerError: Error?
     private var captureRateConsumer: ObjectIdentifier?
@@ -412,11 +416,17 @@ final class RFBClientSession: @unchecked Sendable {
     private var adaptiveScale = 1.0
     private var frameHadNetworkStall = false
     private var forceFullFramebuffer = false
-    // Negotiated once before the writer starts. All other Apple state uses `state`.
-    private var usesAppleClipboard = false
+    // Negotiated once before the writer starts. Shared Apple state uses `state`.
+    private var usesAppleExtensions = false
     private var appleViewerCapabilities: [UInt8] = []
     private var appleControlMode = true
+    // Reader-owned: established by authentication, then replaced on each rekey.
+    // Classic VNC authentication does not establish an encryption key.
+    private var appleWrappingKey: [UInt8]?
+    private var appleEncryptedInputReceived = false
     private var appleAutoPasteboard = false
+    private var appleClipboardNoticeAfter: Date?
+    private var appleClipboardNoticeLogged = false
     private var appleInitialClipboardNotification = false
     private var appleClipboardGeneration: UInt64 = 0
     private var appleAutomaticUpdate: FramebufferUpdateRequest?
@@ -433,7 +443,7 @@ final class RFBClientSession: @unchecked Sendable {
         case clipboardFetch(requestID: UInt32, promises: Bool)
         case clipboardReceived(ClipboardContent, promises: Bool, canRequest: Bool)
         case clipboardReset
-        case status(UInt16)
+        case rekey(AppleEncryption.Keys, wrappingKey: [UInt8], level: UInt16, completion: DispatchSemaphore)
         case fileData([UInt8], DispatchSemaphore)
     }
     private var writerCommands: [WriterCommand] = []
@@ -493,7 +503,7 @@ final class RFBClientSession: @unchecked Sendable {
             captureRateConsumer,
             fps: Int((1.0 / minimumFrameInterval).rounded())
         )
-        if fileTransferEnabled && usesAppleClipboard {
+        if fileTransferEnabled && usesAppleExtensions {
             fileTransfer = MacFileTransfer(logger: logger, input: input) { [weak self] bytes in
                 guard let self else { throw RFBError.socketError("file-transfer session closed") }
                 let completion = DispatchSemaphore(value: 0)
@@ -543,22 +553,25 @@ final class RFBClientSession: @unchecked Sendable {
         case 6:
             try handleClientCutText()
         case 0x08:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleSetServerScaling()
         case 0x09:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleAutoFramebufferUpdate()
         case 0x0a:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleSetMode()
         case 0x0b:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleClipboardFetch()
+        case 0x10:
+            try requireAppleExtensions()
+            try handleAppleEncryptedInput()
         case 0x12:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleSetEncryption()
         case 0x0e:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             let bytes = try socket.readExact(7)
             let sessionID = UInt32.be(bytes[3], bytes[4], bytes[5], bytes[6])
             logger.verbose("Apple DragEvent received: session=\(sessionID) \(appleFileTransferDiagnostic) [client_fd=\(socket.fd)]")
@@ -566,7 +579,7 @@ final class RFBClientSession: @unchecked Sendable {
                 try fileTransfer?.startDrag(sessionID: sessionID, compressed: [], archiveSize: 0)
             }
         case 0x20:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             let bytes = try socket.readExact(15)
             let sessionID = UInt32.be(bytes[3], bytes[4], bytes[5], bytes[6])
             let size = Int(UInt32.be(bytes[7], bytes[8], bytes[9], bytes[10]))
@@ -581,7 +594,7 @@ final class RFBClientSession: @unchecked Sendable {
                 try fileTransfer?.startDrag(sessionID: sessionID, compressed: compressed, archiveSize: size)
             }
         case 0x22:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             let bytes = try socket.readExact(5)
             let size = Int(UInt32.be(bytes[1], bytes[2], bytes[3], bytes[4]))
             guard size <= AppleFileTransfer.maxMessageBytes else {
@@ -591,13 +604,13 @@ final class RFBClientSession: @unchecked Sendable {
             if appleFileTransferAllowed { try fileTransfer?.handle(message) }
             else { logger.verbose("Apple FileCopy ignored: command=\(message.command) session=\(message.sessionID) \(appleFileTransferDiagnostic) [client_fd=\(socket.fd)]") }
         case 0x15:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleAutoPasteboard()
         case 0x1f:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleClipboardSend()
         case 0x21:
-            try requireAppleClipboard()
+            try requireAppleExtensions()
             try handleAppleViewerInfo()
         default:
             throw RFBError.protocolError("unsupported client message \(messageType)")
@@ -626,18 +639,25 @@ final class RFBClientSession: @unchecked Sendable {
                 try socket.writeAll(UInt32(1).beBytes)
             }
         } else {
+            let appleAuthentication = versionText == AppleRFB.version && fileTransferEnabled && password != nil
             if password == nil {
                 try socket.writeAll([1, 1])
             } else {
                 // Never offer None alongside a configured password.
-                try socket.writeAll([1, 2])
+                // Apple's file-transfer profile requests encryption. Type 2
+                // leaves its viewer's wrapping cipher uninitialized, so this
+                // profile uses type 30 with the same configured password.
+                try socket.writeAll([1, appleAuthentication ? 30 : 2])
             }
 
             // Apple's viewer implicitly selects the single classic security type
             // in 3.889 and waits for the challenge (or None's result) immediately.
             // Standard 3.7/3.8 viewers still send the one-byte selector.
-            let selectedSecurity: UInt8 = versionText == AppleRFB.version
+            let selectedSecurity: UInt8 = versionText == AppleRFB.version && !appleAuthentication
                 ? (password == nil ? 1 : 2) : try socket.readExact(1)[0]
+            guard !appleAuthentication || selectedSecurity == 30 else {
+                throw RFBError.protocolError("security type was not offered")
+            }
             logger.verbose("RFB handshake: security type \(selectedSecurity)")
             switch selectedSecurity {
             case 1:
@@ -654,6 +674,19 @@ final class RFBClientSession: @unchecked Sendable {
                     throw RFBError.authenticationFailed
                 }
                 try authenticate(password: password)
+            case 30:
+                guard appleAuthentication, let password else { throw RFBError.authenticationFailed }
+                let exchange = try AppleAuth.Exchange()
+                try socket.writeAll(exchange.challenge)
+                let credentials = try socket.readExact(128)
+                let peerKey = try socket.readExact(AppleAuth.prime.count)
+                do {
+                    appleWrappingKey = try exchange.authenticate(credentials: credentials, peerKey: peerKey, password: password)
+                    try socket.writeAll(UInt32(0).beBytes)
+                } catch {
+                    try socket.writeAll(UInt32(1).beBytes)
+                    throw error
+                }
             default:
                 throw RFBError.protocolError("unsupported security type \(selectedSecurity)")
             }
@@ -663,11 +696,11 @@ final class RFBClientSession: @unchecked Sendable {
         logger.verbose("RFB handshake: ClientInit=\(clientInit)")
         // Always share the desktop, even when ClientInit requests an exclusive session.
         // A newly connected viewer must never evict an existing viewer.
-        usesAppleClipboard = versionText == AppleRFB.version && clientInit & 0x80 != 0
+        usesAppleExtensions = versionText == AppleRFB.version && clientInit & 0x80 != 0
         // Apple's viewer commonly sends 0xc1. The optional session-selection
         // request is declined by leaving server flag 0x04 clear, not by disconnecting.
         try sendServerInit(framebuffer: initialFrame)
-        logger.info("client connected: \(versionText.trimmingCharacters(in: .whitespacesAndNewlines)), framebuffer \(initialFrame.width)x\(initialFrame.height), clipboard=\(clipboardSync ? (usesAppleClipboard ? "apple" : "classic") : "off")")
+        logger.info("client connected: \(versionText.trimmingCharacters(in: .whitespacesAndNewlines)), framebuffer \(initialFrame.width)x\(initialFrame.height), clipboard=\(clipboardSync ? (usesAppleExtensions ? "apple" : "classic") : "off")")
     }
 
     private func authenticate(password: String) throws {
@@ -694,7 +727,7 @@ final class RFBClientSession: @unchecked Sendable {
         bytes += UInt16(framebuffer.width).beBytes
         bytes += UInt16(framebuffer.height).beBytes
         bytes += PixelFormat.serverDefault.bytes
-        let name = usesAppleClipboard ? AppleRFB.desktopName("mac-vnc-server", fileTransfer: fileTransferEnabled) : Array("mac-vnc-server".utf8)
+        let name = usesAppleExtensions ? AppleRFB.desktopName("mac-vnc-server", fileTransfer: fileTransferEnabled) : Array("mac-vnc-server".utf8)
         bytes += UInt32(name.count).beBytes
         bytes += Array(name)
         try socket.writeAll(bytes)
@@ -710,6 +743,7 @@ final class RFBClientSession: @unchecked Sendable {
         state.lock()
         pixelFormat = requested
         state.unlock()
+        logger.verbose("client pixel format: bpp=\(requested.bitsPerPixel) depth=\(requested.depth) big_endian=\(requested.bigEndian) rgb_max=\(requested.redMax),\(requested.greenMax),\(requested.blueMax) rgb_shift=\(requested.redShift),\(requested.greenShift),\(requested.blueShift) [client_fd=\(socket.fd)]")
     }
 
     private func handleSetEncodings() throws {
@@ -723,8 +757,8 @@ final class RFBClientSession: @unchecked Sendable {
         let capabilities = RFBClientCapabilities(encodings: encodings)
         state.lock()
         clientCapabilities = capabilities
-        pendingAppleDisplayInfo = usesAppleClipboard && fileTransferEnabled
-            && encodings.contains(AppleRFB.displayInfoEncoding)
+        pendingAppleDisplayInfo = usesAppleExtensions && fileTransferEnabled
+            && AppleRFB.preferredDisplayEncoding(in: encodings) != nil
         if pendingAppleDisplayInfo { state.signal() }
         if capture.includesCursor {
             pendingCursorEncoding = capabilities.supportsRichCursor ? RFBPseudoEncoding.richCursor
@@ -748,8 +782,14 @@ final class RFBClientSession: @unchecked Sendable {
             incremental: incremental,
             rect: Rect(x: x, y: y, width: width, height: height)
         )
+        updateRequestsReceived += 1
+        let requestNumber = updateRequestsReceived
+        let fullRefresh = forceFullFramebuffer
         state.signal()
         state.unlock()
+        if requestNumber <= 8 || !incremental || fullRefresh {
+            logger.verbose("FramebufferUpdateRequest: number=\(requestNumber) incremental=\(incremental) rect=\(x),\(y) \(width)x\(height) full_refresh=\(fullRefresh) [client_fd=\(socket.fd)]")
+        }
     }
 
     func shutdown() { socket.shutdown() }
@@ -791,16 +831,13 @@ final class RFBClientSession: @unchecked Sendable {
             pendingAppleDisplayInfo = false
             let requestedScale = pendingAppleFramebufferScale
             pendingAppleFramebufferScale = nil
-            let displayLayout = currentLayout
             let request: FramebufferUpdateRequest?
             var unsolicited = false
-            if requestedScale != nil {
-                latestUpdateRequest = nil
-                request = FramebufferUpdateRequest(incremental: false,
-                    rect: Rect(x: 0, y: 0, width: Int(UInt16.max), height: Int(UInt16.max)))
+            if displayInfo || requestedScale != nil {
+                request = nil
             } else if let latest = latestUpdateRequest {
                 latestUpdateRequest = nil
-                activeUpdateRequest = usesAppleClipboard ? nil : latest
+                activeUpdateRequest = usesAppleExtensions ? nil : latest
                 request = latest
             } else if let automatic = appleAutomaticUpdate, Date() >= appleNextPush {
                 request = automatic
@@ -817,8 +854,9 @@ final class RFBClientSession: @unchecked Sendable {
                 try sendWriterCommand(command)
             }
             if let requestedScale { appleFramebufferScale = requestedScale }
-            if displayInfo && requestedScale == nil, let framebuffer = previousFramebuffer {
-                try sendAppleDisplayInfo(framebuffer: framebuffer, sourceLayout: displayLayout)
+            if displayInfo || requestedScale != nil {
+                let captured = try captureClientFramebuffer()
+                try sendAppleDisplayInfo(framebuffer: captured.framebuffer, sourceLayout: captured.sourceLayout)
             }
             if let cursorEncoding {
                 // A zero-sized cursor hides the viewer's local overlay. The real
@@ -829,11 +867,8 @@ final class RFBClientSession: @unchecked Sendable {
             }
             try sendClipboardChangeIfNeeded()
             if let request {
-                // A scaling request needs a layout reply even without a frame
-                // request. Its full frame also satisfies any pending update.
-                try sendFramebufferUpdate(request, unsolicited: unsolicited,
-                    sendDisplayInfo: requestedScale != nil)
-                if usesAppleClipboard {
+                try sendFramebufferUpdate(request, unsolicited: unsolicited)
+                if usesAppleExtensions {
                     state.lock()
                     appleNextPush = Date().addingTimeInterval(applePushInterval)
                     state.unlock()
@@ -852,13 +887,45 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private func sendAppleDisplayInfo(framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout) throws {
-        try socket.writeAll(AppleRFB.displayInfo(width: framebuffer.width, height: framebuffer.height,
-            unscaledWidth: sourceLayout.width, unscaledHeight: sourceLayout.height))
-        logger.verbose("Apple DisplayInfo sent: \(framebuffer.width)x\(framebuffer.height) unscaled=\(sourceLayout.width)x\(sourceLayout.height) scale=\(appleFramebufferScale)")
+        // Screen Sharing asynchronously installs (and clears) its bitmap after
+        // each layout, even at the same size. Like Apple's server, discard old
+        // update requests/arming and wait for a fresh request before sending
+        // pixels. Reset before the write so a fast reply cannot be lost.
+        state.lock()
+        guard let encoding = AppleRFB.preferredDisplayEncoding(in: clientCapabilities.advertisedEncodings) else {
+            state.unlock()
+            return
+        }
+        latestUpdateRequest = nil
+        activeUpdateRequest = nil
+        appleAutomaticUpdate = nil
+        forceFullFramebuffer = true
+        // Remember the advertised dimensions to avoid another layout on the
+        // next request. This snapshot is not a valid diff baseline until the
+        // forced full refresh has been sent.
+        previousFramebuffer = framebuffer
+        currentLayout = sourceLayout
+        state.unlock()
+        let message = encoding == AppleRFB.displayLayoutEncoding
+            ? AppleRFB.displayLayout(width: framebuffer.width, height: framebuffer.height,
+                unscaledWidth: sourceLayout.width, unscaledHeight: sourceLayout.height, scale: appleFramebufferScale)
+            : AppleRFB.displayInfo(width: framebuffer.width, height: framebuffer.height,
+                unscaledWidth: sourceLayout.width, unscaledHeight: sourceLayout.height)
+        try socket.writeAll(message)
+        logger.verbose("Apple DisplayInfo sent: encoding=\(encoding) \(framebuffer.width)x\(framebuffer.height) unscaled=\(sourceLayout.width)x\(sourceLayout.height) scale=\(appleFramebufferScale) awaiting_frame_request=true [client_fd=\(socket.fd)]")
     }
 
-    private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false,
-                                       sendDisplayInfo: Bool = false) throws {
+    private func captureClientFramebuffer() throws -> (framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout) {
+        let captured = try capture.capture()
+        let scale = state.withLock { CGFloat(usesAppleExtensions ? appleFramebufferScale : adaptiveScale) }
+        // Legacy DisplayInfo records infer scaled bounds by rounding the
+        // original pixel dimensions, including on physical Retina displays.
+        let framebuffer = try FramebufferResampling.scale(captured, factor: scale,
+            roundPixelDimensions: usesAppleExtensions)
+        return (framebuffer, captured.layout)
+    }
+
+    private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false) throws {
         frameHadNetworkStall = false
         throttleFrameRate()
         let frameStarted = Date()
@@ -873,7 +940,24 @@ final class RFBClientSession: @unchecked Sendable {
         let prepared: PreparedFramebufferUpdate
 
         while true {
-            let candidate = try prepareFramebufferUpdate(request, measureTimings: measureTimings)
+            let captureStarted = measureTimings ? Date() : .distantPast
+            let captured = try captureClientFramebuffer()
+            let capturedDuration = measureTimings ? Date().timeIntervalSince(captureStarted) : 0
+            let appleLayoutChanged = usesAppleExtensions && state.withLock {
+                AppleRFB.preferredDisplayEncoding(in: clientCapabilities.advertisedEncodings) != nil
+                    && (previousFramebuffer?.width != captured.framebuffer.width
+                        || previousFramebuffer?.height != captured.framebuffer.height
+                        || currentLayout.width != captured.sourceLayout.width
+                        || currentLayout.height != captured.sourceLayout.height)
+            }
+            if appleLayoutChanged {
+                // Do this before encoding: an unsent zlib/ZRLE frame must not
+                // advance the persistent compression stream.
+                try sendAppleDisplayInfo(framebuffer: captured.framebuffer, sourceLayout: captured.sourceLayout)
+                return
+            }
+            let candidate = try prepareFramebufferUpdate(request, framebuffer: captured.framebuffer,
+                sourceLayout: captured.sourceLayout, captureDuration: capturedDuration)
             if measureTimings {
                 captureDuration += candidate.captureDuration
                 diffDuration += candidate.diffDuration
@@ -892,14 +976,7 @@ final class RFBClientSession: @unchecked Sendable {
             break
         }
 
-        let appleLayoutChanged = usesAppleClipboard && state.withLock {
-            clientCapabilities.advertisedEncodings.contains(AppleRFB.displayInfoEncoding)
-                && (sendDisplayInfo || previousFramebuffer?.width != prepared.framebuffer.width
-                    || previousFramebuffer?.height != prepared.framebuffer.height
-                    || currentLayout.width != prepared.sourceLayout.width
-                    || currentLayout.height != prepared.sourceLayout.height)
-        }
-        if unsolicited && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && !appleLayoutChanged {
+        if unsolicited && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged {
             return
         }
 
@@ -924,10 +1001,6 @@ final class RFBClientSession: @unchecked Sendable {
             return
         }
 
-        if appleLayoutChanged {
-            try sendAppleDisplayInfo(framebuffer: prepared.framebuffer, sourceLayout: prepared.sourceLayout)
-        }
-
         let rectCount = prepared.encodedRects.count
         guard rectCount <= Int(UInt16.max) else {
             throw RFBError.protocolError("too many rectangles in framebuffer update")
@@ -949,7 +1022,7 @@ final class RFBClientSession: @unchecked Sendable {
         staleFrameRetries += staleRetries
         updatesSent += 1
         bytesSent += updateBytes
-        if measureTimings && (updatesSent == 1 || updatesSent % 60 == 0) {
+        if measureTimings && (updatesSent <= 8 || updatesSent % 60 == 0) {
             let compressionRatio = prepared.payloadBytes > 0
                 ? Double(prepared.uncompressedBytes) / Double(prepared.payloadBytes)
                 : 0
@@ -964,13 +1037,14 @@ final class RFBClientSession: @unchecked Sendable {
                 "capture_ms=\(Int(captureDuration * 1_000)) " +
                 "diff_ms=\(Int(diffDuration * 1_000)) " +
                 "encode_ms=\(Int(prepared.encodeDuration * 1_000)) " +
-                "write_ms=\(Int(writeDuration * 1_000))"
+                "write_ms=\(Int(writeDuration * 1_000)) " +
+                "[client_fd=\(socket.fd)]"
             )
         }
         previousFramebuffer = prepared.framebuffer
         // Apple's pointer messages stay in the original framebuffer coordinates
         // even when its transmitted image is scaled down.
-        currentLayout = usesAppleClipboard ? prepared.sourceLayout : prepared.framebuffer.layout
+        currentLayout = usesAppleExtensions ? prepared.sourceLayout : prepared.framebuffer.layout
         hasSentFramebufferUpdate = true
         forceFullFramebuffer = false
         networkStallNotifications = 0
@@ -996,11 +1070,10 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func prepareFramebufferUpdate(
         _ request: FramebufferUpdateRequest,
-        measureTimings: Bool
+        framebuffer: Framebuffer,
+        sourceLayout: VirtualDisplayLayout,
+        captureDuration: TimeInterval
     ) throws -> PreparedFramebufferUpdate {
-        let captureStarted = measureTimings ? Date() : .distantPast
-        let capturedFramebuffer = try capture.capture()
-        let scale: CGFloat
         let format: PixelFormat
         let encoding: RFBEncoding
         let previous: Framebuffer?
@@ -1008,21 +1081,15 @@ final class RFBClientSession: @unchecked Sendable {
         let supportsResize: Bool
         let forceFull: Bool
         state.lock()
-        scale = CGFloat(usesAppleClipboard ? appleFramebufferScale : adaptiveScale)
         format = pixelFormat
         encoding = selectedEncodingLocked()
         previous = previousFramebuffer
         sentBefore = hasSentFramebufferUpdate
-        supportsResize = !usesAppleClipboard && clientCapabilities.supportsDynamicResize
+        supportsResize = !usesAppleExtensions && clientCapabilities.supportsDynamicResize
         let useEncodingTransaction = !clientCapabilities.isAppleScreenSharingClient
         forceFull = forceFullFramebuffer
         state.unlock()
 
-        // DisplayInfo's older screen records infer scaled bounds by rounding
-        // the original pixel dimensions, including on physical Retina displays.
-        let framebuffer = try FramebufferResampling.scale(capturedFramebuffer, factor: scale,
-            roundPixelDimensions: usesAppleClipboard)
-        let captureDuration = measureTimings ? Date().timeIntervalSince(captureStarted) : 0
         let framebufferSizeChanged = sentBefore
             && (previous?.width != framebuffer.width || previous?.height != framebuffer.height)
         let resizeUpdate = framebufferSizeChanged && supportsResize && !forceFull
@@ -1133,7 +1200,7 @@ final class RFBClientSession: @unchecked Sendable {
 
         return PreparedFramebufferUpdate(
             framebuffer: framebuffer,
-            sourceLayout: capturedFramebuffer.layout,
+            sourceLayout: sourceLayout,
             encoding: encoding,
             rects: rects,
             encodedRects: encodedRects,
@@ -1351,9 +1418,13 @@ final class RFBClientSession: @unchecked Sendable {
         let bytes = try socket.readExact(7)
         let down = bytes[0] != 0
         let keysym = UInt32.be(bytes[3], bytes[4], bytes[5], bytes[6])
+        applyKeyEvent(down: down, keysym: keysym)
+    }
+
+    private func applyKeyEvent(down: Bool, keysym: UInt32) {
         state.lock()
         let mapAltToCommand = clientCapabilities.isAppleScreenSharingClient
-        let allowInput = !usesAppleClipboard || appleControlMode
+        let allowInput = !usesAppleExtensions || appleControlMode
         state.unlock()
         guard allowInput else { return }
         requestCaptureRecoveryAfterInput()
@@ -1365,14 +1436,37 @@ final class RFBClientSession: @unchecked Sendable {
         let mask = bytes[0]
         let x = UInt16.be(bytes[1], bytes[2])
         let y = UInt16.be(bytes[3], bytes[4])
+        applyPointerEvent(mask: mask, x: x, y: y)
+    }
+
+    private func applyPointerEvent(mask: UInt8, x: UInt16, y: UInt16) {
         state.lock()
         let layout = currentLayout
-        let allowInput = !usesAppleClipboard || appleControlMode
+        let allowInput = !usesAppleExtensions || appleControlMode
         state.unlock()
         guard allowInput else { return }
         requestCaptureRecoveryAfterInput()
-        let standardMask = usesAppleClipboard ? AppleRFB.standardButtonMask(mask) : mask
+        let standardMask = usesAppleExtensions ? AppleRFB.standardButtonMask(mask) : mask
         input.pointer(buttonMask: standardMask, x: x, y: y, layout: layout)
+    }
+
+    private func handleAppleEncryptedInput() throws {
+        // This per-event ECB envelope is separate from the CBC record layer.
+        // Screen Sharing can send it before enabling incoming records, and
+        // continues to use it when only server-to-viewer records are enabled.
+        let bytes = try socket.readExact(17) // flags followed by one AES block
+        guard let appleWrappingKey else {
+            throw RFBError.protocolError("Apple encrypted input requires security type 30")
+        }
+        let event = try AppleEncryption.InputEvent(ciphertext: Array(bytes.dropFirst()), key: appleWrappingKey)
+        if !appleEncryptedInputReceived {
+            appleEncryptedInputReceived = true
+            logger.verbose("Apple EncryptedInputEvent: accepted [client_fd=\(socket.fd)]")
+        }
+        // A single envelope can carry both events; the native server applies
+        // the key first, then the pointer.
+        if let key = event.key { applyKeyEvent(down: key.down, keysym: key.keysym) }
+        if let pointer = event.pointer { applyPointerEvent(mask: pointer.mask, x: pointer.x, y: pointer.y) }
     }
 
     private func requestCaptureRecoveryAfterInput() {
@@ -1387,7 +1481,7 @@ final class RFBClientSession: @unchecked Sendable {
             throw RFBError.protocolError("VNC clipboard exceeds the 16 MiB limit")
         }
         let bytes = try socket.readExact(length)
-        if clipboardSync && !usesAppleClipboard {
+        if clipboardSync && !usesAppleExtensions {
             let text = String(decoding: bytes, as: UTF8.self)
             clipboard.setRemoteText(text)
         }
@@ -1426,8 +1520,8 @@ final class RFBClientSession: @unchecked Sendable {
         }
     }
 
-    private func requireAppleClipboard() throws {
-        guard usesAppleClipboard else {
+    private func requireAppleExtensions() throws {
+        guard usesAppleExtensions else {
             throw RFBError.protocolError("Apple message without extended ServerInit negotiation")
         }
     }
@@ -1437,7 +1531,7 @@ final class RFBClientSession: @unchecked Sendable {
         defer { state.unlock() }
         guard !stopped else { throw RFBError.socketError("session closed") }
         guard writerCommands.count < 64 else {
-            throw RFBError.protocolError("too many pending Apple clipboard requests")
+            throw RFBError.protocolError("too many pending Apple messages")
         }
         if case .clipboardReceived(let content, _, _) = command {
             let pendingBytes = writerCommands.reduce(0) { count, pending in
@@ -1470,8 +1564,9 @@ final class RFBClientSession: @unchecked Sendable {
         let header = try socket.readExact(3)
         let command = UInt16.be(header[1], header[2])
         var request = "command=\(command)"
-        // The plaintext path does not need a key exchange. Never silently accept
-        // encryption and then continue sending or receiving unencrypted data.
+        guard fileTransferEnabled else {
+            throw RFBError.protocolError("Apple encryption was not advertised")
+        }
         if command == 1 {
             let body = try socket.readExact(4)
             let level = UInt16.be(body[0], body[1])
@@ -1483,19 +1578,32 @@ final class RFBClientSession: @unchecked Sendable {
             let methods = stride(from: 0, to: bytes.count, by: 4).map {
                 UInt32.be(bytes[$0], bytes[$0 + 1], bytes[$0 + 2], bytes[$0 + 3])
             }
-            // Command 1 negotiates keys even at level 0; it is not an
-            // unencrypted no-op. Record only negotiation fields, never keys.
             request += " level=\(level) methods=\(methods)"
+            guard level <= 1, methods.contains(1) else {
+                throw RFBError.protocolError("unsupported Apple encryption level or cipher method")
+            }
+            guard let appleWrappingKey else {
+                throw RFBError.protocolError("Apple encryption requires password authentication with security type 30")
+            }
+            let keys = try AppleEncryption.Keys.random()
+            let completion = DispatchSemaphore(value: 0)
+            try enqueueWriterCommand(.rekey(keys, wrappingKey: appleWrappingKey, level: level, completion: completion))
+            guard completion.wait(timeout: .now() + messageTimeout) == .success,
+                  state.withLock({ writerError == nil && !stopped }) else {
+                throw RFBError.protocolError("Apple encryption key exchange did not finish")
+            }
+            try socket.prepareAppleRecordReads(keys: keys, timeout: messageTimeout)
+            self.appleWrappingKey = keys.key
         } else if command == 2 {
             let body = try socket.readExact(4)
             let enabled = UInt16.be(body[0], body[1])
             request += " enabled=\(enabled)"
-            if fileTransferEnabled && enabled == 0 {
-                logger.verbose("Apple SetEncryption: \(request) plaintext retained [client_fd=\(socket.fd)]")
-                return
-            }
+            guard enabled <= 1 else { throw RFBError.protocolError("invalid Apple inbound encryption mode") }
+            try socket.enableAppleRecordReads(enabled == 1)
+        } else {
+            throw RFBError.protocolError("unsupported Apple encryption command \(command)")
         }
-        throw RFBError.protocolError("Apple encryption is unsupported (\(request)); VNC authentication already succeeded; quit Screen Sharing and open a fresh vnc://HOST:PORT/?encrypt=none connection")
+        logger.verbose("Apple SetEncryption: \(request) [client_fd=\(socket.fd)]")
     }
 
     private func handleAppleSetServerScaling() throws {
@@ -1508,7 +1616,7 @@ final class RFBClientSession: @unchecked Sendable {
             throw RFBError.protocolError("invalid Apple server scaling factor \(scale)")
         }
         state.lock()
-        let supportsDisplayInfo = clientCapabilities.advertisedEncodings.contains(AppleRFB.displayInfoEncoding)
+        let supportsDisplayInfo = AppleRFB.preferredDisplayEncoding(in: clientCapabilities.advertisedEncodings) != nil
         if supportsDisplayInfo {
             pendingAppleFramebufferScale = scale
             state.signal()
@@ -1534,7 +1642,7 @@ final class RFBClientSession: @unchecked Sendable {
         appleNextPush = .distantPast
         state.signal()
         state.unlock()
-        logger.verbose("Apple AutoFrameBufferUpdate: interval_us=\(interval)")
+        logger.verbose("Apple AutoFrameBufferUpdate: interval_us=\(interval) rect=\(rect.x),\(rect.y) \(rect.width)x\(rect.height) [client_fd=\(socket.fd)]")
     }
 
     private func handleAppleSetMode() throws {
@@ -1544,18 +1652,26 @@ final class RFBClientSession: @unchecked Sendable {
             throw RFBError.protocolError("Apple exclusive control mode is not supported")
         }
         state.lock()
-        appleControlMode = mode == 1
-        let supportsStatus = AppleRFB.supports(0x14, bitmap: appleViewerCapabilities)
+        let controlling = mode == 1
+        let changed = appleControlMode != controlling
+        appleControlMode = controlling
+        if changed {
+            appleClipboardNoticeAfter = controlling && !appleClipboardNoticeLogged
+                ? Date().addingTimeInterval(1) : nil
+        } else if controlling && appleClipboardNoticeAfter == nil && !appleClipboardNoticeLogged {
+            appleClipboardNoticeAfter = Date().addingTimeInterval(1)
+        }
         state.unlock()
-        if mode == 0 {
-            input.releaseKeys(); fileTransfer?.cancelAll()
+        if changed && !controlling {
+            input.releaseKeys()
+            fileTransfer?.cancelAll()
             try enqueueWriterCommand(.clipboardReset)
         }
-        // MiscStatus 9/10 report permission to control, not the selected mode.
-        // Sending 10 for a voluntary Observe request disables the viewer's
-        // Control command and prevents it from switching back.
-        if supportsStatus && mode == 1 { try enqueueWriterCommand(.status(9)) }
-        logger.verbose("Apple SetMode: \(mode == 1 ? "control" : "observe")")
+        // Like the native server, accept the selected mode without replying.
+        // ServerInit already advertises control permission. MiscStatus 9/10
+        // change that permission; echoing them here can trigger another SetMode
+        // and create a feedback loop in Screen Sharing.
+        logger.verbose("Apple SetMode: \(controlling ? "control" : "observe") state_changed=\(changed) [client_fd=\(socket.fd)]")
     }
 
     private func handleAppleAutoPasteboard() throws {
@@ -1662,6 +1778,14 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func sendWriterCommand(_ command: WriterCommand) throws {
         switch command {
+        case .rekey(let keys, let wrappingKey, let level, let completion):
+            defer { completion.signal() }
+            let cipher = level == 1 ? try AppleEncryption.Cipher(keys: keys, encrypt: true) : nil
+            // The rekey itself uses the previous transport. All following
+            // writes use the newly negotiated mode, at a message boundary.
+            try socket.writeAll(keys.update(wrappingKey: wrappingKey))
+            socket.setAppleRecordWrites(cipher)
+            logger.verbose("Apple encryption keys sent: AES-128 outgoing_records=\(level == 1) [client_fd=\(socket.fd)]")
         case .clipboardReset:
             appleIncomingPromise = false
             appleCancelledPromise = false
@@ -1672,9 +1796,6 @@ final class RFBClientSession: @unchecked Sendable {
             if appleFileTransferAllowed { try socket.writeAll(bytes) }
         case .clipboardReceived(let content, let promises, let canRequest):
             try applyAppleClipboard(content, promises: promises, canRequest: canRequest)
-        case .status(let value):
-            try socket.writeAll(AppleRFB.status(value))
-            logAppleClipboard("Apple MiscStatus sent: command=\(value)")
         case .clipboardFetch(let requestID, let promises):
             state.lock()
             let generation = appleClipboardGeneration
@@ -1708,7 +1829,7 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func sendClipboardChangeIfNeeded() throws {
         guard clipboardSync else { return }
-        if !usesAppleClipboard {
+        if !usesAppleExtensions {
             if let text = clipboard.localTextIfChanged() { try sendServerCutText(text) }
             return
         }
@@ -1718,7 +1839,13 @@ final class RFBClientSession: @unchecked Sendable {
             && AppleRFB.supports(0x1f, bitmap: appleViewerCapabilities)
         let initial = appleInitialClipboardNotification
         if watching { appleInitialClipboardNotification = false }
+        let clipboardDisabled = appleControlMode && hasSentFramebufferUpdate && !appleAutoPasteboard
+            && !appleClipboardNoticeLogged && (appleClipboardNoticeAfter.map { Date() >= $0 } ?? false)
+        if clipboardDisabled { appleClipboardNoticeLogged = true }
         state.unlock()
+        if clipboardDisabled {
+            logAppleClipboard("Apple shared clipboard: available but disabled by viewer; Use Shared Clipboard is a client setting")
+        }
         guard watching else { return }
         let changed = clipboard.localContentIfChanged() != nil
         if changed {

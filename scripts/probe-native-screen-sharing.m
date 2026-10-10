@@ -4,18 +4,26 @@
 // Run tests with MAC_VNC_NATIVE_PROBE=/tmp/mac-vnc-native-drag-probe.
 #import <AppKit/AppKit.h>
 #import <dlfcn.h>
+#import <objc/runtime.h>
 
 typedef struct { NSInteger width, height; } NativeFramebufferSize;
 @interface ProbeFramebuffer : NSObject
 - (NativeFramebufferSize)size;
+- (void)lock;
+- (void)unlock;
+- (CGImageRef)newCGImage CF_RETURNS_RETAINED;
 @end
 
 @interface NSObject (NativeScreenSharingProbe)
 + (id)defaultOptions;
 + (NSDictionary *)optionsFromURL:(NSURL *)url;
 + (id)vncAuthenticationCredentialsWithPassword:(NSString *)password;
++ (id)diffieHellmanCredentialsWithUsername:(NSString *)username withPassword:(NSString *)password label:(NSString *)label;
 - (void)applyURLOptions:(NSDictionary *)options;
 - (NSInteger)minimumEncryptionLevel;
+- (NSInteger)controlType;
++ (id)keyboardEventWithKeyCode:(NSUInteger)keyCode withState:(int)state withEvent:(id)event;
+- (void)sendEvent:(id)event;
 - (void)connectToURL:(NSString *)url withPreferredCredentials:(id)credentials options:(id)options;
 - (void)setShouldWarnUserForUnencryptedLegacyVNC:(BOOL)value;
 - (void)setAllowsFileTransferToRemote:(BOOL)value;
@@ -26,6 +34,11 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 - (BOOL)supportsControlMode;
 - (BOOL)sessionAllowsControl;
 - (BOOL)isControlling;
+- (NSInteger)displayInfo2Version;
+- (BOOL)hasReliableVirtualDisplayInfo;
+- (BOOL)isOnConsole;
+- (BOOL)isUsingVirtualDisplay;
+- (void)setShouldScaleScreen:(BOOL)value;
 - (void)setControlMode:(NSInteger)mode;
 - (id)session;
 - (void)setScalingFactor:(double)factor forced:(BOOL)forced;
@@ -36,24 +49,94 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 - (BOOL)allowsDragAndDropFileCopyFromRemote;
 @end
 
+static int testPixelPhase(id view) {
+    ProbeFramebuffer *buffer = [[view session] frameBuffer];
+    if (!buffer) return -1;
+    [buffer lock];
+    CGImageRef image = [buffer newCGImage];
+    uint8_t pixel[4] = {0};
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(pixel, 1, 1, 8, 4, colorSpace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    // The source animates a small corner patch so even debug builds can
+    // deliver repeated updates without re-encoding an entire desktop.
+    CGImageRef sample = image ? CGImageCreateWithImageInRect(image, CGRectMake(0, 0, 1, 1)) : NULL;
+    if (sample && context) CGContextDrawImage(context, CGRectMake(0, 0, 1, 1), sample);
+    if (sample) CGImageRelease(sample);
+    if (context) CGContextRelease(context);
+    CGColorSpaceRelease(colorSpace);
+    if (image) CGImageRelease(image);
+    [buffer unlock];
+    if (abs((int)pixel[0] - 192) >= 8 || abs((int)pixel[1] - 128) >= 8) return -1;
+    if (abs((int)pixel[2] - 64) < 8) return 0;
+    if (abs((int)pixel[2] - 160) < 8) return 1;
+    return -1;
+}
+
+static BOOL hasTestPixels(id view) { return testPixelPhase(view) >= 0; }
+
 int main(int argc, char **argv) {
     @autoreleasepool {
-        if (argc != 4) return 2;
+        if (argc != 4 && argc != 5) return 2;
         BOOL fileTransfer = atoi(argv[2]) != 0;
-        BOOL startControlling = atoi(argv[3]) != 0;
+        NSString *initialMode = [NSString stringWithUTF8String:argv[3]];
         if (!dlopen("/System/Library/PrivateFrameworks/ScreenSharing.framework/Versions/A/ScreenSharing", RTLD_LAZY | RTLD_LOCAL)) return 2;
         Class viewClass = NSClassFromString(@"SSSessionView");
         if (!viewClass) return 2;
+        BOOL restoreObserve = [initialMode isEqualToString:@"restore-observe"];
+        __block BOOL restoredObserveBeforePixels = NO;
+        __block NSUInteger modeCallbacks = 0;
+        __block BOOL restored = NO;
+        SEL selector = NSSelectorFromString(@"ssSession:delegateControlModeSet:");
+        Method callback = class_getInstanceMethod(viewClass, selector);
+        if (!callback) return 2;
+        void (*original)(id, SEL, id, NSInteger) = (void *)method_getImplementation(callback);
+        method_setImplementation(callback, imp_implementationWithBlock(^(id self, id session, NSInteger mode) {
+            ++modeCallbacks;
+            original(self, selector, session, mode);
+            if (restoreObserve && mode == 1 && !restored) {
+                // Model the app restoring Observe during startup, without
+                // changing a saved preference or posting any real input.
+                restored = YES;
+                restoredObserveBeforePixels = !hasTestPixels(self);
+                [self setControlMode:0];
+            }
+        }));
+        // Fail instead of opening a modal warning in this hidden probe. This
+        // also catches permission notifications delivered in the wrong order.
+        Method warning = class_getInstanceMethod(viewClass,
+            NSSelectorFromString(@"showWarningWithTitle:andMessage:withStatus:"));
+        if (!warning) return 2;
+        method_setImplementation(warning, imp_implementationWithBlock(^(id self, id title, id message, NSInteger status) {
+            fprintf(stderr, "Screen Sharing warning: %s / %s status=%ld\n",
+                [title description].UTF8String, [message description].UTF8String, (long)status);
+            fflush(stdout);
+            _exit(3);
+        }));
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        // Test a saved Observe preference separately from the actual default.
+        // This override exists only in the disposable probe process.
+        if ([initialMode isEqualToString:@"saved-observe"]) {
+            [NSUserDefaults.standardUserDefaults setVolatileDomain:@{@"controlType": @0}
+                forName:NSArgumentDomain];
+        }
         id options = [NSClassFromString(@"SSConnectionOptions") defaultOptions];
-        [options applyURLOptions:@{@"control": startControlling ? @"1" : @"0",
-                                  @"sharePasteboard": @"0", @"disableReconnect": @"1"}];
+        [options applyURLOptions:@{@"sharePasteboard": @"0", @"disableReconnect": @"1"}];
+        if (![initialMode isEqualToString:@"default"] && ![initialMode isEqualToString:@"saved-observe"]) {
+            [options applyURLOptions:@{@"control": ([initialMode isEqualToString:@"control"] || restoreObserve) ? @"1" : @"0"}];
+        }
         // Exercise the supplied URL, rather than forcing plaintext through an
         // independent options override that could hide a URL parsing failure.
         NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:argv[1]]];
         [options applyURLOptions:[NSClassFromString(@"SSAddress") optionsFromURL:url]];
-        if ([options minimumEncryptionLevel] != 0) return 2;
+        if (argc == 4 && [options minimumEncryptionLevel] != 0) return 2;
+        if (argc == 5) {
+            NSString *encryption = [NSString stringWithUTF8String:argv[4]];
+            if (![encryption isEqualToString:@"default"]) [options applyURLOptions:@{@"encrypt": encryption}];
+            printf("minimumEncryptionLevel=%ld\n", (long)[options minimumEncryptionLevel]);
+        }
+        BOOL expectedControl = !restoreObserve && [options controlType] != 0;
         id view = [[viewClass alloc] initWithFrame:NSMakeRect(0, 0, 640, 480)];
         [view setShouldWarnUserForUnencryptedLegacyVNC:NO];
         [view setAllowsFileTransferToRemote:YES];
@@ -62,18 +145,57 @@ int main(int argc, char **argv) {
             styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
         window.contentView = view;
         id credentials = [NSClassFromString(@"SSPasswordCredentials") vncAuthenticationCredentialsWithPassword:@"testpass"];
-        [view connectToURL:[NSString stringWithUTF8String:argv[1]] withPreferredCredentials:@[credentials] options:options];
+        id appleCredentials = [NSClassFromString(@"SSUsernamePasswordCredentials")
+            diffieHellmanCredentialsWithUsername:@"test" withPassword:@"testpass" label:nil];
+        [view connectToURL:[NSString stringWithUTF8String:argv[1]] withPreferredCredentials:@[appleCredentials, credentials] options:options];
         NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:4];
         while (deadline.timeIntervalSinceNow > 0) {
             [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
         }
         BOOL initiallyControlling = [view isControlling];
         BOOL controlSupported = [view supportsControlMode];
+        BOOL initialPixels = hasTestPixels(view);
         BOOL passed = [view isConnected] && controlSupported && [view sessionAllowsControl]
-            && initiallyControlling == startControlling;
+            && initiallyControlling == expectedControl && initialPixels && modeCallbacks <= 2;
+        printf("modeMatchesSelection=%d startupModeCallbacks=%lu expectedControl=%d\n",
+            initiallyControlling == expectedControl, (unsigned long)modeCallbacks, expectedControl);
+        if (restoreObserve) {
+            printf("restoredObserveBeforePixels=%d\n", restoredObserveBeforePixels);
+            passed = passed && restoredObserveBeforePixels;
+        }
+        printf("initialPixels=%d\n", initialPixels);
+        if (fileTransfer) {
+            id session = [view session];
+            printf("displayLayoutVersion=%ld reliableDisplayState=%d onConsole=%d virtualDisplay=%d\n",
+                (long)[session displayInfo2Version], [session hasReliableVirtualDisplayInfo],
+                [session isOnConsole], [session isUsingVirtualDisplay]);
+            passed = passed && [session displayInfo2Version] == 5
+                && [session hasReliableVirtualDisplayInfo] && [session isOnConsole]
+                && ![session isUsingVirtualDisplay];
+        }
         printf("controlSupported=%d controlAllowed=%d initiallyControlling=%d\n",
             controlSupported, [view sessionAllowsControl], initiallyControlling);
+        // Stay connected through many changing frames. A one-frame success or
+        // a mode that happens to be Control when sampled is insufficient.
+        NSUInteger callbacksBefore = modeCallbacks;
+        int previousPhase = testPixelPhase(view), pixelChanges = 0;
+        BOOL stableMode = YES, validPixels = YES;
+        NSDate *streamDeadline = [NSDate dateWithTimeIntervalSinceNow:6];
+        while (streamDeadline.timeIntervalSinceNow > 0 && [view isConnected]) {
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+            int phase = testPixelPhase(view);
+            if (phase >= 0 && previousPhase >= 0 && phase != previousPhase) ++pixelChanges;
+            previousPhase = phase;
+            validPixels = validPixels && phase >= 0;
+            stableMode = stableMode && [view isControlling] == expectedControl
+                && [view supportsControlMode] && [view sessionAllowsControl];
+        }
+        BOOL streaming = [view isConnected] && validPixels && pixelChanges >= 6;
+        printf("stableMode=%d unsolicitedModeCallbacks=%lu streamingPixels=%d pixelChanges=%d\n",
+            stableMode, (unsigned long)(modeCallbacks - callbacksBefore), streaming, pixelChanges);
+        passed = passed && stableMode && modeCallbacks == callbacksBefore && streaming;
         for (int cycle = 0; cycle < 2; ++cycle) {
+            NSUInteger beforeSwitch = modeCallbacks;
             [view setControlMode:0];
             [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
             BOOL observing = ![view isControlling];
@@ -85,29 +207,53 @@ int main(int argc, char **argv) {
             BOOL resumedControl = [view isControlling];
             printf("observing=%d canResumeControl=%d resumedControl=%d\n",
                 observing, canResumeControl, resumedControl);
-            passed = passed && observing && canResumeControl && resumedControl;
+            passed = passed && observing && canResumeControl && resumedControl
+                && modeCallbacks - beforeSwitch <= 2;
         }
+        // Feed only this isolated session's sender queue. Its server has mock
+        // input; no NSEvent/CGEvent is posted to either desktop.
+        Class keyboardClass = NSClassFromString(@"SSKeyboardEvent");
+        if (!keyboardClass) return 2;
+        [[view session] sendEvent:[keyboardClass keyboardEventWithKeyCode:0 withState:0 withEvent:nil]];
+        [[view session] sendEvent:[keyboardClass keyboardEventWithKeyCode:0 withState:1 withEvent:nil]];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+        NSUInteger callbacksBeforeScaling = modeCallbacks;
         if (fileTransfer && [view isConnected]) {
             // Exercise SetServerScaling even when window sizing does not send
             // it automatically. Check the native decoder's actual pixel size.
             for (NSNumber *factor in @[@0.5, @0.75, @1.0, @1.0]) {
+                // Keep the view's policy consistent with the requested factor.
+                // At 100%, disable fit-to-window: the host's usable screen can
+                // be smaller than this synthetic desktop, even for a hidden window.
+                [view setShouldScaleScreen:factor.doubleValue < 1.0];
                 [window setContentSize:NSMakeSize(1728 * factor.doubleValue, 1118 * factor.doubleValue)];
                 [[view session] setScalingFactor:factor.doubleValue forced:YES];
                 NativeFramebufferSize size = {0, 0};
                 NSDate *scaleDeadline = [NSDate dateWithTimeIntervalSinceNow:5];
+                NSDate *pixelsStableSince = nil;
                 do {
                     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
                     size = [[[view session] frameBuffer] size];
+                    if (size.width == lround(1728 * factor.doubleValue)
+                        && size.height == lround(1118 * factor.doubleValue) && hasTestPixels(view)) {
+                        if (!pixelsStableSince) pixelsStableSince = [NSDate date];
+                    } else {
+                        pixelsStableSince = nil;
+                    }
+                    // A repeated factor starts at the expected dimensions and
+                    // pixels. Allow the asynchronous layout reset to run before
+                    // accepting them, or this test can miss a later black frame.
                 } while ([view isConnected] && scaleDeadline.timeIntervalSinceNow > 0
-                    && (size.width != lround(1728 * factor.doubleValue)
-                        || size.height != lround(1118 * factor.doubleValue)));
+                    && (!pixelsStableSince || -pixelsStableSince.timeIntervalSinceNow < 0.35));
                 printf("scaling=%.2f framebuffer=%ldx%ld actualFactor=%.2f\n", factor.doubleValue, size.width, size.height,
                     [[view session] scalingFactor]);
                 passed = passed && [view isConnected]
                     && size.width == lround(1728 * factor.doubleValue)
-                    && size.height == lround(1118 * factor.doubleValue);
+                    && size.height == lround(1118 * factor.doubleValue) && hasTestPixels(view);
+                printf("scaledPixels=%d\n", hasTestPixels(view));
             }
         }
+        passed = passed && modeCallbacks == callbacksBeforeScaling && [view isControlling];
         id frame = [view frameBufferView];
         NSArray *types = [frame registeredDraggedTypes];
         passed = passed && [view isConnected] && [view isLegacyVNC] == !fileTransfer

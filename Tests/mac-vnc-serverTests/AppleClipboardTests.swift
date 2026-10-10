@@ -190,9 +190,10 @@ struct AppleClipboardTests {
         let compressed = try AppleClipboard.compress(raw)
         try peer.write([0x1f, 0, promises ? 1 : 0, 0] + UInt32(0).beBytes
             + UInt32(raw.count).beBytes + UInt32(compressed.count).beBytes + compressed)
-        // SetMode provides a processing barrier without fetching the clipboard.
-        try peer.write([0x0a, 0, 0, 1])
-        #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 9])
+        // A frame is a processing barrier without fetching the clipboard.
+        try peer.write([3, 0, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(try peer.read(24) == [0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0, 0]
+            + [UInt8](repeating: 0, count: 8))
         #expect(!peer.hasData(timeout: 0.25))
         #expect(peer.clipboard.currentText() == "initial")
 
@@ -422,6 +423,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
     let password: String?
     let done = DispatchSemaphore(value: 0)
     private var ownsSession = true
+    private(set) var appleWrappingKey: [UInt8]?
 
     init(socket: ClientSocket, password: String? = "testpass") {
         self.socket = socket
@@ -429,7 +431,8 @@ final class ClipboardTestPeer: @unchecked Sendable {
         ownsSession = false
     }
 
-    init(password: String? = "testpass", includesCursor: Bool = false, fileTransfer: Bool = false) throws {
+    init(password: String? = "testpass", includesCursor: Bool = false, fileTransfer: Bool = false,
+         messageTimeout: TimeInterval = 5) throws {
         self.password = password
         var fds = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
@@ -444,7 +447,8 @@ final class ClipboardTestPeer: @unchecked Sendable {
         let session = try RFBClientSession(socket: server, password: password, fps: 30,
             encodingPreference: .raw, capture: ClipboardTestScreen(includesCursor: includesCursor), input: ClipboardTestInput(),
             clipboard: clipboard, clipboardSync: true, adaptiveStreaming: false,
-            adaptiveFrameRate: false, logger: ServerLogger(verbose: false), fileTransfer: fileTransfer)
+            adaptiveFrameRate: false, logger: ServerLogger(verbose: false), messageTimeout: messageTimeout,
+            fileTransfer: fileTransfer)
         DispatchQueue.global().async { [self] in
             defer { done.signal() }
             try? session.run()
@@ -464,20 +468,9 @@ final class ClipboardTestPeer: @unchecked Sendable {
     }
 
     func read(_ count: Int) throws -> [UInt8] {
-        var output = [UInt8](repeating: 0, count: count)
-        var offset = 0
-        let deadline = Date().addingTimeInterval(3)
-        while offset < count {
-            guard hasData(timeout: max(0, deadline.timeIntervalSinceNow)), Date() < deadline else {
-                throw RFBError.socketError("timed out waiting for test server")
-            }
-            let received = output.withUnsafeMutableBytes {
-                Darwin.read(socket.fd, $0.baseAddress!.advanced(by: offset), count - offset)
-            }
-            guard received > 0 else { throw RFBError.socketError("test server disconnected") }
-            offset += received
+        try socket.withReadTimeout(3, operation: "test server response") {
+            try socket.readExact(count)
         }
-        return output
     }
 
     func number() throws -> UInt32 {
@@ -488,13 +481,27 @@ final class ClipboardTestPeer: @unchecked Sendable {
     func handshake(version: String, shared: Bool = true) throws -> [UInt8] {
         #expect(try read(12) == Array(AppleRFB.version.utf8))
         try write(Array(version.utf8))
+        var security: UInt8 = password == nil ? 1 : 2
         if version == "RFB 003.003\n" {
             #expect(try number() == (password == nil ? 1 : 2))
         } else {
-            #expect(try read(2) == [1, password == nil ? 1 : 2])
-            if version != AppleRFB.version { try write([password == nil ? 1 : 2]) }
+            #expect(try read(1) == [1])
+            security = try read(1)[0]
+            #expect(security == (password == nil ? 1 : 2) || (version == AppleRFB.version && security == 30))
+            if version != AppleRFB.version || security == 30 { try write([security]) }
         }
-        if let password {
+        if security == 30 {
+            #expect(try read(4) == [0, 2] + UInt16(AppleAuth.prime.count).beBytes)
+            #expect(try read(AppleAuth.prime.count) == AppleAuth.prime)
+            let serverKey = try read(AppleAuth.prime.count)
+            let exchange = try AppleAuth.Exchange()
+            let key = try exchange.wrappingKey(peerKey: serverKey)
+            appleWrappingKey = key
+            var credentials = [UInt8](repeating: 0, count: 128)
+            credentials.replaceSubrange(64..<(64 + (password ?? "").utf8.count), with: (password ?? "").utf8)
+            try write(AppleEncryption.ecb(credentials, key: key, encrypt: true) + exchange.publicKey)
+            #expect(try number() == 0)
+        } else if let password {
             let challenge = try read(16)
             try write(VNCAuth.response(challenge: challenge, password: password))
             #expect(try number() == 0)
@@ -518,7 +525,6 @@ final class ClipboardTestPeer: @unchecked Sendable {
         viewer[36] = 0x08 // server message 20: MiscStatus
         viewer[37] = 0x01 // server message 31: ClipboardSend
         try write(viewer + [0x0a, 0, 0, 1, 0x15, 0, 0, 1, 0, 0, 0, 0])
-        #expect(try read(8) == [0x14, 0, 0, 4, 0, 1, 0, 9])
         #expect(try read(8) == [0x14, 0, 0, 4, 0, 1, 0, 2])
     }
 

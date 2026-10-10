@@ -243,7 +243,7 @@ Options:
 | `--service-restart` | — | Restart the registered per-user macOS LaunchAgent. |
 | `--verbose` | off | Enable periodic framebuffer-update logs on stdout. |
 | `--clipboard-sync` | off | Share text and PNG/TIFF/JPEG images with Apple Screen Sharing; text with classic VNC. |
-| `--file-transfer` | off | Enable Apple file/folder drag and drop in plaintext compatibility mode. Screen Sharing requires `?encrypt=none`; see below. |
+| `--file-transfer` | off | Enable Apple file/folder drag and drop and Apple authentication/encryption negotiation; see below. |
 | `--no-adaptive` | off | Disable adaptive FPS, compression, and automatic scale changes. |
 
 ### Password configuration
@@ -354,23 +354,31 @@ Clipboard synchronization is disabled by default because the native macOS Screen
 
 With `--clipboard-sync`, the server advertises Apple's RFB 3.889 dialect and negotiates an extended ServerInit with compatible viewers. Apple Screen Sharing uses native pasteboard notifications, fetches, and compressed text and image archives. Other viewers can negotiate RFB 3.3, 3.7, or 3.8 and continue using classic cut text messages. The configured password remains required in either mode.
 
-On the client, enable **Edit → Use Shared Clipboard** after connecting. The implementation supports Unicode and multiline text, PNG/TIFF/JPEG images, clearing, and deferred clipboard requests in both directions. Apple clipboard archives are limited to 100 MiB; classic VNC text remains limited to 16 MiB. Rich-text preservation, Apple account authentication, and encrypted Apple records are not implemented. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
+On the client, enable **Edit → Use Shared Clipboard** after connecting. Screen Sharing owns this checkbox through its saved clipboard preference. Verbose logs report when clipboard sharing is available but disabled by the viewer. The implementation supports Unicode and multiline text, PNG/TIFF/JPEG images, clearing, and deferred clipboard requests in both directions. Apple clipboard archives are limited to 100 MiB; classic VNC text remains limited to 16 MiB. Rich-text preservation and macOS account authentication are not implemented. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
 
 File/folder drag and drop is enabled separately with `--file-transfer`. This uses
-an experimental plaintext Apple compatibility profile. Restart the updated
+an experimental Apple compatibility profile with encryption negotiation. Restart the updated
 server with that flag, disconnect the existing viewer session, and connect from
 the client with:
 
 ```sh
-open -a "Screen Sharing" 'vnc://SERVER_IP:5900/?encrypt=none'
+open -a "Screen Sharing" 'vnc://SERVER_IP:5900/'
 ```
 
 Use control mode, then drag a file or folder from local Finder into remote Finder
 or onto the remote desktop. Drag a remote Finder item out of the Screen Sharing
 window into local Finder to copy in the other direction. Existing destinations
-are preserved by choosing a numbered name. The VNC password is still required;
-the session traffic is unencrypted. Clients requesting Apple record encryption
-are disconnected with a log explaining the required URL option.
+are preserved by choosing a numbered name. Screen Sharing uses Apple
+Diffie–Hellman authentication: enter any username and the configured server
+password in its login dialog. The username is only a label, not a macOS account
+login. Standard VNC clients continue to use the VNC password method.
+The server supports Apple's AES record encryption and encrypted input events,
+so `encrypt=none` is not required. Control permission is available from startup;
+Screen Sharing's selected mode is respected, including a saved Observe choice. This legacy protocol does not
+authenticate the server's identity. Use SSH or a VPN for a trusted channel over
+untrusted networks. The `--no-password` profile cannot negotiate Apple encryption.
+Display negotiation prefers Apple's modern layout format (1105) with console
+state and explicit scale, retaining format 1101 for older viewers.
 
 The backend uses the system's private `SSDragHelper`,
 `SSFileCopySender` and `SSFileCopyReceiver` executables as the logged-in user.

@@ -13,7 +13,7 @@ struct FileTransferTests {
         #expect(!config.clipboardSync)
         let enabled = Array(AppleRFB.desktopName("test", fileTransfer: true)[6..<22])
         let disabled = Array(AppleRFB.desktopName("test")[6..<22])
-        for message in [14, 18, 32, 34] {
+        for message in [14, 16, 18, 32, 34] {
             #expect(AppleRFB.supports(message, bitmap: enabled))
             #expect(!AppleRFB.supports(message, bitmap: disabled))
         }
@@ -26,20 +26,40 @@ struct FileTransferTests {
         let name = try peer.handshake(version: AppleRFB.version)
         #expect(AppleRFB.supports(0x12, bitmap: Array(name[6..<22])))
         // The viewer sends SetEncodings before it considers the session ready.
-        // It needs a DisplayInfo reply to finish registering file drop types.
-        for _ in 0..<2 {
-            try peer.write([2, 0, 0, 2] + UInt32(6).beBytes + UInt32(1101).beBytes)
-            #expect(try peer.read(16) == [0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 4, 77])
-            #expect(try peer.read(10) == [0, 2, 0, 1, 0, 0, 0, 0, 0, 1])
-            #expect(try peer.read(28) == UInt32(1).beBytes + [0, 2, 0, 1]
-                + [UInt8](repeating: 0, count: 12) + UInt32(2).beBytes + UInt32(1).beBytes)
+        // Prefer the native layout in either order, including duplicate entries
+        // and a viewer advertising 1105 alone. Retain the 1101 fallback.
+        let offers: [[UInt32]] = [[6, 1101], [6, 1101, 1105], [1105, 6, 1101],
+                                 [1101, 1105, 1101, 1105], [6, 1105], [6, 1101]]
+        for encodings in offers {
+            try peer.write([2, 0] + UInt16(encodings.count).beBytes + encodings.flatMap(\.beBytes))
+            #expect(try peer.read(12) == [0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 1])
+            if encodings.contains(1105) {
+                #expect(try peer.number() == 1105)
+                #expect(try peer.read(2) == [0, 76]) // prefix excludes itself
+                #expect(try peer.read(20) == [0, 5, 0, 2, 0, 1, 0, 2, 0, 1,
+                                            255, 255, 255, 255, 0, 0, 0, 4, 0, 1])
+                // Native density and server scale, both big-endian f64 1.0.
+                #expect(try peer.read(16) == [0x3f, 0xf0, 0, 0, 0, 0, 0, 0,
+                                            0x3f, 0xf0, 0, 0, 0, 0, 0, 0])
+                #expect(try peer.read(4) == [0, 0, 0, 1]) // display ID
+                #expect(try peer.read(16) == [0, 0, 0, 0, 0, 1, 0, 2,
+                                            0, 0, 0, 0, 0, 1, 0, 2]) // logical/backing bounds
+                #expect(try peer.read(20) == [0, 0, 0, 1, 32, 24, 0, 1, 0, 255,
+                                            0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
+            } else {
+                #expect(try peer.number() == 1101)
+                #expect(try peer.read(10) == [0, 2, 0, 1, 0, 0, 0, 0, 0, 1])
+                #expect(try peer.read(28) == UInt32(1).beBytes + [0, 2, 0, 1]
+                    + [UInt8](repeating: 0, count: 12) + UInt32(2).beBytes + UInt32(1).beBytes)
+            }
+            #expect(!peer.hasData(timeout: 0.05))
         }
         try peer.write([2, 0, 0, 1] + UInt32(0).beBytes)
         #expect(!peer.hasData(timeout: 0.1))
     }
 
-    @Test(.enabled(if: NativeTransferProcess.available), arguments: [UInt16(0), 1])
-    func encryptionRequestsAreRefusedInsteadOfSilentlyDowngraded(level: UInt16) throws {
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [UInt16(2), UInt16.max])
+    func unsupportedEncryptionLevelsAreRefused(level: UInt16) throws {
         let peer = try ClipboardTestPeer(fileTransfer: true)
         defer { peer.finish() }
         _ = try peer.handshake(version: AppleRFB.version)
@@ -92,6 +112,22 @@ struct FileTransferTests {
         _ = try peer.handshake(version: AppleRFB.version)
         try peer.write([0x12, 0, 0, 1, 0, 1, 0, 101])
         #expect(throws: (any Error).self) { try peer.read(1) }
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [
+        [UInt8(0x12), 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 99], // unknown cipher
+        [UInt8(0x12), 0, 0, 1, 0, 1, 0, 0], // no supported cipher
+        [UInt8(0x12), 0, 0, 2, 0, 1, 0, 0], // enable before keys
+        [UInt8(0x12), 0, 0, 2, 0, 2, 0, 0] // invalid enable flag
+    ])
+    func invalidEncryptionNegotiationClosesTheSession(request: [UInt8]) throws {
+        let peer = try ClipboardTestPeer(fileTransfer: true)
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.write(request)
+        try #require(peer.hasData(timeout: 2))
+        var byte: UInt8 = 0
+        #expect(recv(peer.socket.fd, &byte, 1, MSG_PEEK) == 0)
     }
 
     @Test func rejectsMalformedPathsArchivesAndFileData() throws {
@@ -225,13 +261,17 @@ struct FileTransferTests {
         let helper = try DragTestHelper()
         let result = FileTransferTestResult()
         let dragResult = FileTransferTestResult()
+        let upload = try EncryptedTestLink()
+        let download = try EncryptedTestLink()
         let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(),
             makeDragHelper: { helper }) { bytes in
+                let bytes = try download.transfer([bytes])
                 if bytes.first == 0x1e { dragResult.receive(bytes) }
                 else { result.receive(bytes) }
             }
         let sender = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(),
             makeDragHelper: { helper }) { bytes in
+                let bytes = try upload.transfer([Array(bytes.prefix(6)), Array(bytes.dropFirst(6))])
                 if bytes.first == 0x20 { dragResult.receive(bytes) }
                 else { try receiver.handle(AppleFileTransfer.Message(body: Array(bytes.dropFirst(6)))) }
             }

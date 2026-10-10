@@ -7,53 +7,169 @@ import Testing
 @Suite(.serialized)
 struct MultiClientTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil),
-          arguments: [false, true], [false, true])
-    func nativeScreenSharingCanResumeControl(fileTransfer: Bool, startControlling: Bool) throws {
-        let server = try MultiClientServer(fileTransfer: fileTransfer, width: 1728, height: 1118)
+          arguments: [false, true], ["default", "observe", "control", "saved-observe", "restore-observe"])
+    func nativeScreenSharingKeepsSelectedModeAndStreams(fileTransfer: Bool, initialMode: String) throws {
+        try runNativeProbe(fileTransfer: fileTransfer, initialMode: initialMode)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil),
+          arguments: ["default", "keystrokes", "all"])
+    func nativeScreenSharingNegotiatesEncryptionWithoutURLOverride(encryption: String) throws {
+        try runNativeProbe(fileTransfer: true, initialMode: "default", encryption: encryption)
+    }
+
+    private func runNativeProbe(fileTransfer: Bool, initialMode: String, encryption: String? = nil) throws {
+        let server = try MultiClientServer(fileTransfer: fileTransfer, width: 1728, height: 1118, nativePattern: true)
         defer { server.finish() }
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"]))
-        probe.arguments = ["vnc://127.0.0.1:\(server.port)/?encrypt=none",
-                           fileTransfer ? "1" : "0", startControlling ? "1" : "0"]
+        probe.arguments = ["vnc://127.0.0.1:\(server.port)/" + (encryption == nil ? "?encrypt=none" : ""),
+                           fileTransfer ? "1" : "0", initialMode]
+        if let encryption { probe.arguments?.append(encryption) }
         let output = Pipe()
         probe.standardOutput = output
         probe.standardError = output
         let finished = DispatchSemaphore(value: 0)
         probe.terminationHandler = { _ in finished.signal() }
         try probe.run()
-        guard finished.wait(timeout: .now() + 25) == .success else {
+        guard finished.wait(timeout: .now() + 45) == .success else {
             probe.terminate()
             Issue.record("native Screen Sharing probe timed out")
             return
         }
         let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        if ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil { print(text) }
         #expect(probe.terminationStatus == 0, "\(text)")
-        #expect(text.contains("controlSupported=1 controlAllowed=1 initiallyControlling=\(startControlling ? 1 : 0)"), "\(text)")
+        #expect(text.contains("controlSupported=1 controlAllowed=1"), "\(text)")
+        #expect(text.contains("modeMatchesSelection=1"), "\(text)")
+        #expect(text.contains("stableMode=1 unsolicitedModeCallbacks=0"), "\(text)")
+        #expect(text.contains("streamingPixels=1"), "\(text)")
         #expect(text.contains("observing=1 canResumeControl=1 resumedControl=1"), "\(text)")
+        #expect(text.contains("initialPixels=1"), "\(text)")
+        #expect(server.input.snapshot.keyTransitions == [true, false], "native key down/up must reach mock input")
+        #expect(server.input.snapshot.keySymbols == [0x61, 0x61])
+        if initialMode == "restore-observe" {
+            #expect(text.contains("restoredObserveBeforePixels=1"), "\(text)")
+        }
         if fileTransfer {
+            #expect(text.contains("displayLayoutVersion=5 reliableDisplayState=1 onConsole=1 virtualDisplay=0"), "\(text)")
             #expect(text.contains("connected=1 legacy=0 files=1 toRemote=1 fromRemote=1"), "\(text)")
             #expect(text.contains("scaling=0.50 framebuffer=864x559"), "\(text)")
             #expect(text.contains("scaling=1.00 framebuffer=1728x1118"), "\(text)")
         }
     }
 
-    @Test(.enabled(if: NativeTransferProcess.available))
-    func appleScalingKeepsPointerCoordinatesAndOtherClientsUnchanged() throws {
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true], [UInt32(1101), UInt32(1105)])
+    func appleRepeatedDisplayInfoInvalidatesUnchangedPixels(automatic: Bool, encoding: UInt32) throws {
+        let server = try MultiClientServer(fileTransfer: true)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        let encodings: [UInt8] = [2, 0, 0, 2] + UInt32(0).beBytes + encoding.beBytes
+        let display = encoding == 1105
+            ? AppleRFB.displayLayout(width: 2, height: 1, unscaledWidth: 2, unscaledHeight: 1, scale: 1)
+            : AppleRFB.displayInfo(width: 2, height: 1)
+        try peer.write(encodings)
+        #expect(try peer.read(display.count) == display)
+        try peer.write(fullUpdate)
+        _ = try framePayload(peer, encoding: 0)
+
+        // Even an identical layout clears Screen Sharing's local bitmap. The
+        // source sequence and pixels have not changed, but its next request
+        // (ordinary incremental or automatic) still needs the whole image.
+        try peer.write(encodings)
+        #expect(try peer.read(display.count) == display)
+        #expect(!peer.hasData(timeout: 0.1))
+        let incremental = [UInt8(3), 1] + fullUpdate.dropFirst(2)
+        let auto: [UInt8] = [9, 0, 0, 1, 0, 0, 0, 0] + fullUpdate.dropFirst(2)
+        try peer.write(automatic ? auto : incremental)
+        try #require(peer.hasData(timeout: 1), "viewer must receive a full refresh after DisplayInfo")
+        try #require(peer.read(4) == [0, 0, 0, 1], "unchanged source must not produce an empty update")
+        #expect(try peer.read(12) == [0, 0, 0, 0, 0, 2, 0, 1, 0, 0, 0, 0])
+        #expect(try peer.read(8) == [UInt8](repeating: 0, count: 8))
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [UInt32(1101), UInt32(1105)])
+    func appleLayoutChangeRearmsStreamingWithoutAdvancingZlib(encoding: UInt32) throws {
+        let server = try MultiClientServer(fileTransfer: true, width: 4, height: 2)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        // Include Apple's marker so this exercises its direct, persistent
+        // compressor rather than the generic viewer's encoding transactions.
+        try peer.write([2, 0, 0, 3] + UInt32(6).beBytes + UInt32(1100).beBytes + encoding.beBytes)
+        func display(width: Int, height: Int) -> [UInt8] {
+            encoding == 1105
+                ? AppleRFB.displayLayout(width: width, height: height, unscaledWidth: width, unscaledHeight: height, scale: 1)
+                : AppleRFB.displayInfo(width: width, height: height)
+        }
+        let initialDisplay = display(width: 4, height: 2)
+        #expect(try peer.read(initialDisplay.count) == initialDisplay)
+        let auto: [UInt8] = [9, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 3]
+        func compressedFrame(width: Int, height: Int) throws -> [UInt8] {
+            try #require(peer.read(4) == [0, 0, 0, 1])
+            #expect(try peer.read(12) == [0, 0, 0, 0] + UInt16(width).beBytes + UInt16(height).beBytes + UInt32(6).beBytes)
+            let count = try peer.number()
+            return try count.beBytes + peer.read(Int(count))
+        }
+        try peer.write(auto)
+        var payloads = [try compressedFrame(width: 4, height: 2)]
+
+        // A real source resize is detected during the automatic-update loop.
+        // That iteration must send only layout data, without encoding pixels
+        // that would silently advance the compression stream.
+        server.screen.resize(width: 6, height: 3)
+        let resizedDisplay = display(width: 6, height: 3)
+        #expect(try peer.read(resizedDisplay.count) == resizedDisplay)
+        try #require(!peer.hasData(timeout: 0.15), "old automatic updates must be disarmed")
+        try peer.write(auto)
+        payloads.append(try compressedFrame(width: 6, height: 3))
+
+        // Repeating scale=1 also resets the bitmap and disarms streaming. An
+        // ordinary incremental request can resume it, even for static pixels.
+        try peer.write([8, 0, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0])
+        #expect(try peer.read(resizedDisplay.count) == resizedDisplay)
+        try #require(!peer.hasData(timeout: 0.15))
+        let incremental: [UInt8] = [3, 1, 0, 0, 0, 0, 0, 6, 0, 3]
+        try peer.write(incremental)
+        payloads.append(try compressedFrame(width: 6, height: 3))
+        #expect(try inflatePayloads(payloads, outputCounts: [32, 72, 72]) == [UInt8](repeating: 0, count: 176))
+        try peer.write(incremental)
+        #expect(try peer.read(4) == [0, 0, 0, 0])
+        #expect(!peer.hasData(timeout: 0.1))
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [UInt32(1101), UInt32(1105)])
+    func appleScalingKeepsPointerCoordinatesAndOtherClientsUnchanged(encoding: UInt32) throws {
         let server = try MultiClientServer(fileTransfer: true, width: 32, height: 16)
         defer { server.finish() }
         let scaled = try server.connect(), other = try server.connect()
         defer { scaled.finish(); other.finish() }
         for peer in [scaled, other] { _ = try peer.handshake(version: AppleRFB.version) }
-        let encodings: [UInt8] = [2, 0, 0, 2] + UInt32(0).beBytes + UInt32(1101).beBytes
+        let encodings: [UInt8] = [2, 0, 0, 2] + UInt32(0).beBytes + encoding.beBytes
         let update: [UInt8] = [3, 0, 0, 0, 0, 0, 0, 32, 0, 16]
         func readDisplay(width: Int, height: Int) throws {
             #expect(try scaled.read(8) == [0, 0, 0, 1, 0, 0, 0, 0])
             #expect(try scaled.read(4) == UInt16(width).beBytes + UInt16(height).beBytes)
-            #expect(try scaled.number() == 1101)
+            #expect(try scaled.number() == encoding)
             // Logical screen dimensions must remain 32x16 at every scale.
-            #expect(try scaled.read(10) == [0, 32, 0, 16, 0, 0, 0, 0, 0, 1])
-            #expect(try scaled.read(28) == UInt32(1).beBytes + [0, 32, 0, 16]
-                + [UInt8](repeating: 0, count: 12) + UInt32(32).beBytes + UInt32(16).beBytes)
+            if encoding == 1105 {
+                #expect(try scaled.read(8) == [0, 76, 0, 5, 0, 32, 0, 16])
+                #expect(try scaled.read(4) == UInt16(width).beBytes + UInt16(height).beBytes)
+                #expect(try scaled.read(10) == [255, 255, 255, 255, 0, 0, 0, 4, 0, 1])
+                #expect(try scaled.read(8) == [0x3f, 0xf0, 0, 0, 0, 0, 0, 0])
+                let scaleBits = try scaled.read(8).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+                #expect(Double(bitPattern: scaleBits) == Double(width) / 32)
+                #expect(try scaled.read(12) == [0, 0, 0, 1, 0, 0, 0, 0, 0, 16, 0, 32])
+                #expect(try scaled.read(8) == [0, 0, 0, 0] + UInt16(height).beBytes + UInt16(width).beBytes)
+                #expect(try scaled.read(20) == UInt32(1).beBytes + PixelFormat.serverDefault.bytes)
+            } else {
+                #expect(try scaled.read(10) == [0, 32, 0, 16, 0, 0, 0, 0, 0, 1])
+                #expect(try scaled.read(28) == UInt32(1).beBytes + [0, 32, 0, 16]
+                    + [UInt8](repeating: 0, count: 12) + UInt32(32).beBytes + UInt32(16).beBytes)
+            }
         }
         func readFrame(_ peer: ClipboardTestPeer, width: Int, height: Int) throws {
             #expect(try peer.read(8) == [0, 0, 0, 1, 0, 0, 0, 0])
@@ -69,6 +185,10 @@ struct MultiClientTests {
             try scaled.write([8, 0] + bytes)
             let width = Int(32 * factor), height = Int(16 * factor)
             try readDisplay(width: width, height: height)
+            // Layout replies disarm the previous update stream. Pixels must
+            // wait for the viewer to install its new bitmap and request them.
+            try #require(!scaled.hasData(timeout: 0.1))
+            try scaled.write([3, 1] + update.dropFirst(2))
             try readFrame(scaled, width: width, height: height)
             // A subsequent negotiation must keep the actual scaled dimensions.
             try scaled.write(encodings)
@@ -366,6 +486,97 @@ struct MultiClientTests {
         #expect(first.localTextIfChanged() == nil)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func appleStartupKeepsControlPermissionStable(automatic: Bool, restoresObserve: Bool) throws {
+        let server = try MultiClientServer()
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        #expect(try peer.handshake(version: AppleRFB.version) == AppleRFB.desktopName("mac-vnc-server"))
+        var viewer = [UInt8](repeating: 0, count: 66)
+        viewer[0] = 0x21; viewer[3] = 62; viewer[5] = 1
+        viewer[36] = 0x08 // MiscStatus
+        // Screen Sharing 3.0 can select Control, then restore Observe during
+        // display setup. Neither choice changes the permission in ServerInit.
+        let initialControl: [UInt8] = restoresObserve ? [0x0a, 0, 0, 1] : []
+        let observe: [UInt8] = [0x0a, 0, 0, 0]
+        let press: [UInt8] = [4, 1, 0, 0, 0, 0, 0, 0x61, 5, 1, 0, 0, 0, 0]
+        let auto: [UInt8] = [9, 0, 0, 1, 0, 0, 0, 0] + fullUpdate.dropFirst(2)
+        let stop = [UInt8(9), 0, 0, 1] + UInt32.max.beBytes + [UInt8](repeating: 0, count: 8)
+        try peer.write(viewer + viewer + initialControl + observe + observe + press + (automatic ? auto : fullUpdate))
+        // A permission reply would precede this frame and fail decoding here.
+        _ = try framePayload(peer, encoding: 0)
+        try peer.write(stop)
+        #expect(server.input.snapshot.keyTransitions.isEmpty)
+        #expect(server.input.snapshot.mask == 0)
+        #expect(!peer.hasData(timeout: 0.8), "first pixels must not trigger a delayed permission change")
+
+        // A viewer can send SetMode again from its permission callback. Repeated
+        // Control requests must never receive grants that perpetuate that loop.
+        let control: [UInt8] = [0x0a, 0, 0, 1]
+        try peer.write(control + control + control + press + fullUpdate)
+        _ = try framePayload(peer, encoding: 0)
+        #expect(server.input.snapshot.keyTransitions == [true])
+        #expect(server.input.snapshot.mask == 1)
+        #expect(!peer.hasData(timeout: 0.2), "SetMode has no acknowledgement on the native protocol")
+
+        try peer.write(viewer + observe + observe + press + fullUpdate)
+        _ = try framePayload(peer, encoding: 0)
+        #expect(server.input.snapshot.keyTransitions == [true, false])
+        #expect(server.input.snapshot.mask == 0)
+        #expect(!peer.hasData(timeout: 0.8), "Observe must remain selected until the viewer changes it")
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true])
+    func encryptedInputSurvivesRekeyAndRespectsObserve(incomingRecords: Bool) throws {
+        let server = try MultiClientServer(fileTransfer: true)
+        defer { server.finish() }
+        let peer = try server.connect()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        var inputKey = try #require(peer.appleWrappingKey)
+        func event(_ plaintext: [UInt8]) throws -> [UInt8] {
+            try [0x10, 0] + AppleEncryption.ecb(plaintext, key: inputKey, encrypt: true)
+        }
+        let keyDown: [UInt8] = [0xff, 1, 0, 0, 0, 0x61] + [UInt8](repeating: 0, count: 10)
+        let keyUp: [UInt8] = [0xff, 0, 0, 0, 0, 0x61] + [UInt8](repeating: 0, count: 10)
+        let rightMouse: [UInt8] = [UInt8](repeating: 0, count: 10) + [0xff, 2, 0, 1, 0, 0]
+        // Initial authentication key works before any record negotiation.
+        try peer.write([0x0a, 0, 0, 1] + event(keyDown) + event(keyUp) + fullUpdate)
+        _ = try framePayload(peer, encoding: 0)
+        #expect(server.input.snapshot.keyTransitions == [true, false])
+
+        for generation in 0..<2 {
+            try peer.write([0x12, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1])
+            #expect(try peer.read(20) == [0, 0, 0, 1] + [UInt8](repeating: 0, count: 8)
+                + UInt32(1103).beBytes + UInt32(1).beBytes)
+            let raw = try AppleEncryption.ecb(peer.read(32), key: inputKey, encrypt: false)
+            let keys = AppleEncryption.Keys(key: Array(raw.prefix(16)), iv: Array(raw.suffix(16)))
+            inputKey = keys.key
+            try peer.socket.prepareAppleRecordReads(keys: keys, timeout: 3)
+            try peer.socket.enableAppleRecordReads(true)
+            if incomingRecords {
+                if generation == 0 { try peer.write([0x12, 0, 0, 2, 0, 1, 0, 0]) }
+                peer.socket.setAppleRecordWrites(try AppleEncryption.Cipher(keys: keys, encrypt: true))
+            }
+            // Reproduce the reported failure: server output encrypted, then
+            // SetMode, SetEncodings and message 16 while input may remain clear.
+            try peer.write([0x0a, 0, 0, 1, 2, 0, 0, 1, 0, 0, 0, 0])
+            let combined = Array(keyDown.prefix(10)) + Array(rightMouse.suffix(6))
+            let encrypted = try generation == 0 ? event(keyDown) + event(rightMouse) : event(combined)
+            try peer.write(Array(encrypted.prefix(7)))
+            try peer.write(Array(encrypted.dropFirst(7)) + fullUpdate)
+            _ = try framePayload(peer, encoding: 0)
+            #expect(server.input.snapshot.mask == 4, "Apple right button maps to standard VNC right")
+            #expect(server.input.snapshot.keyTransitions.last == true)
+
+            try peer.write([0x0a, 0, 0, 0] + event(keyDown) + event(rightMouse) + fullUpdate)
+            _ = try framePayload(peer, encoding: 0)
+            #expect(server.input.snapshot.mask == 0)
+            #expect(server.input.snapshot.keyTransitions == Array(repeating: [true, false], count: generation + 2).flatMap { $0 })
+        }
+    }
+
     @Test(arguments: [false, true])
     func observationPreservesControlPermissionAndResumingEnablesInput(fileTransfer: Bool) throws {
         let server = try MultiClientServer(fileTransfer: fileTransfer)
@@ -374,6 +585,9 @@ struct MultiClientTests {
         defer { peer.finish() }
         _ = try peer.handshake(version: AppleRFB.version)
         try peer.enableAppleClipboard()
+        // Finish startup before simulating a deliberate toolbar/menu change.
+        try peer.write(fullUpdate)
+        _ = try framePayload(peer, encoding: 0)
         let press: [UInt8] = [4, 1, 0, 0, 0, 0, 0, 0x61, 5, 1, 0, 0, 0, 0]
         try peer.write([0x0a, 0, 0, 0] + press + fullUpdate)
         // The next reply must be a frame, with no control-revoked status 10.
@@ -383,7 +597,6 @@ struct MultiClientTests {
         #expect(server.input.snapshot.mask == 0)
 
         try peer.write([0x0a, 0, 0, 1])
-        #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 9])
         try peer.write(press + fullUpdate)
         _ = try framePayload(peer, encoding: 0)
         #expect(server.input.snapshot.keyTransitions == [true])
@@ -460,10 +673,11 @@ private final class MultiClientServer: @unchecked Sendable {
     let board: NSPasteboard
     let port: UInt16
     let input = MultiClientInput()
+    let screen: MultiClientScreen
     private let done = DispatchSemaphore(value: 0)
 
     init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5, messageTimeout: TimeInterval = 5,
-         fileTransfer: Bool = false, width: Int = 2, height: Int = 1) throws {
+         fileTransfer: Bool = false, width: Int = 2, height: Int = 1, nativePattern: Bool = false) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)
@@ -480,7 +694,8 @@ private final class MultiClientServer: @unchecked Sendable {
             displaySelection: .all, verbose: false, clipboardSync: true,
             adaptiveStreaming: false, adaptiveFrameRate: false, fileTransfer: fileTransfer)
         let inputs = SharedInputController(input: input)
-        server = RFBServer(config: config, capture: MultiClientScreen(width: width, height: height),
+        screen = MultiClientScreen(width: width, height: height, nativePattern: nativePattern)
+        server = RFBServer(config: config, capture: screen,
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
             logger: ServerLogger(verbose: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil), maximumClients: maximumClients,
@@ -531,18 +746,44 @@ private final class MultiClientListener: @unchecked Sendable {
     }
 }
 
-private struct MultiClientScreen: FramebufferSource {
-    var width = 2
-    var height = 1
+private final class MultiClientScreen: FramebufferSource {
+    private let lock = NSLock()
+    private var size: (width: Int, height: Int)
+    let nativePattern: Bool
+    init(width: Int, height: Int, nativePattern: Bool) {
+        size = (width, height)
+        self.nativePattern = nativePattern
+    }
+    func resize(width: Int, height: Int) {
+        lock.withLock { size = (width, height) }
+    }
+    var includesCursor: Bool { nativePattern }
     func capture() throws -> Framebuffer {
-        Framebuffer(width: width, height: height, bgra: [UInt8](repeating: 0, count: width * height * 4),
-            layout: VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: width, height: height), sequence: 1)
+        let (width, height) = lock.withLock { size }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        // Alternate a synthetic color twice per second. The native probe must
+        // decode ongoing updates, not merely retain the first successful frame.
+        let phase = UInt64(ProcessInfo.processInfo.systemUptime * 2)
+        if nativePattern {
+            for offset in stride(from: 0, to: pixels.count, by: 4) {
+                pixels[offset] = 64; pixels[offset + 1] = 128
+                pixels[offset + 2] = 192; pixels[offset + 3] = 255
+            }
+            if phase % 2 != 0 {
+                for y in 0..<min(64, height) {
+                    for x in 0..<min(64, width) { pixels[(y * width + x) * 4] = 160 }
+                }
+            }
+        }
+        return Framebuffer(width: width, height: height, bgra: pixels,
+            layout: VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: width, height: height), sequence: nativePattern ? phase : 1)
     }
 }
 
 private final class MultiClientInput: InputController {
     struct Snapshot {
         var keyTransitions: [Bool] = []
+        var keySymbols: [UInt32] = []
         var mask: UInt8 = 0
         var pointer: (x: UInt16, y: UInt16, width: Int, height: Int, scale: CGFloat)?
     }
@@ -550,7 +791,7 @@ private final class MultiClientInput: InputController {
     private var state = Snapshot()
     var snapshot: Snapshot { lock.withLock { state } }
     func key(down: Bool, keysym: UInt32, mapAltToCommand: Bool) {
-        lock.withLock { state.keyTransitions.append(down) }
+        lock.withLock { state.keyTransitions.append(down); state.keySymbols.append(keysym) }
     }
     func pointer(buttonMask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) {
         lock.withLock {

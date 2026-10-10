@@ -2,13 +2,20 @@
 
 Enable with the existing `--clipboard-sync` option. Reconnect after switching
 binaries: the Apple capabilities are negotiated at connection startup. On the
-viewer, select Edit → Use Shared Clipboard.
+viewer, select Edit → Use Shared Clipboard. This is a client-owned preference
+(`autoClipboard` / `shouldSharePasteboard`). The native client retains its value
+when Control becomes available. No server message has been identified that
+selects it or starts the client's local clipboard monitoring. The server honors
+AutoPasteboard start/stop and logs a single verbose diagnostic when a connected
+Control session leaves sharing off; it does not send unsolicited clipboard data
+to bypass that choice.
 
 ## Scope
 
 This implements Apple's native text and image pasteboard exchange as an optional RFB
 3.889 profile. The server continues to support standard RFB 3.3/3.7/3.8 clients.
-Password authentication (security type 2) remains required when configured;
+Password authentication remains required when configured: security type 2 for
+the clipboard profile, or Apple type 30 with `--file-transfer`.
 None is advertised only when authentication has explicitly been disabled.
 
 The profile supports UTF-8 text, newlines, empty pasteboards, PNG, TIFF and JPEG
@@ -16,9 +23,9 @@ representations, multiple image items, unsupported-flavor skipping, and deferred
 promises. Image bytes are preserved without transcoding. Compressed and expanded
 Apple archives are each limited to 100 MiB; classic text remains limited to 16 MiB.
 Malformed sizes, counts and compressed streams are rejected. Rich text, Apple
-account authentication, encrypted records, virtual displays and private framebuffer
+account authentication, virtual displays and private framebuffer
 codecs remain unsupported. The separate `--file-transfer` profile enables Finder
-drag negotiation in plaintext compatibility mode and requires `?encrypt=none`;
+drag negotiation plus Apple's authentication and encrypted records;
 see [Apple file transfers](apple-file-transfer.md).
 
 ## Wire exchange
@@ -65,9 +72,10 @@ exclusive ClientInit requests do not evict other viewers. Apple's SetMode still
 supports control and observe only, not exclusive control.
 
 Choosing Observe keeps the client's permission to resume control. MiscStatus 9
-and 10 report control permission, not the selected mode; the server must not send
-10 in response to a voluntary Observe request, since that disables Screen
-Sharing's Control command.
+and 10 report control permission, not the selected mode. Like Apple's native
+server, this server advertises permission in ServerInit and does not send either
+status in response to SetMode. Repeated mode requests are idempotent; there is no
+timed permission revoke/grant cycle or forced override of an Observe preference.
 
 TCP keepalive probes start after 3 idle seconds, retry at one-second intervals,
 and drop an unreachable peer after three unanswered probes (roughly 6 seconds,

@@ -8,6 +8,34 @@ final class ClientSocket {
     private static let writeIdleTimeout: TimeInterval = 3
     private let stateLock = NSLock()
     private var didShutdown = false
+    // Each direction is owned by its existing session thread. Rekeying occurs
+    // only at a complete message boundary, coordinated by the session writer.
+    private var readCipher: AppleEncryption.Cipher?
+    private var writeCipher: AppleEncryption.Cipher?
+    private var recordReadsEnabled = false
+    private var recordReadTimeout: TimeInterval = 5
+    private var decryptedBytes: [UInt8] = []
+    private var decryptedOffset = 0
+
+    func prepareAppleRecordReads(keys: AppleEncryption.Keys, timeout: TimeInterval) throws {
+        guard decryptedOffset == decryptedBytes.count else {
+            throw RFBError.protocolError("Apple rekey inside a buffered record")
+        }
+        readCipher = try AppleEncryption.Cipher(keys: keys, encrypt: false)
+        recordReadTimeout = timeout
+    }
+
+    func enableAppleRecordReads(_ enabled: Bool) throws {
+        guard !enabled || readCipher != nil else {
+            throw RFBError.protocolError("Apple record encryption enabled before key exchange")
+        }
+        guard decryptedOffset == decryptedBytes.count else {
+            throw RFBError.protocolError("Apple record mode changed inside a buffered record")
+        }
+        recordReadsEnabled = enabled
+    }
+
+    func setAppleRecordWrites(_ cipher: AppleEncryption.Cipher?) { writeCipher = cipher }
 
     init(fd: Int32) throws {
         self.fd = fd
@@ -54,6 +82,35 @@ final class ClientSocket {
     }
 
     func readExact(_ count: Int) throws -> [UInt8] {
+        guard recordReadsEnabled else { return try readRaw(count) }
+        var result: [UInt8] = []
+        result.reserveCapacity(count)
+        while result.count < count {
+            if decryptedOffset == decryptedBytes.count {
+                // An idle viewer may wait indefinitely before beginning a
+                // record. Once its first byte arrives, bound the whole record.
+                let first = try readRaw(1)[0]
+                func readRecord() throws -> [UInt8] {
+                    let length = Int(UInt16.be(first, try readRaw(1)[0]))
+                    guard length >= 32, length <= AppleEncryption.maxCiphertextBytes, length % 16 == 0,
+                          let readCipher else {
+                        throw RFBError.protocolError("invalid Apple encrypted record size")
+                    }
+                    return try readCipher.open(readRaw(length))
+                }
+                decryptedBytes = try readDeadline == nil
+                    ? withReadTimeout(recordReadTimeout, operation: "Apple encrypted record", readRecord)
+                    : readRecord()
+                decryptedOffset = 0
+            }
+            let take = min(count - result.count, decryptedBytes.count - decryptedOffset)
+            result += decryptedBytes[decryptedOffset..<(decryptedOffset + take)]
+            decryptedOffset += take
+        }
+        return result
+    }
+
+    private func readRaw(_ count: Int) throws -> [UInt8] {
         var buffer = [UInt8](repeating: 0, count: count)
         var offset = 0
 
@@ -95,6 +152,17 @@ final class ClientSocket {
         idleTimeout: TimeInterval = ClientSocket.writeIdleTimeout,
         onStall: (() -> Void)? = nil
     ) throws {
+        if let writeCipher {
+            for offset in stride(from: 0, to: bytes.count, by: AppleEncryption.maxPayloadBytes) {
+                let payload = Array(bytes[offset..<min(bytes.count, offset + AppleEncryption.maxPayloadBytes)])
+                try writeRaw(writeCipher.seal(payload), idleTimeout: idleTimeout, onStall: onStall)
+            }
+        } else {
+            try writeRaw(bytes, idleTimeout: idleTimeout, onStall: onStall)
+        }
+    }
+
+    private func writeRaw(_ bytes: [UInt8], idleTimeout: TimeInterval, onStall: (() -> Void)?) throws {
         var offset = 0
         var lastProgress = DispatchTime.now().uptimeNanoseconds
         while offset < bytes.count {
@@ -136,6 +204,23 @@ final class ClientSocket {
         idleTimeout: TimeInterval = ClientSocket.writeIdleTimeout,
         onStall: (() -> Void)? = nil
     ) throws {
+        if writeCipher != nil {
+            var pending: [UInt8] = []
+            for chunk in chunks {
+                var offset = 0
+                while offset < chunk.count {
+                    let take = min(AppleEncryption.maxPayloadBytes - pending.count, chunk.count - offset)
+                    pending += chunk[offset..<(offset + take)]
+                    offset += take
+                    if pending.count == AppleEncryption.maxPayloadBytes {
+                        try writeAll(pending, idleTimeout: idleTimeout, onStall: onStall)
+                        pending.removeAll(keepingCapacity: true)
+                    }
+                }
+            }
+            try writeAll(pending, idleTimeout: idleTimeout, onStall: onStall)
+            return
+        }
         guard chunks.count <= 1_024 else {
             for chunk in chunks {
                 try writeAll(chunk, idleTimeout: idleTimeout, onStall: onStall)

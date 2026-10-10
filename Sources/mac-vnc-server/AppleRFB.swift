@@ -25,9 +25,9 @@ enum AppleRFB {
         }
         if fileTransfer {
             // Screen Sharing uses SetEncryption as a native-server capability
-            // gate even for plaintext sessions. This opt-in compatibility mode
-            // requires encrypt=none; encryption requests are explicitly refused.
-            for message in [0x08, 0x0e, 0x12, 0x20, 0x22] { bitmap[message / 8] |= 0x80 >> (message % 8) }
+            // gate even when it does not request encrypted records. Password
+            // sessions use type 30 so encoding 1103 has an authentication key.
+            for message in [0x08, 0x0e, 0x10, 0x12, 0x20, 0x22] { bitmap[message / 8] |= 0x80 >> (message % 8) }
         }
         // Extended ServerInit, with control privilege available.
         return UInt16(0).beBytes + UInt32(0x12).beBytes + bitmap + Array(name.utf8)
@@ -47,6 +47,38 @@ enum AppleRFB {
     }
 
     static let displayInfoEncoding: Int32 = 1101
+    static let displayLayoutEncoding: Int32 = 1105
+
+    /// Native macOS prefers DisplayInfo2 regardless of SetEncodings order.
+    static func preferredDisplayEncoding(in encodings: [Int32]) -> Int32? {
+        if encodings.contains(displayLayoutEncoding) { return displayLayoutEncoding }
+        if encodings.contains(displayInfoEncoding) { return displayInfoEncoding }
+        return nil
+    }
+
+    /// DisplayInfo2 version 5: counted header and one 56-byte display record.
+    /// This port presents its captured desktop as one screen at density 1.
+    /// Logical coordinates remain unscaled; backing bounds describe the pixels
+    /// actually transmitted. Session bit 2 identifies the console session.
+    static func displayLayout(width: Int, height: Int, unscaledWidth: Int, unscaledHeight: Int,
+                              scale: Double) -> [UInt8] {
+        let nativeWidth = UInt16(clamping: unscaledWidth), nativeHeight = UInt16(clamping: unscaledHeight)
+        let width = UInt16(clamping: width), height = UInt16(clamping: height)
+        let rectangle = [UInt8](repeating: 0, count: 4) + width.beBytes + height.beBytes
+            + UInt32(bitPattern: displayLayoutEncoding).beBytes
+        var payload = UInt16(5).beBytes + nativeWidth.beBytes + nativeHeight.beBytes
+        payload += width.beBytes + height.beBytes
+        payload += UInt32.max.beBytes + UInt32(0x04).beBytes + UInt16(1).beBytes
+        for factor in [1.0, scale] {
+            payload += stride(from: 56, through: 0, by: -8).map { UInt8(truncatingIfNeeded: factor.bitPattern >> $0) }
+        }
+        payload += UInt32(1).beBytes // stable logical display ID
+        payload += [0, 0, 0, 0] + nativeHeight.beBytes + nativeWidth.beBytes
+        payload += [0, 0, 0, 0] + height.beBytes + width.beBytes
+        payload += UInt32(1).beBytes + PixelFormat.serverDefault.bytes // main display
+        // The length excludes the prefix itself, unlike some Apple messages.
+        return [0, 0, 0, 1] + rectangle + UInt16(payload.count).beBytes + payload
+    }
 
     /// One logical screen represents the framebuffer selected by this port.
     /// Apple waits for this metadata before declaring a native session ready.
