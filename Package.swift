@@ -15,10 +15,21 @@ let package = Package(
         )
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
+        .target(
+            name: "CVNCZlib",
+            exclude: ["vendor/LICENSE.md", "README.md"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("."),
+                .headerSearchPath("vendor"),
+                // Architecture selection must use the target, including cross builds.
+                .unsafeFlags(["-include", "CVNCZlibConfig.h"])
+            ],
+            linkerSettings: [.linkedLibrary("z")]
+        ),
         .executableTarget(
             name: "mac-vnc-server",
+            dependencies: ["CVNCZlib"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Accelerate"),
@@ -33,5 +44,6 @@ let package = Package(
             dependencies: ["mac-vnc-server"]
         ),
     ],
-    swiftLanguageModes: [.v6]
+    swiftLanguageModes: [.v6],
+    cLanguageStandard: .c11
 )

@@ -6,8 +6,10 @@ source, dest = map(Path, sys.argv[1:3])
 if dest.exists(): raise SystemExit(f'Destination already exists: {dest}')
 shutil.copytree(source, dest, ignore=shutil.ignore_patterns('.build', '.git'))
 files = dest / 'Sources/mac-vnc-server'
+inputs = [source / 'Package.swift'] + [p for p in (source / 'Sources').rglob('*')
+    if p.suffix in {'.swift', '.c', '.h', '.inc'}]
 manifest = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted((source / 'Sources').rglob('*.swift'))}
+            for p in sorted(inputs)}
 (dest / 'source-sha256.json').write_text(json.dumps(manifest, indent=2)+'\n')
 (files / 'PipelineProfile.swift').write_text('''import Foundation
 import Darwin
@@ -62,9 +64,8 @@ replace('RFBServer.swift', '        try socket.writeAll(updateChunks, onStall:',
 replace('RFBServer.swift', '        let updateBytes = updateChunks.reduce(0)', '        profileWrite.end()\n        PipelineProfile.point("response_sent", "fd=\\(socket.fd);seq=\\(prepared.framebuffer.sequence ?? 0);pixels=\\(prepared.changedPixels);bytes=\\(updateChunks.reduce(0) { $0 + $1.count });rects=\\(rectCount)")\n        let updateBytes = updateChunks.reduce(0)')
 span('RFBServer.swift', 'private func applyPointerEvent(mask: UInt8, x: UInt16, y: UInt16) {', 'input_inject_pointer')
 span('RFBServer.swift', 'private func applyKeyEvent(down: Bool, keysym: UInt32) {', 'input_inject_key')
-# Split the ordinary Screen Sharing Zlib path (the transaction path is unused for Apple).
-replace('ZlibEncoding.swift', '    func encode(rect: Rect, framebuffer: Framebuffer, pixelFormat: PixelFormat) throws -> [UInt8] {\n        try RawEncoding.encode(', '    func encode(rect: Rect, framebuffer: Framebuffer, pixelFormat: PixelFormat) throws -> [UInt8] {\n        let profilePack = PipelineProfile.Span(name: "pixel_pack")\n        try RawEncoding.encode(')
-replace('ZlibEncoding.swift', '        let compressed = try Self.deflate(', '        profilePack.end()\n        let profileDeflate = PipelineProfile.Span(name: "zlib_deflate")\n        defer { profileDeflate.end() }\n        let compressed = try Self.deflate(')
+# Both backends and the transaction path use the same pack/compress boundary.
+replace('ZlibEncoding.swift', '        try RawEncoding.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, into: &rawBuffer)', '        let profilePack = PipelineProfile.Span(name: "pixel_pack")\n        try RawEncoding.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, into: &rawBuffer)\n        profilePack.end()\n        let profileDeflate = PipelineProfile.Span(name: "zlib_deflate")\n        defer { profileDeflate.end("backend=\\(configuration.backend.rawValue);level=\\(stream.level)") }')
 span('AppleEncryption.swift', '        func seal(_ payload: [UInt8]) throws -> [UInt8] {', 'aes_record_seal')
 span('Socket.swift', '    private func writeRaw(_ bytes: [UInt8], idleTimeout: TimeInterval, onStall: (() -> Void)?) throws {', 'socket_write_raw')
 replace('StreamingScreenCapture.swift', '        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)', '        let profileCopy = PipelineProfile.Span(name: "capture_buffer_copy")\n        defer { profileCopy.end() }\n        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)')

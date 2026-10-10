@@ -16,6 +16,7 @@ struct ServerConfig {
     var fileTransfer = false
     var cursorMode: CursorMode = .auto
     var allowEncryption = true
+    var zlibConfiguration = ZlibConfiguration()
 }
 
 enum DisplaySelection: Equatable {
@@ -149,6 +150,7 @@ final class RFBServer: @unchecked Sendable {
         logger.info("mac-vnc-server listening on \(config.bindAddress):\(config.port)")
         let fpsDescription = config.adaptiveFrameRate ? "auto(60-45-30)" : "\(config.fps)"
         logger.info("fps=\(fpsDescription) scale=\(config.scale) encoding=\(config.encodingPreference.rawValue) display=\(config.displaySelection.description)")
+        logger.info("zlib backend=\(config.zlibConfiguration.backend.rawValue) version=\(config.zlibConfiguration.backend.version) level=\(config.zlibConfiguration.initialLevel) adaptive=\(config.adaptiveStreaming && config.zlibConfiguration.level == nil)")
         logger.info("password configured: \(config.password != nil)")
         logger.info("clipboard sync: \(config.clipboardSync ? "enabled" : "disabled")")
         let encryptionDescription = !config.allowEncryption ? "disabled by server policy"
@@ -193,7 +195,7 @@ final class RFBServer: @unchecked Sendable {
                     adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
                     handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout,
                     messageTimeout: messageTimeout, fileTransfer: config.fileTransfer,
-                    allowEncryption: config.allowEncryption
+                    allowEncryption: config.allowEncryption, zlibConfiguration: config.zlibConfiguration
                 )
                 workers.enter()
                 DispatchQueue.global(qos: .userInteractive).async { [self] in
@@ -488,7 +490,8 @@ final class RFBClientSession: @unchecked Sendable {
         authenticationTimeout: TimeInterval = 120,
         messageTimeout: TimeInterval = 5,
         fileTransfer: Bool = false,
-        allowEncryption: Bool = true
+        allowEncryption: Bool = true,
+        zlibConfiguration: ZlibConfiguration = .init()
     ) throws {
         self.handshakeTimeout = handshakeTimeout
         self.authenticationTimeout = authenticationTimeout
@@ -509,7 +512,7 @@ final class RFBClientSession: @unchecked Sendable {
         self.logger = logger
         adaptiveFrameRateController = AdaptiveFrameRateController(startingFrameRate: fps)
         zrleEncoder = try ZRLEEncoder()
-        zlibEncoder = try ZlibEncoder()
+        zlibEncoder = try ZlibEncoder(configuration: zlibConfiguration)
     }
 
     func run() throws {
@@ -1398,7 +1401,9 @@ final class RFBClientSession: @unchecked Sendable {
             return
         }
 
-        if encodeDuration >= writeDuration {
+        if encoding == .zlib {
+            try zlibEncoder.adaptCompression(encodeDominates: encodeDuration >= writeDuration)
+        } else if encodeDuration >= writeDuration {
             try setCompressionLevel(1, for: encoding)
         } else {
             try setCompressionLevel(3, for: encoding)

@@ -1,0 +1,12 @@
+case,median_ms,p95_ms,mean_payload_bytes
+raw-depth24,0.986,1.143,7727616
+zlib-zlib-ng-depth24,4.470,5.479,177779
+zlib-zlib-ng-depth24-26rects,4.490,5.058,178722
+zlib-system-depth24,13.439,15.303,192275
+zlib-system-depth24-26rects,12.884,13.567,193269
+raw-depth32,1.001,1.658,7727616
+zlib-zlib-ng-depth32,4.390,5.010,177779
+zlib-zlib-ng-depth32-26rects,4.621,5.748,178722
+zlib-system-depth32,12.803,13.968,192275
+zlib-system-depth32-26rects,14.688,19.971,193269
+encrypt-compressed-frame,0.305,0.515,178278

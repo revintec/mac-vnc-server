@@ -44,9 +44,23 @@ func framebufferBenchmark() throws {
             try RawEncoding.encode(rect: rect, framebuffer: frames[index], pixelFormat: format, into: &buffer)
             return buffer.count
         }
-        let encoder = try ZlibEncoder()
-        try measure("zlib-depth\(depth)") { index in
-            try encoder.encode(rect: rect, framebuffer: frames[index], pixelFormat: format).count
+        for backend in ZlibBackend.allCases {
+            let encoder = try ZlibEncoder(configuration: .init(backend: backend))
+            try measure("zlib-\(backend.rawValue)-depth\(depth)") { index in
+                try encoder.encode(rect: rect, framebuffer: frames[index], pixelFormat: format).count
+            }
+            let striped = try ZlibEncoder(configuration: .init(backend: backend))
+            try measure("zlib-\(backend.rawValue)-depth\(depth)-26rects") { index in
+                var bytes = 0
+                for stripe in 0..<26 {
+                    let y = height * stripe / 26, nextY = height * (stripe + 1) / 26
+                    bytes += try striped.encode(
+                        rect: Rect(x: 0, y: y, width: width, height: nextY - y),
+                        framebuffer: frames[index], pixelFormat: format
+                    ).count
+                }
+                return bytes
+            }
         }
     }
     let encoder = try ZlibEncoder()

@@ -5,6 +5,12 @@ They instrument a disposable source copy and a disposable copy of the user's
 Screen Sharing 3.0 application. They do not install a service or modify the
 production checkout, original application, or existing server sessions.
 
+`benchmark-zlib.c` is a separate synthetic compression benchmark. It compares
+levels, strategies, scratch-buffer sizes and zlib-compatible libraries, with
+persistent-stream round trips through Apple's system decoder. See the
+[zlib optimization report](../../docs/zlib-options-2026-10-11.md) for results,
+limitations and reproduction commands.
+
 `instrument-server.py SOURCE DESTINATION` copies the checkout (excluding Git and
 build directories), records source hashes, and adds monotonic wall/thread-CPU
 probes to the copy. The script checks each insertion point and fails if the

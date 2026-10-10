@@ -1,0 +1,14 @@
+decoder=/usr/lib/libz.1.dylib version=1.2.12
+zlib=1.2.12; all persistent-stream round trips verified
+decoder=/usr/lib/libz.1.dylib version=1.2.12
+zlib=1.3.1.zlib-ng; all persistent-stream round trips verified
+decoder=/usr/lib/libz.1.dylib version=1.2.12
+zlib=1.2.12; all persistent-stream round trips verified
+decoder=/usr/lib/libz.1.dylib version=1.2.12
+zlib=1.3.1.zlib-ng; all persistent-stream round trips verified
+decoder=/usr/lib/libz.1.dylib version=1.2.12
+zlib=1.2.12; all persistent-stream round trips verified
+decoder=/usr/lib/libz.1.dylib version=1.2.12
+zlib=1.3.1.zlib-ng; all persistent-stream round trips verified
+decoder=/usr/lib/libz.1.dylib version=1.2.12
+zlib=1.3.1.zlib-ng; all persistent-stream round trips verified

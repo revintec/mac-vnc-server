@@ -1,198 +1,172 @@
+import CVNCZlib
 import Foundation
 import zlib
 
+enum ZlibBackend: String, CaseIterable, Sendable {
+    case zlibNG = "zlib-ng"
+    case system
+
+    // zlib-ng's level 1 uses deflate_quick; level 2 is its fast match-search mode.
+    var fastLevel: Int32 { self == .zlibNG ? 2 : 1 }
+    var version: String { String(cString: vnc_zlib_version(self == .zlibNG ? 1 : 0)) }
+}
+
+struct ZlibConfiguration: Sendable {
+    var backend: ZlibBackend = .zlibNG
+    var level: Int32?
+
+    var initialLevel: Int32 { level ?? backend.fastLevel }
+}
+
 final class ZlibEncoder {
     final class Transaction {
-        private unowned let parent: ZlibEncoder
-        private var stream = z_stream()
-        private var initialized = false
-        private var pendingOutput: [UInt8]
-        private let compressionLevel: Int32
+        fileprivate unowned let parent: ZlibEncoder
+        fileprivate let stream: DeflateStream
 
         fileprivate init(parent: ZlibEncoder) throws {
             self.parent = parent
-            pendingOutput = parent.pendingOutput
-            compressionLevel = parent.compressionLevel
-
-            let status = zlib.deflateCopy(&stream, &parent.stream)
-            guard status == Z_OK else {
-                throw RFBError.protocolError("zlib deflateCopy failed with status \(status)")
-            }
-            initialized = true
-        }
-
-        deinit {
-            if initialized {
-                zlib.deflateEnd(&stream)
-            }
+            stream = try parent.stream.copy()
         }
 
         func encode(rect: Rect, framebuffer: Framebuffer, pixelFormat: PixelFormat) throws -> [UInt8] {
-            try RawEncoding.encode(
-                rect: rect,
-                framebuffer: framebuffer,
-                pixelFormat: pixelFormat,
-                into: &parent.rawBuffer
-            )
-            let compressed = try ZlibEncoder.deflate(
-                &parent.rawBuffer,
-                stream: &stream,
-                pendingOutput: &pendingOutput,
-                outputChunk: &parent.outputChunk
-            )
-            return UInt32(compressed.count).beBytes + compressed
+            try parent.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, stream: stream)
+        }
+    }
+
+    // The C adapter owns streams at stable addresses and never retains Swift
+    // buffer pointers. A copy includes pending parameter-change output.
+    fileprivate final class DeflateStream {
+        let handle: OpaquePointer
+        var level: Int32
+        var pendingOutput: [UInt8] = []
+
+        init(configuration: ZlibConfiguration) throws {
+            let level = configuration.initialLevel
+            guard (0...9).contains(level) else {
+                throw RFBError.protocolError("invalid zlib compression level \(level)")
+            }
+            var status: Int32 = Z_OK
+            guard let handle = vnc_zlib_create(configuration.backend == .zlibNG ? 1 : 0, level, &status) else {
+                throw RFBError.protocolError("zlib deflateInit failed with status \(status)")
+            }
+            self.handle = handle
+            self.level = level
         }
 
-        fileprivate func copyState(
-            to destination: UnsafeMutablePointer<z_stream>
-        ) throws -> (pendingOutput: [UInt8], compressionLevel: Int32) {
-            stream.next_in = nil
-            stream.avail_in = 0
-            stream.next_out = nil
-            stream.avail_out = 0
-            let status = zlib.deflateCopy(destination, &stream)
-            guard status == Z_OK else {
+        private init(handle: OpaquePointer, level: Int32, pendingOutput: [UInt8]) {
+            self.handle = handle
+            self.level = level
+            self.pendingOutput = pendingOutput
+        }
+
+        deinit { vnc_zlib_destroy(handle) }
+
+        func copy() throws -> DeflateStream {
+            var status: Int32 = Z_OK
+            guard let copy = vnc_zlib_copy(handle, &status) else {
                 throw RFBError.protocolError("zlib deflateCopy failed with status \(status)")
             }
-            return (pendingOutput, compressionLevel)
+            return DeflateStream(handle: copy, level: level, pendingOutput: pendingOutput)
         }
     }
 
-    private var stream = z_stream()
-    private var initialized = false
-    private var compressionLevel = Int32(Z_BEST_SPEED)
-    private var pendingOutput: [UInt8] = []
-    fileprivate var rawBuffer: [UInt8] = []
-    fileprivate var outputChunk = [UInt8](repeating: 0, count: 16 * 1024)
+    private let configuration: ZlibConfiguration
+    private var stream: DeflateStream
+    private var rawBuffer: [UInt8] = []
+    private var outputChunk = [UInt8](repeating: 0, count: 16 * 1024)
+    var compressionLevel: Int32 { stream.level }
 
-    init() throws {
-        let status = deflateInit_(&stream, Z_BEST_SPEED, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
-        guard status == Z_OK else {
-            throw RFBError.protocolError("zlib deflateInit failed with status \(status)")
-        }
-        initialized = true
+    init(configuration: ZlibConfiguration = .init()) throws {
+        self.configuration = configuration
+        stream = try DeflateStream(configuration: configuration)
     }
 
-    deinit {
-        if initialized {
-            deflateEnd(&stream)
-        }
+    // An explicit CLI level is fixed; automatic selection is backend-specific.
+    func adaptCompression(encodeDominates: Bool) throws {
+        guard configuration.level == nil else { return }
+        try setCompressionLevel(encodeDominates ? configuration.backend.fastLevel : 3)
     }
 
     func setCompressionLevel(_ level: Int32) throws {
-        guard (0...9).contains(Int(level)) else {
+        guard (0...9).contains(level) else {
             throw RFBError.protocolError("invalid zlib compression level \(level)")
         }
-        guard level != compressionLevel else {
-            return
-        }
+        guard level != stream.level else { return }
 
-        var chunk = [UInt8](repeating: 0, count: 16 * 1024)
-        stream.next_in = nil
-        stream.avail_in = 0
-
-        repeat {
-            let before = stream.total_out
-            let chunkCount = chunk.count
-            let status = chunk.withUnsafeMutableBytes { outputPointer in
-                stream.next_out = outputPointer.bindMemory(to: Bytef.self).baseAddress
-                stream.avail_out = uInt(chunkCount)
-                return zlib.deflateParams(&stream, level, Z_DEFAULT_STRATEGY)
+        while true {
+            var produced = UInt32(outputChunk.count)
+            let status = outputChunk.withUnsafeMutableBufferPointer { output in
+                vnc_zlib_params(stream.handle, level, output.baseAddress, &produced)
             }
-
-            guard status == Z_OK else {
+            stream.pendingOutput.append(contentsOf: outputChunk.prefix(Int(produced)))
+            if status == Z_OK { break }
+            // deflateParams may fill the output before applying the new level.
+            guard status == Z_BUF_ERROR, produced > 0 else {
                 throw RFBError.protocolError("zlib deflateParams failed with status \(status)")
             }
-
-            let produced = Int(stream.total_out - before)
-            if produced > 0 {
-                pendingOutput.append(contentsOf: chunk.prefix(produced))
-            }
-        } while stream.avail_out == 0
-
-        stream.next_in = nil
-        stream.avail_in = 0
-        stream.next_out = nil
-        stream.avail_out = 0
-        compressionLevel = level
+        }
+        stream.level = level
     }
 
     func beginTransaction() throws -> Transaction {
-        stream.next_in = nil
-        stream.avail_in = 0
-        stream.next_out = nil
-        stream.avail_out = 0
-        return try Transaction(parent: self)
+        try Transaction(parent: self)
     }
 
     func commit(_ transaction: Transaction) throws {
-        var oldStream = stream
-        zlib.deflateEnd(&oldStream)
-        stream = z_stream()
-        initialized = false
-        let metadata = try withUnsafeMutablePointer(to: &stream) { destination in
-            try transaction.copyState(to: destination)
+        guard transaction.parent === self else {
+            throw RFBError.protocolError("zlib transaction belongs to another encoder")
         }
-        pendingOutput = metadata.pendingOutput
-        compressionLevel = metadata.compressionLevel
-        initialized = true
+        // Clone successfully before releasing the live state. The transaction
+        // retains independent ownership and cannot mutate a committed stream.
+        stream = try transaction.stream.copy()
     }
 
     func encode(rect: Rect, framebuffer: Framebuffer, pixelFormat: PixelFormat) throws -> [UInt8] {
-        try RawEncoding.encode(
-            rect: rect,
-            framebuffer: framebuffer,
-            pixelFormat: pixelFormat,
-            into: &rawBuffer
-        )
-        let compressed = try Self.deflate(
-            &rawBuffer,
-            stream: &stream,
-            pendingOutput: &pendingOutput,
-            outputChunk: &outputChunk
-        )
-        return UInt32(compressed.count).beBytes + compressed
+        try encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, stream: stream)
     }
 
-    private static func deflate(
-        _ bytes: inout [UInt8],
-        stream: inout z_stream,
-        pendingOutput: inout [UInt8],
-        outputChunk: inout [UInt8]
+    private func encode(
+        rect: Rect, framebuffer: Framebuffer, pixelFormat: PixelFormat, stream: DeflateStream
     ) throws -> [UInt8] {
-        var output = pendingOutput
-        pendingOutput.removeAll(keepingCapacity: true)
-        output.reserveCapacity(max(1024, bytes.count / 3))
+        try RawEncoding.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, into: &rawBuffer)
+        guard rawBuffer.count <= Int(UInt32.max) else {
+            throw RFBError.protocolError("zlib rectangle exceeds the input size limit")
+        }
+        // Build the length-prefixed payload directly, avoiding a second complete
+        // compressed-array copy solely to prepend the RFB length.
+        var output: [UInt8] = [0, 0, 0, 0]
+        output.reserveCapacity(max(1024, rawBuffer.count / 3) + stream.pendingOutput.count + 4)
+        output.append(contentsOf: stream.pendingOutput)
+        stream.pendingOutput.removeAll(keepingCapacity: true)
 
-        let inputCount = bytes.count
-        try bytes.withUnsafeMutableBytes { inputPointer in
-            stream.next_in = inputPointer.bindMemory(to: Bytef.self).baseAddress
-            stream.avail_in = uInt(inputCount)
-
-            repeat {
-                let chunkCount = outputChunk.count
-                let before = stream.total_out
-                let status = outputChunk.withUnsafeMutableBytes { outputPointer in
-                    stream.next_out = outputPointer.bindMemory(to: Bytef.self).baseAddress
-                    stream.avail_out = uInt(chunkCount)
-                    return zlib.deflate(&stream, Z_SYNC_FLUSH)
+        try rawBuffer.withUnsafeBufferPointer { input in
+            var consumed = 0
+            while true {
+                var inputCount = UInt32(input.count - consumed)
+                var produced = UInt32(outputChunk.count)
+                let status = outputChunk.withUnsafeMutableBufferPointer { scratch in
+                    vnc_zlib_process(
+                        stream.handle, input.baseAddress?.advanced(by: consumed), &inputCount,
+                        scratch.baseAddress, &produced
+                    )
                 }
-
-                guard status == Z_OK else {
+                // A final call after an exactly full flush buffer can report
+                // Z_BUF_ERROR with no input/output. It means the flush is drained.
+                guard status == Z_OK || (status == Z_BUF_ERROR && consumed == input.count && produced == 0) else {
                     throw RFBError.protocolError("zlib deflate failed with status \(status)")
                 }
-
-                let produced = Int(stream.total_out - before)
-                if produced > 0 {
-                    output.append(contentsOf: outputChunk.prefix(produced))
+                consumed += Int(inputCount)
+                output.append(contentsOf: outputChunk.prefix(Int(produced)))
+                if consumed == input.count && produced < outputChunk.count { break }
+                guard inputCount > 0 || produced > 0 else {
+                    throw RFBError.protocolError("zlib deflate made no progress")
                 }
-            } while stream.avail_out == 0
+            }
         }
-        stream.next_in = nil
-        stream.avail_in = 0
-        stream.next_out = nil
-        stream.avail_out = 0
-
+        guard let length = UInt32(exactly: output.count - 4) else {
+            throw RFBError.protocolError("zlib rectangle exceeds the output size limit")
+        }
+        output.replaceSubrange(0..<4, with: length.beBytes)
         return output
     }
 }

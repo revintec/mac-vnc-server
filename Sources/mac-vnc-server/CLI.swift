@@ -208,6 +208,7 @@ enum CLI {
         var fps = 60
         var scale: Double = 1
         var encodingPreference = EncodingPreference.auto
+        var zlibConfiguration = ZlibConfiguration()
         var displaySelection = DisplaySelection.automatic
         var verbose = false
         var clipboardSync = false
@@ -273,6 +274,24 @@ enum CLI {
                     throw CLIError.invalidArgument("--encoding must be auto, zrle, zlib, or raw")
                 }
                 encodingPreference = parsed
+            case "--zlib-backend":
+                index += 1
+                guard index < arguments.count, let backend = ZlibBackend(rawValue: arguments[index]) else {
+                    throw CLIError.invalidArgument("--zlib-backend must be zlib-ng or system")
+                }
+                zlibConfiguration.backend = backend
+            case "--zlib-level":
+                index += 1
+                guard index < arguments.count else {
+                    throw CLIError.invalidArgument("--zlib-level requires auto or 0...9")
+                }
+                if arguments[index] == "auto" {
+                    zlibConfiguration.level = nil
+                } else if let level = Int32(arguments[index]), (0...9).contains(level) {
+                    zlibConfiguration.level = level
+                } else {
+                    throw CLIError.invalidArgument("--zlib-level requires auto or 0...9")
+                }
             case "--display":
                 index += 1
                 guard index < arguments.count else {
@@ -335,7 +354,8 @@ enum CLI {
             adaptiveFrameRate: adaptiveFrameRate,
             fileTransfer: fileTransfer,
             cursorMode: cursorMode,
-            allowEncryption: allowEncryption
+            allowEncryption: allowEncryption,
+            zlibConfiguration: zlibConfiguration
         )
         return ParsedRun(
             config: config,
@@ -367,6 +387,7 @@ enum CLI {
                           [--fps auto|1...120] [--scale 1.0] [--encoding auto|zrle|zlib|raw]
                           [--display all|number] [--verbose] [--clipboard-sync] [--file-transfer] [--no-adaptive]
                           [--cursor auto|embedded] [--no-encryption]
+                          [--zlib-backend zlib-ng|system] [--zlib-level auto|0...9]
       mac-vnc-server --service-restart
       mac-vnc-server permissions
       mac-vnc-server diagnose
@@ -378,6 +399,8 @@ enum CLI {
     Without --display, port 5900 serves all displays and 5901, 5902, ... serve each display.
     Use --display all to keep only the single combined-display server, or --display 1 for one display.
     Use --verbose to enable periodic framebuffer update logs.
+    Zlib encoding defaults to zlib-ng with adaptive levels 2/3; system uses levels 1/3.
+    Use --zlib-level 0...9 to fix the Zlib level (0 sends stored blocks); auto allows adaptation.
     Cursor defaults to client rendering when available; --cursor embedded includes it in captured frames.
     Use --no-encryption to require plaintext session traffic; password authentication is retained.
     With --file-transfer, --no-encryption enables experimental plaintext operation on a plain VNC URL.
@@ -429,7 +452,8 @@ private extension ServerConfig {
             adaptiveFrameRate: adaptiveFrameRate,
             fileTransfer: fileTransfer,
             cursorMode: cursorMode,
-            allowEncryption: allowEncryption
+            allowEncryption: allowEncryption,
+            zlibConfiguration: zlibConfiguration
         )
     }
 
@@ -449,7 +473,8 @@ private extension ServerConfig {
             adaptiveFrameRate: adaptiveFrameRate,
             fileTransfer: fileTransfer,
             cursorMode: cursorMode,
-            allowEncryption: allowEncryption
+            allowEncryption: allowEncryption,
+            zlibConfiguration: zlibConfiguration
         )
     }
 }

@@ -1,0 +1,8 @@
+library,pass,workload,config,rectangles,n,median_ms,p95_ms,cpu_median_ms,mean_bytes
+system,1,document,level1,26,24,12.6115,14.4666,12.4164,193165
+ng,1,document,level2,26,24,3.7915,4.1740,3.7699,178618
+system,2,document,level1,26,24,12.1377,12.8476,12.1221,193165
+ng,2,document,level2,26,24,3.6810,4.2862,3.6807,178618
+system,3,document,level1,26,24,12.5426,16.0330,12.5011,193165
+ng,3,document,level2,26,24,3.7163,4.9241,3.7133,178618
+ng,1,noise,level2,1,8,114.7688,121.2337,114.1433,6608714
