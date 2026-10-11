@@ -172,6 +172,12 @@ open 'vnc://127.0.0.1:5900'
 
 Authenticate with the password supplied through `VNC_PASSWORD`.
 
+The advertised desktop name is the server's short system hostname (as shown by
+`hostname -s`), for example `oker-vm` from `oker-vm.ip`. The server reads this
+directly without resolving the Bonjour or reverse-DNS name. Screen Sharing uses
+it in its window title; standard VNC viewers receive the same name. Reconnect
+after a hostname change to receive it.
+
 For unattended local testing, fill the native Screen Sharing password dialog with AppleScript:
 
 ```sh

@@ -103,7 +103,7 @@ struct AppleClipboardTests {
         #expect(AppleRFB.supports(message, bitmap: capabilities))
     }
     #expect(!AppleRFB.supports(0x12, bitmap: capabilities)) // no record encryption
-    #expect(String(decoding: name.dropFirst(22), as: UTF8.self) == "mac-vnc-server")
+    #expect(String(decoding: name.dropFirst(22), as: UTF8.self) == (try ClipboardTestPeer.systemShortHostname()))
     try peer.enableAppleClipboard()
     peer.clipboard.copyLocal("Tahoe → Ventura 中文\n🌏")
     #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 2])
@@ -291,7 +291,7 @@ struct AppleClipboardTests {
         let peer = try ClipboardTestPeer()
         defer { peer.finish() }
         let name = try peer.handshake(version: version)
-        #expect(String(decoding: name, as: UTF8.self) == "mac-vnc-server")
+        #expect(String(decoding: name, as: UTF8.self) == (try ClipboardTestPeer.systemShortHostname()))
         peer.clipboard.copyLocal("classic text")
         #expect(try peer.read(4) == [3, 0, 0, 0])
         let count = try peer.number()
@@ -430,6 +430,23 @@ private struct ClipboardTestInput: InputController {
 }
 
 final class ClipboardTestPeer: @unchecked Sendable {
+    static func systemShortHostname() throws -> String {
+        // Use an independent source: ProcessInfo.hostName can return a different
+        // Bonjour name, which previously let the wrong ServerInit title pass.
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/hostname")
+        process.arguments = ["-s"]
+        process.standardOutput = output
+        try process.run()
+        let bytes = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        let hostname = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .newlines)
+        #expect(!hostname.isEmpty)
+        return hostname
+    }
+
     let clipboard = ClipboardTestBridge()
     let socket: ClientSocket
     let password: String?

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct ServerConfig {
@@ -825,14 +826,25 @@ final class RFBClientSession: @unchecked Sendable {
         }
     }
 
+    private func desktopHostname() -> String {
+        // Foundation's ProcessInfo.hostName may resolve to the Bonjour name.
+        // Read the kernel hostname instead, matching `hostname -s` without DNS.
+        var buffer = [CChar](repeating: 0, count: Int(MAXHOSTNAMELEN) + 1)
+        guard gethostname(&buffer, buffer.count) == 0 else { return "localhost" }
+        let hostname = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return hostname.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.flatMap { $0.isEmpty ? nil : String($0) } ?? "localhost"
+    }
+
     private func sendServerInit(framebuffer: Framebuffer) throws {
         var bytes: [UInt8] = []
         bytes += UInt16(framebuffer.width).beBytes
         bytes += UInt16(framebuffer.height).beBytes
         bytes += PixelFormat.serverDefault.bytes
+        let hostname = desktopHostname()
         let name = usesAppleExtensions
-            ? AppleRFB.desktopName("mac-vnc-server", fileTransfer: fileTransferEnabled, allowEncryptedInput: allowEncryption)
-            : Array("mac-vnc-server".utf8)
+            ? AppleRFB.desktopName(hostname, fileTransfer: fileTransferEnabled, allowEncryptedInput: allowEncryption)
+            : Array(hostname.utf8)
         bytes += UInt32(name.count).beBytes
         bytes += Array(name)
         try socket.writeAll(bytes)

@@ -824,7 +824,7 @@ struct MultiClientTests {
         defer { server.finish() }
         let peer = try server.connect()
         defer { peer.finish() }
-        #expect(try peer.handshake(version: AppleRFB.version) == AppleRFB.desktopName("mac-vnc-server"))
+        #expect(try peer.handshake(version: AppleRFB.version) == AppleRFB.desktopName(ClipboardTestPeer.systemShortHostname()))
         var viewer = [UInt8](repeating: 0, count: 66)
         viewer[0] = 0x21; viewer[3] = 62; viewer[5] = 1
         viewer[36] = 0x08 // MiscStatus
