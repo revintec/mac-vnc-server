@@ -10,7 +10,7 @@ final class TransferStore: @unchecked Sendable {
         var maximumBytes: Int64 = 10 * 1_024 * 1_024 * 1_024
         var minimumFreeBytes: Int64 = 1_024 * 1_024 * 1_024
     }
-    enum State: String, Codable, Sendable { case waiting, receiving, complete, failed }
+    enum State: String, Codable, Sendable { case waiting, receiving, complete, partial, failed, moved }
     struct Item: Codable, Sendable, Identifiable {
         var id = UUID()
         var name: String
@@ -20,12 +20,16 @@ final class TransferStore: @unchecked Sendable {
         var relativePath: String?
         var error: String?
         var writerPID: Int32?
+        var finderMoveStarted: Date?
+        var isMoving: Bool { finderMoveStarted != nil && error == nil }
     }
     struct Batch: Codable, Sendable, Identifiable {
         var id = UUID()
         var created = Date()
         var updated = Date()
         var retained = false
+        // Optional for manifests written before panel cancellation kept data.
+        var keepPartialOnFailure: Bool?
         var items: [Item]
         var isActive: Bool { items.contains { $0.state == .waiting || $0.state == .receiving } }
         var isComplete: Bool { items.allSatisfy { $0.state == .complete } }
@@ -74,6 +78,11 @@ final class TransferStore: @unchecked Sendable {
     }
     func directory(_ id: UUID) -> URL { options.root.appendingPathComponent(id.uuidString, isDirectory: true) }
     func destination(_ id: UUID) -> URL { directory(id).appendingPathComponent("files", isDirectory: true) }
+    private func partialDirectory(_ id: UUID) -> URL { directory(id).appendingPathComponent("partial", isDirectory: true) }
+    private func itemURL(_ item: Item, batch: UUID) -> URL? {
+        guard let path = item.relativePath else { return nil }
+        return (item.state == .partial ? partialDirectory(batch) : destination(batch)).appendingPathComponent(path)
+    }
     private func load(_ id: UUID) throws -> Batch {
         let url = directory(id).appendingPathComponent("manifest.json")
         let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
@@ -99,7 +108,13 @@ final class TransferStore: @unchecked Sendable {
                 return try? load(id)
             }
     }
-    func snapshot() throws -> [Batch] { try transaction { try batches().sorted { $0.created > $1.created } } }
+    func snapshot() throws -> [Batch] {
+        try transaction {
+            var result = try batches()
+            for i in result.indices { try reconcileFinderMoves(&result[i]) }
+            return result.sorted { $0.created > $1.created }
+        }
+    }
 
     func begin(names: [String]) throws -> Batch {
         try transaction {
@@ -209,16 +224,41 @@ final class TransferStore: @unchecked Sendable {
         try transaction {
             var batch = try load(receive.batch)
             if let index = batch.items.firstIndex(where: { $0.id == receive.item }) {
-                try? fm.removeItem(at: receive.staging)
+                try failItem(&batch, index: index, staging: receive.staging, reason: reason)
                 batch.items[index].writerPID = nil
-                if batch.items[index].state != .complete {
-                    batch.items[index].state = .failed; batch.items[index].error = reason
-                    batch.items[index].bytes = 0; batch.items[index].storageBytes = 0
-                }
                 try save(batch)
             }
             finishLeaseIfIdle(batch)
         }
+    }
+    /// Persist this before stopping writers, so recovery also honors Cancel.
+    func keepPartialFilesOnCancel(_ id: UUID) throws {
+        try transaction {
+            var batch = try load(id)
+            batch.keepPartialOnFailure = true; batch.retained = true
+            try save(batch)
+        }
+    }
+    private func failItem(_ batch: inout Batch, index: Int, staging: URL, reason: String) throws {
+        guard batch.items[index].state == .receiving || batch.items[index].state == .waiting else { return }
+        if batch.keepPartialOnFailure == true,
+           fm.fileExists(atPath: staging.path),
+           !(try fm.contentsOfDirectory(atPath: staging.path)).isEmpty {
+            try Self.privateDirectory(partialDirectory(batch.id))
+            // Keep the entire native output, including unfinished folder entries.
+            // The .partial container makes incompleteness visible in Finder too.
+            let size = try storedSize(staging)
+            let target = try Self.publish(source: staging, directory: partialDirectory(batch.id), name: batch.items[index].name + ".partial")
+            batch.items[index].state = .partial
+            batch.items[index].relativePath = target.lastPathComponent
+            batch.items[index].storageBytes = max(batch.items[index].storageBytes, size)
+            batch.retained = true
+        } else {
+            try? fm.removeItem(at: staging)
+            batch.items[index].state = .failed
+            batch.items[index].bytes = 0; batch.items[index].storageBytes = 0
+        }
+        batch.items[index].error = reason
     }
     func finishWaiting(_ id: UUID, reason: String) throws {
         try transaction {
@@ -237,13 +277,64 @@ final class TransferStore: @unchecked Sendable {
     }
     func urls(_ id: UUID, allowPartial: Bool = false) throws -> [URL] {
         try transaction {
-            let batch = try load(id)
-            guard batch.isComplete || (allowPartial && !batch.isActive) else { return [] }
+            var batch = try load(id)
+            try reconcileFinderMoves(&batch)
+            guard batch.items.allSatisfy({ $0.state == .complete || $0.state == .moved }) || (allowPartial && !batch.isActive) else { return [] }
             return batch.items.compactMap { item in
-                guard item.state == .complete, let path = item.relativePath else { return nil }
-                return destination(id).appendingPathComponent(path)
+                guard item.state == .complete, !item.isMoving,
+                      let url = itemURL(item, batch: id), fm.fileExists(atPath: url.path) else { return nil }
+                return url
             }
         }
+    }
+    /// Reveal incomplete containers separately; they are never drag/save URLs.
+    func revealURLs(_ id: UUID) throws -> [URL] {
+        try transaction {
+            let batch = try load(id)
+            return batch.items.compactMap { item in
+                guard item.state == .complete || item.state == .partial,
+                      let url = itemURL(item, batch: id), fm.fileExists(atPath: url.path) else { return nil }
+                return url
+            }
+        }
+    }
+    /// Finder owns the filesystem operation. Never delete a source on drag-end:
+    /// its move may still be running, may fail, or may be cancelled in a dialog.
+    func finderMoveAccepted(_ id: UUID, urls: [URL]) throws {
+        try transaction {
+            var batch = try load(id)
+            for i in batch.items.indices where batch.items[i].state == .complete {
+                if let url = itemURL(batch.items[i], batch: id), urls.contains(url) {
+                    batch.items[i].finderMoveStarted = Date()
+                    batch.items[i].error = nil
+                }
+            }
+            try save(batch)
+            try reconcileFinderMoves(&batch)
+        }
+    }
+    private func reconcileFinderMoves(_ batch: inout Batch) throws {
+        var changed = false
+        for i in batch.items.indices {
+            guard let started = batch.items[i].finderMoveStarted,
+                  let url = itemURL(batch.items[i], batch: batch.id) else { continue }
+            var info = stat()
+            if lstat(url.path, &info) != 0 && errno == ENOENT {
+                batch.items[i].state = .moved
+                batch.items[i].relativePath = nil
+                batch.items[i].bytes = 0; batch.items[i].storageBytes = 0
+                batch.items[i].finderMoveStarted = nil
+                batch.items[i].error = nil
+                changed = true
+            } else if Date().timeIntervalSince(started) > 300 && batch.items[i].error == nil {
+                // A Finder collision dialog may have been cancelled. Make the
+                // surviving copy usable again, but still recognize a slow move
+                // that finishes later (for example to another volume).
+                batch.items[i].error = "Finder has not moved this file; the received copy is still here"
+                changed = true
+            }
+        }
+        if changed { try save(batch) }
     }
     func remove(_ id: UUID) throws {
         try transaction {
@@ -266,16 +357,18 @@ final class TransferStore: @unchecked Sendable {
                 return kill(pid, 0) == 0 || errno == EPERM
             }) { continue }
             var changedSize = false
-            for i in batch.items.indices where batch.items[i].state == .complete {
-                guard let path = batch.items[i].relativePath else { continue }
-                let actual = try storedSize(destination(batch.id).appendingPathComponent(path))
+            try reconcileFinderMoves(&batch)
+            for i in batch.items.indices where batch.items[i].state == .complete || batch.items[i].state == .partial {
+                guard let url = itemURL(batch.items[i], batch: batch.id) else { continue }
+                let actual = try storedSize(url)
                 if actual > batch.items[i].storageBytes { batch.items[i].storageBytes = actual; changedSize = true }
             }
             if changedSize { try save(batch) }
             if batch.isActive {
-                for i in batch.items.indices where batch.items[i].state != .complete {
-                    batch.items[i].state = .failed; batch.items[i].bytes = 0; batch.items[i].storageBytes = 0
-                    batch.items[i].error = "Interrupted before completion"
+                for i in batch.items.indices where batch.items[i].state == .waiting || batch.items[i].state == .receiving {
+                    let staging = directory(batch.id).appendingPathComponent(".incoming/\(batch.items[i].id)")
+                    try failItem(&batch, index: i, staging: staging, reason: batch.keepPartialOnFailure == true ? "Cancelled" : "Interrupted before completion")
+                    batch.items[i].writerPID = nil
                 }
                 try save(batch)
             }

@@ -221,7 +221,7 @@ final class MacFileTransfer: @unchecked Sendable {
                     dropDirectories.insert(directory.path)
                     gesture = nextGesture
                 }
-                inbox.register(nextGesture) { [weak self] in self?.cancelStagedBatch(batch.id) }
+                inbox.register(nextGesture) { [weak self] in self?.cancelStagedBatch(batch.id, keepPartialFiles: true) }
                 let path = Array(directory.path.utf8)
                 try send([0x1e, 0, 0, 0] + sessionID.beBytes + UInt32(path.count).beBytes + path)
                 logger.verbose("Apple staged transfer requested before mouse-up: session=\(sessionID) batch=\(batch.id)")
@@ -306,7 +306,14 @@ final class MacFileTransfer: @unchecked Sendable {
         }
     }
 
-    private func cancelStagedBatch(_ id: UUID, reason: String = "Cancelled") {
+    private func cancelStagedBatch(_ id: UUID, reason: String = "Cancelled", keepPartialFiles: Bool = false) {
+        if keepPartialFiles {
+            do { try inbox?.store.keepPartialFilesOnCancel(id) }
+            catch {
+                inbox?.reportError("Could not keep partial files before cancelling: \(error.localizedDescription)")
+                return
+            }
+        }
         let helpers = lock.withLock { () -> [(UInt32, NativeTransferProcess)] in
             var result: [(UInt32, NativeTransferProcess)] = []
             cancelledBatches.insert(id)

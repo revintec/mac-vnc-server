@@ -1,0 +1,71 @@
+{
+  "date": "2026-10-11",
+  "server_os": "26.6.2",
+  "connection_uri": "vnc://127.0.0.1:5906/",
+  "server_options": "--file-transfer --no-encryption --encoding zlib (isolated transfer directory)",
+  "native_framework": "Tahoe ScreenSharing; real Finder and AppKit target",
+  "checks": {
+    "stationary_finder_move": {
+      "item_state": "moved",
+      "staged_source_exists": false,
+      "finder_destination_exists": true,
+      "client_original_exists": true,
+      "batch": "3128DCEF-1242-48A9-B347-98D3D25F5760",
+      "destination_contents": "routed drag fixture\n"
+    },
+    "retarget_finder_to_app": {
+      "item_state": "complete",
+      "staged_source_exists": true,
+      "finder_destination_exists": true,
+      "client_original_exists": true,
+      "batch": "CB9AC356-C564-40BA-AD14-04DEE198F7F7",
+      "staged_contents": "routed drag fixture\n",
+      "destination_contents": "routed drag fixture\n"
+    },
+    "cancel_over_finder": {
+      "item_state": "complete",
+      "staged_source_exists": true,
+      "finder_destination_exists": false,
+      "client_original_exists": true,
+      "batch": "80C3AADB-CEC3-48E0-8544-596EB977BFAF",
+      "staged_contents": "routed drag fixture\n"
+    },
+    "panel_row_to_finder": {
+      "item_state": "moved",
+      "destination_contents": "Row drag disposable fixture\n",
+      "ui_notice": "Moved to Finder \u00b7 No copy kept here \u00b7 Client originals unchanged"
+    },
+    "partial_reveal": {
+      "ui_notice": "Cancelled \u00b7 1 incomplete kept \u00b7 0 complete \u00b7 Reveal in Finder to inspect",
+      "finder_selection": "video.bin.partial",
+      "completed_items_checkbox": false,
+      "fixture": true,
+      "actual_native_writer_coverage": "panelCancelKeepsActualNativeReceiverOutput"
+    }
+  },
+  "suite": {
+    "tests": 193,
+    "passed": true,
+    "command": "swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"
+  },
+  "source_sha256": {
+    "Sources/mac-vnc-server/MacFileTransfer.swift": "0e23beb2a1ba28b8f57f223724ec29aff154c10fa2f745dcff666bb5017ab00e",
+    "Sources/mac-vnc-server/TransferStore.swift": "81dea6dd5f6782cc89eb15f21e01714fc9cdde39a087a224e31be8d62ad9e85d",
+    "Sources/mac-vnc-server/TransferInbox.swift": "202b68fba977ac53768845c59b762d4cde984e48418c67507f6970cfff8dfb10",
+    "Sources/mac-vnc-server/TransferDragSource.swift": "a71013d414e099f119fae274f9240d55c1b4bb308efeb9d48a9384cb92f11b96",
+    "Sources/mac-vnc-server/RFBServer.swift": "1a3cf6a9d2aa1b295ae1cbbd4229ae7de3d27412c2448ada50b7022a3fcc0780",
+    "Tests/mac-vnc-serverTests/TransferStoreTests.swift": "3e4f23b08344a717144cf56ea94678ea4c221789ad88ef773e3e6d06aa50487c",
+    "scripts/probe-staged-drag-release.m": "a4ee90e086356b3482a9ae4ad1f0e038938aab8bab47cb6ab289cd9636f19f40"
+  },
+  "limitations": [
+    "No new cross-machine macOS 13 Screen Sharing 3.0 gesture test",
+    "Finder verification used a same-volume local destination",
+    "Move negotiation uses guarded private macOS drag APIs; unsupported hosts fall back to Copy with a UI notice"
+  ],
+  "release_build": {
+    "configuration": "release",
+    "architecture": "arm64",
+    "passed": true,
+    "binary_sha256": "39247c80e115cfde497922ec57ebc065d5d80b4c5e9b3f200d62c3f6638fc2a6"
+  }
+}

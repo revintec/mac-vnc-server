@@ -8,6 +8,12 @@
 // PROBE_CANCEL=1 changes Release into Cancel: expect target exited, no perform,
 // and server operation=0. This exercises Tahoe's framework; it does not emulate
 // the complete macOS 13 Screen Sharing UI. Use an isolated transfer directory.
+// "Switch target" moves the held gesture between this app and screen point
+// (1200, 300) in Cocoa coordinates. Put a Finder destination there to verify
+// copy -> move -> copy negotiation and that Finder removes only the server copy.
+// "Begin received row" presses the first row in the default-position Received
+// Files panel (1728x1118 desktop), using ordinary remote pointer input. Then
+// Switch target / Release tests its NSTableView drag, without a second OS drag.
 #import <AppKit/AppKit.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
@@ -102,6 +108,8 @@ static void record(NSString *message) { fprintf(stderr,"%.3f %s\n",NSDate.timeIn
 @interface Driver : NSView
 @property BOOL active;
 @property NSPasteboard *board;
+@property BOOL finderTarget;
+@property BOOL rowDrag;
 @end
 @implementation Driver
 - (void)drawRect:(NSRect)r {
@@ -110,12 +118,18 @@ static void record(NSString *message) { fprintf(stderr,"%.3f %s\n",NSDate.timeIn
         withAttributes:@{NSForegroundColorAttributeName:NSColor.labelColor}];
 }
 - (NativePoint)coordinates {
+    if (self.finderTarget) return (NativePoint){1200,300};
     NSPoint p=[self.window convertPointToScreen:NSMakePoint(500,100)];
     return (NativePoint){lround(p.x),lround(p.y)};
 }
+- (void)switchTarget:(id)sender {
+    self.finderTarget=!self.finderTarget;
+    if(self.active) [[nativeView session] sendEvent:[NSClassFromString(@"SSMouseEvent") mouseEventWithCoordinates:[self coordinates] withEvent:nil]];
+    record(self.finderTarget?@"driver target Finder":@"driver target app");
+}
 - (void)begin:(id)sender {
     if (self.active || ![nativeView isControlling]) return;
-    self.active=YES; originalHeld=YES;
+    self.active=YES; self.rowDrag=NO; originalHeld=YES;
     self.board=[NSPasteboard pasteboardWithUniqueName];[self.board writeObjects:@[fixture]];
     id session=[nativeView session];
     // Use the native viewer's sender; input originates only in this UI handler.
@@ -124,10 +138,23 @@ static void record(NSString *message) { fprintf(stderr,"%.3f %s\n",NSDate.timeIn
     [session sendEvent:[NSClassFromString(@"SSMouseButtonEvent") mouseButtonEventWithCoordinates:[self coordinates] withButton:0 withState:0 withClickCount:1 withEvent:nil]];
     record(@"driver enter");
 }
+- (void)beginRow:(id)sender {
+    if(self.active || ![nativeView isControlling]) return;
+    self.active=YES; self.rowDrag=YES; self.finderTarget=NO; originalHeld=YES;
+    id session=[nativeView session];
+    [session sendEvent:[NSClassFromString(@"SSMouseButtonEvent") mouseButtonEventWithCoordinates:(NativePoint){250,344} withButton:0 withState:0 withClickCount:1 withEvent:nil]];
+    [session sendEvent:[NSClassFromString(@"SSMouseEvent") mouseEventWithCoordinates:(NativePoint){270,344} withEvent:nil]];
+    record(@"driver panel row down");
+}
 - (void)drop:(id)sender {
     if (!self.active) return;
     self.active=NO; originalHeld=NO; record(@"driver mouse released");
     [[nativeView session] sendEvent:[NSClassFromString(@"SSMouseEvent") mouseEventWithCoordinates:[self coordinates] withEvent:nil]];
+    if(self.rowDrag) {
+        [[nativeView session] sendEvent:[NSClassFromString(@"SSMouseButtonEvent") mouseButtonEventWithCoordinates:[self coordinates] withButton:0 withState:1 withClickCount:1 withEvent:nil]];
+        record(@"driver panel row up");
+        return;
+    }
     [[nativeView session] sendEvent:[NSClassFromString(@"SSDragEvent") dragEventWithDragType:getenv("PROBE_CANCEL")?2:1 dragPasteboardName:self.board.name draggingFilePromisesFromServer:NO withEvent:nil]];
     record(getenv("PROBE_CANCEL")?@"driver cancel":@"driver conclude");
 }
@@ -168,10 +195,14 @@ int main(int argc,char **argv) { @autoreleasepool {
     NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:5];while(deadline.timeIntervalSinceNow>0 && !startup.finished)[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
     record([NSString stringWithFormat:@"connected=%d control=%d files=%d",[nativeView isConnected],[nativeView isControlling],[nativeView supportsFileTransfer]]);
     NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(350,650,700,250) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];window.releasedWhenClosed=NO;window.title=@"Routed VNC Drag Test";
+    // Keep the known app target visible when Finder is expanded behind it.
+    window.level=NSFloatingWindowLevel;
     Driver *driver=[[Driver alloc] initWithFrame:NSMakeRect(0,0,700,250)];window.contentView=driver;
     Target *target=[[Target alloc] initWithFrame:NSMakeRect(360,20,300,200)];[target registerForDraggedTypes:@[NSPasteboardTypeFileURL]];[driver addSubview:target];
     NSButton *begin=[NSButton buttonWithTitle:@"Begin held drag" target:driver action:@selector(begin:)];begin.frame=NSMakeRect(20,170,220,35);[driver addSubview:begin];
     NSButton *drop=[NSButton buttonWithTitle:getenv("PROBE_CANCEL")?@"Cancel drag":@"Release to drop" target:driver action:@selector(drop:)];drop.frame=NSMakeRect(20,120,220,35);[driver addSubview:drop];
+    NSButton *switchTarget=[NSButton buttonWithTitle:@"Switch target" target:driver action:@selector(switchTarget:)];switchTarget.frame=NSMakeRect(20,80,220,35);[driver addSubview:switchTarget];
+    NSButton *row=[NSButton buttonWithTitle:@"Begin received row" target:driver action:@selector(beginRow:)];row.frame=NSMakeRect(20,25,220,35);[driver addSubview:row];
     [window makeKeyAndOrderFront:nil];
     [NSApp run];
     [NSFileManager.defaultManager removeItemAtURL:fixture error:nil];

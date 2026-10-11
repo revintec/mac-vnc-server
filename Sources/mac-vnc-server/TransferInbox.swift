@@ -7,6 +7,7 @@ final class TransferGesture: @unchecked Sendable {
     let batch: UUID
     private let lock = NSLock()
     private var held = true
+    private var cancelling = false
     private var sendDragEvent: (@Sendable (TransferDragEvent) -> Void)?
     private let input: InputController
     private var point: CGPoint
@@ -17,6 +18,7 @@ final class TransferGesture: @unchecked Sendable {
     }
     func pointer(mask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) -> Bool {
         let released = lock.withLock { () -> Bool? in
+            if cancelling { return false }
             guard held else { return nil }
             point = layout.globalPoint(framebufferX: Int(x), framebufferY: Int(y))
             // CoreDrag also observes WindowServer's held-button state. Keep it
@@ -42,18 +44,22 @@ final class TransferGesture: @unchecked Sendable {
         }
     }
     func cancel() {
-        let notify = lock.withLock { () -> Bool in
-            guard held else { return false }
+        let cancellation = lock.withLock { () -> ((@Sendable (TransferDragEvent) -> Void)?, VirtualDisplayLayout)? in
+            guard held else { return nil }
             held = false
-            sendDragEvent?(.cancel)
-            if sendDragEvent != nil {
-                let layout = VirtualDisplayLayout(displays: [], origin: point, scale: 1, width: 1, height: 1)
-                input.pointer(buttonMask: 0, x: 0, y: 0, layout: layout)
-            }
+            cancelling = true
+            let sender = sendDragEvent
             sendDragEvent = nil
-            return true
+            return (sender, VirtualDisplayLayout(displays: [], origin: point, scale: 1, width: 1, height: 1))
         }
-        if notify { ended() }
+        guard let (sender, layout) = cancellation else { return }
+        // The source must mark CoreDrag cancelled before WindowServer sees up;
+        // otherwise Finder can finish a move while Escape is still queued.
+        // Never wait for the main-thread source while holding the gesture lock.
+        sender?(.cancel)
+        if sender != nil { input.pointer(buttonMask: 0, x: 0, y: 0, layout: layout) }
+        lock.withLock { cancelling = false }
+        ended()
     }
 }
 
@@ -87,19 +93,21 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
     private var gestures: [UUID: TransferGesture] = [:]
     private var dragWindows: [UUID: NSWindow] = [:]
     private let window: NSPanel
-    private let table = NSTableView()
+    private let table = TransferTableView()
     private let status = NSTextField(wrappingLabelWithString: "Drag files into Screen Sharing. Keep holding to continue when ready, or drag completed files from this list.")
     private lazy var cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelSelected))
     private let partial = NSButton(checkboxWithTitle: "Use completed items from a failed transfer", target: nil, action: nil)
     private var timer: Timer?
     private var statusItem: NSStatusItem?
     private var tableDragging = false
+    private var tableDragFiles: [UUID: [URL]] = [:]
     private var nextCleanup = Date().addingTimeInterval(60)
     init(store: TransferStore, logger: ServerLogger = ServerLogger(verbose: false)) {
         self.store = store; self.logger = logger
         window = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 600, height: 340),
                          styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
         super.init()
+        table.dragPolicy.logger = logger
         window.title = "Received Files — mac-vnc-server"
         window.isReleasedWhenClosed = false; window.hidesOnDeactivate = false; window.delegate = self
         let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 12; stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
@@ -110,8 +118,6 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         table.addTableColumn(NSTableColumn(identifier: .init("transfers")))
         table.headerView = nil; table.rowHeight = 52; table.dataSource = self; table.delegate = self
         table.allowsMultipleSelection = true
-        table.setDraggingSourceOperationMask(.copy, forLocal: false)
-        table.setDraggingSourceOperationMask(.copy, forLocal: true)
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true
         stack.addArrangedSubview(scroll)
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
@@ -122,7 +128,7 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
             buttons.addArrangedSubview(title == "Cancel" ? cancelButton : NSButton(title: title, target: self, action: action))
         }
         stack.addArrangedSubview(buttons)
-        let note = NSTextField(wrappingLabelWithString: "Files used in a drag or opened are kept until you remove them. Changes here do not sync back to the client.")
+        let note = NSTextField(wrappingLabelWithString: "Finder drops move received files out of this panel; other apps receive copies. Cancel keeps incomplete data. Client originals are unchanged.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
         note.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -178,24 +184,29 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         let screenHeight = NSScreen.screens.first?.frame.height ?? 0
         let location = NSPoint(x: point.x, y: screenHeight - point.y)
         let source = TransferDragSource(frame: NSRect(x: 0, y: 0, width: 40, height: 40))
+        source.policy.logger = logger
         let surface = NSWindow(contentRect: NSRect(x: location.x - 20, y: location.y - 20, width: 40, height: 40),
                                styleMask: .borderless, backing: .buffered, defer: false)
         surface.isReleasedWhenClosed = false; surface.isOpaque = false; surface.backgroundColor = .clear
         surface.level = .popUpMenu; surface.contentView = source; surface.orderFrontRegardless()
         dragWindows[gesture.batch] = surface
-        source.finished = { [weak self, logger] operation in
+        source.finished = { [weak self, logger] operation, moveUnavailable in
             logger.verbose("Apple staged drag ended: batch=\(gesture.batch) operation=\(operation.rawValue)")
             DispatchQueue.main.async { [weak self] in
                 gesture.cancel()
                 self?.dragWindows.removeValue(forKey: gesture.batch)?.close()
+                self?.dragFinished(files: [gesture.batch: urls], operation: operation, moveUnavailable: moveUnavailable)
             }
         }
         press()
         source.start(urls: urls)
         logger.verbose("Apple staged drag tracking: batch=\(gesture.batch) input=appkit")
-        status.stringValue = "Files ready. Continue moving to the target, then release to drop."
+        status.stringValue = "Files ready. Release over Finder to move them, or over another app to copy them."
         return { [weak source] event in
-            DispatchQueue.main.async { source?.receive(event) }
+            if case .cancel = event {
+                if Thread.isMainThread { MainActor.assumeIsolated { source?.receive(event) } }
+                else { DispatchQueue.main.sync { source?.receive(event) } }
+            } else { DispatchQueue.main.async { source?.receive(event) } }
         }
     }
     func numberOfRows(in tableView: NSTableView) -> Int { batches.count }
@@ -203,14 +214,20 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         let batch = batches[row]
         let names = batch.items.map(\.name).joined(separator: ", ")
         let complete = batch.items.filter { $0.state == .complete }.count
+        let incomplete = batch.items.filter { $0.state == .partial }.count
+        let moved = batch.items.filter { $0.state == .moved }.count
+        let moving = batch.items.contains(where: \.isMoving)
         let bytes = ByteCountFormatter.string(fromByteCount: batch.items.reduce(0) { $0 + $1.bytes }, countStyle: .file)
-        let detail = batch.isComplete ? "Ready to drag · \(bytes)\(batch.retained ? " · Kept" : "")"
+        let detail = moving ? "Moving to Finder… · Client originals unchanged"
+            : moved == batch.items.count ? "Moved to Finder · No copy kept here · Client originals unchanged"
+            : incomplete > 0 ? "Cancelled · \(incomplete) incomplete kept · \(complete) complete · Reveal in Finder to inspect"
+            : batch.isComplete ? "Ready to drag · \(bytes)\(batch.retained ? " · Kept" : "")\(batch.items.compactMap(\.error).first.map { " · " + $0 } ?? "")"
             : batch.isActive ? "Receiving · \(complete)/\(batch.items.count) complete · \(bytes)"
-            : "\(complete)/\(batch.items.count) complete · \(batch.items.compactMap(\.error).first ?? "Transfer ended")"
+            : "\(complete) complete · \(moved) moved · \(batch.items.compactMap(\.error).first ?? "Transfer ended")"
         let label = NSTextField(wrappingLabelWithString: names + "\n" + detail)
         label.font = .systemFont(ofSize: 12); label.maximumNumberOfLines = 2
         let icon = NSImageView()
-        if let path = batch.items.first?.relativePath {
+        if let first = batch.items.first, first.state == .complete, let path = first.relativePath {
             icon.image = NSWorkspace.shared.icon(forFile: store.destination(batch.id).appendingPathComponent(path).path)
         } else { icon.image = NSImage(systemSymbolName: "arrow.down.doc", accessibilityDescription: "Receiving") }
         icon.widthAnchor.constraint(equalToConstant: 32).isActive = true
@@ -233,14 +250,46 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
             guard groups.allSatisfy({ !$0.isEmpty }) else { return false }
             for row in rows { try store.retain(row.id) }
             pasteboard.clearContents()
-            return pasteboard.writeObjects(groups.flatMap { $0 }.map { $0 as NSURL })
+            guard pasteboard.writeObjects(groups.flatMap { $0 }.map { $0 as NSURL }) else { return false }
+            tableDragFiles = Dictionary(uniqueKeysWithValues: zip(rows.map(\.id), groups))
+            return true
         } catch { status.stringValue = error.localizedDescription; return false }
     }
-    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) { tableDragging = true }
-    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { tableDragging = false; refresh() }
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
+        tableDragging = true
+        // NSTableView's legacy pasteboard-writing path can use an internal
+        // source object. Its data-source callback always supplies the real drag.
+        table.dragPolicy.begin(session, at: screenPoint)
+        logger.verbose("Received Files row drag started: batches=\(tableDragFiles.count)")
+    }
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        tableDragging = false
+        table.dragPolicy.end()
+        logger.verbose("Received Files row drag ended: operation=\(operation.rawValue) move_unavailable=\(table.dragPolicy.moveUnavailable)")
+        dragFinished(files: tableDragFiles, operation: operation, moveUnavailable: table.dragPolicy.moveUnavailable)
+        tableDragFiles.removeAll()
+    }
+    private func dragFinished(files: [UUID: [URL]], operation: NSDragOperation, moveUnavailable: Bool) {
+        do {
+            if operation == .move {
+                for (id, urls) in files { try store.finderMoveAccepted(id, urls: urls) }
+                status.stringValue = "Finder accepted the move. The list updates as files leave Received Files. Client originals are unchanged."
+            } else if operation.isEmpty {
+                status.stringValue = "Drop cancelled or not accepted. Received files are still available here."
+            } else {
+                status.stringValue = moveUnavailable
+                    ? "Finder copied the files. Move negotiation is unavailable on this macOS version; received copies are still here."
+                    : "Files delivered to the app. Received copies are kept here until you remove them."
+            }
+            refresh()
+        } catch { status.stringValue = error.localizedDescription }
+    }
     func tableViewSelectionDidChange(_ notification: Notification) { updateCancelButton() }
     private func updateCancelButton() { cancelButton.isEnabled = selected.contains { $0.isActive && inbox?.canCancel($0.id) == true } }
-    @objc private func cancelSelected() { for batch in selected where batch.isActive { inbox.cancel(batch.id) } }
+    @objc private func cancelSelected() {
+        for batch in selected where batch.isActive { inbox.cancel(batch.id) }
+        status.stringValue = "Cancelling… Data already written will be kept as incomplete files. Use Reveal in Finder to inspect it."
+    }
     @objc private func reveal() {
         guard !selected.isEmpty else {
             if !NSWorkspace.shared.open(store.options.root) {
@@ -248,7 +297,14 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
             }
             return
         }
-        do { NSWorkspace.shared.activateFileViewerSelecting(try selectedURLs()) }
+        do {
+            let urls = try selected.flatMap { batch in
+                try store.retain(batch.id)
+                let urls = try store.revealURLs(batch.id)
+                return urls.isEmpty ? [store.directory(batch.id)] : urls
+            }
+            NSWorkspace.shared.activateFileViewerSelecting(urls)
+        }
         catch { status.stringValue = error.localizedDescription }
     }
     @objc private func saveCopy() {

@@ -1790,8 +1790,9 @@ final class RFBClientSession: @unchecked Sendable {
         }
         state.unlock()
         if changed && !controlling {
-            input.releaseKeys()
+            // Cancel an AppKit move before releasing its synthetic button.
             fileTransfer?.cancelAll()
+            input.releaseKeys()
             try enqueueWriterCommand(.clipboardReset)
         }
         // Like the native server, accept the selected mode without replying.

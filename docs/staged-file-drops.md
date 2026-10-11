@@ -44,6 +44,7 @@ Default location, under the **server user's** home directory:
     .owner
     .incoming/<item-UUID>/<original-name>
     files/<completed-name>
+    partial/<original-name>.partial/<native-receiver-output>
 ```
 
 The root and containing directories are mode `0700`. The manifest records item
@@ -60,7 +61,18 @@ Client originals remain untouched. Edits to staged files do **not** sync back.
 
 Cancelling in the panel or dragging back out of the remote view stops reception.
 Releasing over the remote view allows reception to finish for a second drag.
-Cancel/failure removes partial data only after the native writer exits.
+**Cancel in Received Files keeps data already written.** The server first records
+that choice, stops the native receiver, waits for it to exit, then moves its
+unfinished output into a clearly named `.partial` container. The row shows
+“Incomplete kept”; **Reveal in Finder** exposes that container without needing
+the completed-items checkbox. Incomplete files can be truncated, sparse, or
+missing folder entries. They are not offered for dragging or Save a Copy, and
+there is no resume support. They remain until explicitly removed and continue
+to count toward the storage limit, including after restart.
+
+Leaving the remote view, connection failures, and other receive failures still
+remove unfinished data after the writer exits unless panel cancellation already
+requested retention. Completed files are retained as before.
 Per-batch process leases prevent another server or panel process from recovering
 an active batch. Recovery also waits for recorded native writer processes to
 exit if the owning server crashed. Unrecognized/corrupt manifests are left
@@ -69,7 +81,21 @@ alone rather than used as authority to delete paths.
 Unused completed copies become eligible for cleanup after 24 hours. Cleanup
 runs on startup, on new batches, and periodically while the panel is running.
 A batch used in a drag, revealed, or saved is retained until explicitly removed.
-Neither drag-end, disconnect, nor restart deletes delivered files. Remove warns
+Finder drops **move the server's staged files** into the chosen Finder location,
+including when dragging a completed row from this panel. Other apps are offered
+Copy, and their received sources remain available here. The footer explains the
+difference before a drop; row/status notices report an accepted move and then
+“Moved to Finder”. Client originals are never removed.
+
+Finder performs the move. The server never deletes source files merely because
+a drag finished: it waits until Finder has actually removed each source before
+marking it moved and releasing its storage reservation. If Finder leaves a
+source in place (for example after cancelling a collision dialog), the panel
+makes that copy available again after five minutes and reports that it is still
+here. It continues watching for a slower move to finish. Removing the transfer
+record afterwards does not remove the file at its Finder destination.
+
+Disconnect and restart do not delete retained files. Remove warns
 that apps may still refer to their paths.
 
 Limits are shared across processes using the same root:
@@ -218,3 +244,41 @@ server now bounds these operations and stops capture on SIGINT/SIGTERM. The
 updated suite passes 185 tests. See the [capture startup follow-up](measurements/capture-startup-2026-10-11.json)
 for real-frame results, fault injection, and the remaining limitation when
 comparison servers share one executable path.
+
+### Cancel retention and Finder moves (2026-10-11)
+
+Finder detection uses the window under the drag point, including inactive
+Finder windows and the desktop, rather than the frontmost app. AppKit snapshots
+the source operation masks at drag creation, before a valid location is set.
+The source therefore updates the native drag's allowed actions before movement
+and mouse-up, using `CoreDragSetAllowableActions` and the session's `dragRef`.
+For handoff starting directly over Finder, it also supplies Move in AppKit's
+initial operation snapshot, so releasing without moving still moves the files.
+This is a private macOS bridge; the symbol, selector, argument count, and return
+encoding are checked before use. Cancellation uses `CoreDragCancelDrag` on the
+main thread **before** releasing the shared input button, so an accepting
+Finder target cannot complete a move while Escape is queued. The gesture lock
+is released before waiting for that main-thread cancellation; incoming pointer
+packets are consumed until cancellation finishes. Both native symbols must be
+available to enable Move. If unavailable, the source keeps Copy and the
+panel explicitly reports that Finder copied the files. No Finder automation
+permission, client setting, or URL option is needed.
+
+The regression probe's **Switch target** control moves a held drag between its
+app receiver and a Finder location, and **Begin received row** exercises a panel
+row through ordinary remote pointer input. A real native receiver test cancels
+after the first file-data chunk and verifies preserved contents, writer exit,
+and unchanged client bytes. Storage tests cover empty cancellations, completed
+items racing Cancel, recovery, quota, delayed Finder completion, and destination
+survival when an inbox record is removed.
+
+Local verification passed for a stationary handoff into Finder, retargeting a
+held drag from Finder to an AppKit receiver (copy with matching bytes), and a
+completed-row drag into Finder. Finder destinations contained the expected
+bytes and moved sources disappeared from staging; the panel displayed “Moved
+to Finder”. A cancelled Finder drag produced operation `0`, retained its
+staged source, and created no destination. The partial-data fixture's Reveal in
+Finder selected its `.partial` container with the completed-items checkbox off.
+These are Tahoe loopback/server-side checks using plain VNC URLs, not a claim
+of a new cross-machine test with Screen Sharing 3.0 on macOS 13. See the
+[verification record](measurements/cancel-retention-finder-moves-2026-10-11.json).
