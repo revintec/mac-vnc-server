@@ -5,12 +5,12 @@ import Testing
 
 @Suite(.serialized)
 struct FileTransferTests {
-    @Test func fileTransferIsOptIn() throws {
-        guard case .run(let config) = try CLI.parse(arguments: ["run", "--file-transfer"]) else {
+    @Test func fileTransferIsEnabledByDefault() throws {
+        guard case .run(let config) = try CLI.parse(arguments: ["run"]) else {
             Issue.record("expected run configuration"); return
         }
         #expect(config.fileTransfer)
-        #expect(!config.clipboardSync)
+        #expect(config.clipboardSync && !config.allowEncryption)
         let enabled = Array(AppleRFB.desktopName("test", fileTransfer: true)[6..<22])
         let disabled = Array(AppleRFB.desktopName("test")[6..<22])
         for message in [14, 16, 18, 32, 34] {

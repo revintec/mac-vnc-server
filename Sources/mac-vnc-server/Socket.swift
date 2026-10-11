@@ -404,8 +404,10 @@ final class ClientSocket {
 
 final class ListeningSocket {
     let fd: Int32
+    let bindAddress: String
 
     init(bindAddress: String, port: UInt16) throws {
+        self.bindAddress = try BindAddress.resolve(bindAddress)
         fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw RFBError.socketError(String(cString: strerror(errno)))
@@ -418,7 +420,7 @@ final class ListeningSocket {
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, bindAddress, &address.sin_addr) == 1 else {
+        guard inet_pton(AF_INET, self.bindAddress, &address.sin_addr) == 1 else {
             close(fd)
             throw RFBError.socketError("invalid IPv4 bind address: \(bindAddress)")
         }

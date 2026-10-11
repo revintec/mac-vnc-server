@@ -1,0 +1,4556 @@
+{
+  "date": "2026-10-11",
+  "host": {
+    "macOS": "26.6.2",
+    "build": "25G83",
+    "machine": "VirtualMac2,1",
+    "logical_cpus": 8,
+    "memory_GiB": 24
+  },
+  "git_base": "9fbeb86e2ac5a756aed39a7aa017c8e4c4bef7d7",
+  "source_sha256": {
+    "Sources/CVNCZlib/CVNCZlibConfig.h": "e75f02ddb083d8701271e49d7115cd5458440623c842eaccd42bb4fbc310cd33",
+    "Sources/CVNCZlib/backend.h": "3706db7d7b80ca69ab29a972ad50127559e4caf2344b675c10d0658a1bde2347",
+    "Sources/CVNCZlib/backend.inc": "a5210e39bfd70fd1856f5571bd48b89fd0218aff40c99f6686ee84ddcada6ca7",
+    "Sources/CVNCZlib/include/CVNCZlib.h": "aa373d295e33c830f37afba584ae33d8127b31fc38fe404e3a36e49e1b5fbc3b",
+    "Sources/CVNCZlib/ng.c": "b6cc0e9d6ebfe3c1b34aec02280a19eeff33f874184cc86eb66167c237e76bc9",
+    "Sources/CVNCZlib/stream.c": "f31d60796433be9bf07061a9de87020e8aed48f8d7185ccabd68bfeb4805050e",
+    "Sources/CVNCZlib/system.c": "75f79a01aeca174de7bb4ef7e7f6c9a2db84728487cdc8eb08636f12c0fe21f5",
+    "Sources/CVNCZlib/vendor/adler32.c": "bc5308ff3ea584bf13b626e39ad261abbaf7f87e6eb92a9195c8cef70bc0bf9d",
+    "Sources/CVNCZlib/vendor/adler32_p.h": "514cb0157c2e0f15c19c90c3408ea8af1c643cb73991e27073c7aca3659e7dc7",
+    "Sources/CVNCZlib/vendor/arch/arm/acle_intrins.h": "99b91d4073685335fbe95a003777c201329b59ba6ab34a2fa580148bbbda8405",
+    "Sources/CVNCZlib/vendor/arch/arm/adler32_neon.c": "123a8fbc99869379e30be543cbaba3f64300e55d8128ea4b3c5124dfb36e6904",
+    "Sources/CVNCZlib/vendor/arch/arm/arm_features.c": "59490d6c838f6a14f3fc7a5cfce57f854056e6a10ec134b0c62897ec66af674c",
+    "Sources/CVNCZlib/vendor/arch/arm/arm_features.h": "9895f303d1b23652cd3a0d08491be3ca832b9a19e874e710bd6818827424efb7",
+    "Sources/CVNCZlib/vendor/arch/arm/arm_functions.h": "d027f022abb73333cca5ad4ee72d8492ef92ddd0050b09eb85a6283e4b715769",
+    "Sources/CVNCZlib/vendor/arch/arm/chunkset_neon.c": "c8e128f1201ae3c7db841eb129cfbff22768ab75c95819a636464a19e017e74a",
+    "Sources/CVNCZlib/vendor/arch/arm/compare256_neon.c": "233a8cb35b3f9e268e05537e461f296cf36703a18513eacd97d7c2f58588ab43",
+    "Sources/CVNCZlib/vendor/arch/arm/crc32_armv8.c": "393ba21153eb3b86bb6b7262fd4b4ae5bf43cb258edcc3042422328145b16c87",
+    "Sources/CVNCZlib/vendor/arch/arm/neon_intrins.h": "826f4ff8a87b4e5462ad2c495450aaddcc27451e64263aaf8684daad59b85bb3",
+    "Sources/CVNCZlib/vendor/arch/arm/slide_hash_neon.c": "3de55f47a361f2fa80ec2ddfff27b2112ceadcf6d146fad041be5a99c5e52e39",
+    "Sources/CVNCZlib/vendor/arch/generic/adler32_c.c": "274b9bacf8fa2a1ead2b202b8c9b878b68b100d2df51dee1790b27e47d3bf1de",
+    "Sources/CVNCZlib/vendor/arch/generic/adler32_fold_c.c": "49795041bcf43d71eda2c0a025bd61206ae293aeecee5f26a746a2e570b3a9e9",
+    "Sources/CVNCZlib/vendor/arch/generic/chunk_128bit_perm_idx_lut.h": "b5bc9c382d3f10c09af80934336ad66311a0dd5e3973f95e891ae90923feab27",
+    "Sources/CVNCZlib/vendor/arch/generic/chunk_256bit_perm_idx_lut.h": "182d272c883f4aa0c29e51b36d0ab46e31bc3d1ac44313e907a9295a66702aae",
+    "Sources/CVNCZlib/vendor/arch/generic/chunk_permute_table.h": "3f1e09e697a9b2dff4395aca356e61765c44511a9dc653abb6998671afd20ae6",
+    "Sources/CVNCZlib/vendor/arch/generic/chunkset_c.c": "b04b8a75613884f7cf7277865c642eadbff496683b5d6a20fb55255264cf13f8",
+    "Sources/CVNCZlib/vendor/arch/generic/compare256_c.c": "0ddb8cf1ddc7ea54a6082c1ddd19f338537ccb26cf9c4c45536c5e24526034c1",
+    "Sources/CVNCZlib/vendor/arch/generic/compare256_p.h": "42b893a97505f69880b90905eb187510dd5dd42323f8f360e6ff5620c107fac9",
+    "Sources/CVNCZlib/vendor/arch/generic/crc32_braid_c.c": "59c4415071cbfb9018f9790405266bbbd17c86f0ffac418971dfb7a5c91153c4",
+    "Sources/CVNCZlib/vendor/arch/generic/crc32_chorba_c.c": "3d6bfd9f8187f2d79acc812a4d0156a30655c09a8ae54cb0bb1f0273c8020ede",
+    "Sources/CVNCZlib/vendor/arch/generic/crc32_fold_c.c": "fd551264bb8b71b611af698c28b3fd7dc49c2a19280e52332e5e2ab78ed886c9",
+    "Sources/CVNCZlib/vendor/arch/generic/generic_functions.h": "830438c4639786ef8372343b78f7096570e6e7039af69d6b92038614accffc93",
+    "Sources/CVNCZlib/vendor/arch/generic/slide_hash_c.c": "016e4b5a12a174f8f01619f778107ada5fe6c88cd836117954e4a16e9b14a3db",
+    "Sources/CVNCZlib/vendor/arch_functions.h": "faf484c80e4dcc9c3de474586e2cf43a1bae860e430f88fc0c432f9deb717eb7",
+    "Sources/CVNCZlib/vendor/chunkset_tpl.h": "7e3032e6772d8a5dd276505cf569ba4cc98de17ab911593cdec4d6d5528a4cb8",
+    "Sources/CVNCZlib/vendor/compare256_rle.h": "44a389770300038430119e69a411554a4297f4cdf61077a3eb535a440b348956",
+    "Sources/CVNCZlib/vendor/compress.c": "c385d5f95521016f935382ab508dd71578f352227fe8bf94c3eb0db045e51366",
+    "Sources/CVNCZlib/vendor/cpu_features.c": "9eccb78606b46050e120fe36074753b027cb7c798e540c8c290e9e587b0a603a",
+    "Sources/CVNCZlib/vendor/cpu_features.h": "206544f8ba374a65a4d3323d8b24ba8716a2c0f3e6c28825072df04e55a7161e",
+    "Sources/CVNCZlib/vendor/crc32.c": "daa3ec2a02ad1319cbfeaa143bbc3d3ae026e8e41f76534e96b13afecebe9551",
+    "Sources/CVNCZlib/vendor/crc32.h": "e291f26ecc8ced5bf016e530fec22ee305c18df209c2a434bcb86b9235c227f1",
+    "Sources/CVNCZlib/vendor/crc32_braid_comb.c": "b996400fb30a700a4f563deb1d33c683a00a8564b1ebb0e440877009f1aca73e",
+    "Sources/CVNCZlib/vendor/crc32_braid_comb_p.h": "6c8035e05d30a6241be55467fc59e4d7deda6b618b955a11339ffee08a39c75a",
+    "Sources/CVNCZlib/vendor/crc32_braid_p.h": "87be1386612aeaa78250cb86d101324d6d14f5dd996d90e03fc3beafe03fa5f9",
+    "Sources/CVNCZlib/vendor/crc32_braid_tbl.h": "dd9a46abe25b630f16b6fe735a5584e7c38e493ace4404a230731836ab01e2ca",
+    "Sources/CVNCZlib/vendor/deflate.c": "9bb8be7d1094944f4a3d0bd1859839a9df9e377a485af7f00efb9d6f76d93322",
+    "Sources/CVNCZlib/vendor/deflate.h": "e03aed2cbba6f0dee25df0a482ba0ab86525a022e45bab7a0fcd3476cbbddf6d",
+    "Sources/CVNCZlib/vendor/deflate_fast.c": "83ffb6bf7c7f68362a517b9c270c295c967e03d86556febbc7cc959559ad8b79",
+    "Sources/CVNCZlib/vendor/deflate_huff.c": "b9bacb3a11e3bae0c4d29ef87acfe3cb007f4006d781585665722f1667f236f9",
+    "Sources/CVNCZlib/vendor/deflate_medium.c": "147d04b109b021a1d44d981bd97ce029aeafd437e948416e5c5b13cf1637415e",
+    "Sources/CVNCZlib/vendor/deflate_p.h": "1fd9f6269189dcf23bbefbedaf2caeef7bc0787e4271814b1b3c33ea975cfb6e",
+    "Sources/CVNCZlib/vendor/deflate_quick.c": "0f30392f3eeab4205eaee1a76d7bd1bf3bdd49e6dc2013d8f78af62b7044c474",
+    "Sources/CVNCZlib/vendor/deflate_rle.c": "053a87930f687adc685a8dfaf78b9190c82cd93085ff9cf04bf5b33482e92c35",
+    "Sources/CVNCZlib/vendor/deflate_slow.c": "aa04cab55c4cf8340df849cbfff02569ebd732ddaaa6b45015a735e7ae898d7a",
+    "Sources/CVNCZlib/vendor/deflate_stored.c": "8bc5836931016415fa016d34ecf1ef188c2e756a19e77fcd2b7cd0acaa1c919c",
+    "Sources/CVNCZlib/vendor/fallback_builtins.h": "25fe7dbe1fe172a901b2a51aa5626fc33d275fb89cd32602567c2d57db24790d",
+    "Sources/CVNCZlib/vendor/functable.c": "55ec0f9ae3e9b8f9d8241518137b1874e06c07d0d004b4e8cd818570fab0f60a",
+    "Sources/CVNCZlib/vendor/functable.h": "336794d300e175857f799d6061395dc1c5a1837bba86affa515e69ccbfd013a3",
+    "Sources/CVNCZlib/vendor/gzguts.h": "624e3c328b318d933e1f4244177ed460b2e2682b1058e304852dd4b358a3cfca",
+    "Sources/CVNCZlib/vendor/infback.c": "bc7f5ed58d4e039dc1e522215e64ebdbce4ae2623f0cdd0b9a3d443bbc5f00db",
+    "Sources/CVNCZlib/vendor/inffast_tpl.h": "d61d71c4bc97d837a9925b7082f01faf544984c3ab31b1250b9e40091355ec6a",
+    "Sources/CVNCZlib/vendor/inffixed_tbl.h": "a94225335396245e9f0ccb2e9b4b334fe7ee0111ed8e32a26bcd52187f364314",
+    "Sources/CVNCZlib/vendor/inflate.c": "eae46f1e806e663cd9a3d9a724d74012b5071cc18141422a91de9c7cf41c2b3b",
+    "Sources/CVNCZlib/vendor/inflate.h": "18c8bee02d34590f9ad6dd02dbfa458515dae7e7127d0712d82a0a7599ce9e38",
+    "Sources/CVNCZlib/vendor/inflate_p.h": "7ca493af3e9430d866d34518b17e0358177744e306839d1ad962054da0e129c1",
+    "Sources/CVNCZlib/vendor/inftrees.c": "d5776b7ec068ac9077aafd8a74e10ea0f2f0951c386ac867b7a1e7e697dfc758",
+    "Sources/CVNCZlib/vendor/inftrees.h": "2ba1beb76d7922fcb37708809e31f62ee366827da80faf09a7e461b439afd291",
+    "Sources/CVNCZlib/vendor/insert_string.c": "8e1c701f60efe34b7b7f494cd94594222b11f9209aed1d808a464fee3927aa78",
+    "Sources/CVNCZlib/vendor/insert_string_roll.c": "36fe2b8cc54d20f31e18543683364cc44da8553a07f93e26ef788f4c8422f115",
+    "Sources/CVNCZlib/vendor/insert_string_tpl.h": "7ffdc6f9ed6ee94fdc76a6eed970836e30facdfc958371e98a6e55f483fc66a1",
+    "Sources/CVNCZlib/vendor/match_tpl.h": "86e7c6e68d244af56354c738c91b3d01d3be97cc2bb5ffdaa3e76a11988bb375",
+    "Sources/CVNCZlib/vendor/trees.c": "6872fb34e2f5361e23884263d0cbd1a6b77f43989cc30dff37baa422dcb1c302",
+    "Sources/CVNCZlib/vendor/trees.h": "24174f3543b01ee1ef370bbf6d15551a21871cded18b2aadf09a71e7904b6f99",
+    "Sources/CVNCZlib/vendor/trees_emit.h": "257f960d71a0078161482dcc12d27aab495875dd606f86cc9696bbe6e6628281",
+    "Sources/CVNCZlib/vendor/trees_tbl.h": "022736ff3362ef3591d1f8fc3b7fede5927c0d25ab0813d7ef8cd95efd6ea242",
+    "Sources/CVNCZlib/vendor/uncompr.c": "8b368d21cbe262aa7b833c1ff572d3d7e56c30525590df12b9613db3e74d2f98",
+    "Sources/CVNCZlib/vendor/zbuild.h": "e26c9eb94670aeeef9835edc4048eb2e53ca0e432d7715820d77f84e63eb1fef",
+    "Sources/CVNCZlib/vendor/zconf-ng.h": "ef5b25e964fc2aff0fccac38e412b4d2e30d105d5ee0bfc63e50eb675794f5c9",
+    "Sources/CVNCZlib/vendor/zendian.h": "5be3e2989524198f13b68cc083b1502747effe92325edee59e3c4ad93cc3c62f",
+    "Sources/CVNCZlib/vendor/zlib-ng.h": "0e56e94df2d417619099f8f0f1b97a8af4642b200cb1ade95ceccb962c3f55af",
+    "Sources/CVNCZlib/vendor/zlib_name_mangling-ng.h": "38e51a846d6c2bd6100298c55328dba4437c08fa1dceda4eb2e06ecb1d142058",
+    "Sources/CVNCZlib/vendor/zmemory.h": "9af58a7808e197dda7bdc18d1f9bfca6acc322339cd7825830ae8bb0a2c6f666",
+    "Sources/CVNCZlib/vendor/zutil.c": "7361af4ef119a7e4fcc52aed24b83ae8d3489db37a2fbece4ce51d984722cb22",
+    "Sources/CVNCZlib/vendor/zutil.h": "d2539934ce6a81e286913f82bed0d1a2d60c994d02b10118907c9503d73c395c",
+    "Sources/CVNCZlib/vendor/zutil_p.h": "25028e737f4203e834cc1c629da8235c4141c9751c49e8e21a9ae3eca231744d",
+    "Sources/mac-vnc-server/AppVersion.swift": "b55f3b9dff55230d76700cac966f8aae09cc5119fe3561a2c2ea7cfa908f05cf",
+    "Sources/mac-vnc-server/AppleAuth.swift": "a34dcef7d0ff877fe4f4970a722c7c5240fbfab98320551aec674f0dc43f97f8",
+    "Sources/mac-vnc-server/AppleClipboard.swift": "5c4a224d599c4d641fe5c7519bd7cdd8f331725a52e0d6dd4a12559df07e5d23",
+    "Sources/mac-vnc-server/AppleEncryption.swift": "e98596b8a9e5595bce090b1f760eb92e66311295ba44aa5a6b14199364d418be",
+    "Sources/mac-vnc-server/AppleFileTransfer.swift": "1148f62016ccc2a78c4eab9240e527cd62338f902e65faaa702f046b7635efb5",
+    "Sources/mac-vnc-server/AppleRFB.swift": "f9575f2d7ec9d11283e88ed0c50d613fe9aa5905f7668896f8278d9203216112",
+    "Sources/mac-vnc-server/BinaryUpdater.swift": "4edb43b079ef88aa2c362a545dd77c6b727f436bc38c3f053cb266b7d3b04c00",
+    "Sources/mac-vnc-server/BindAddress.swift": "e5b003bcaebd4765ae7b3b96b936e3a28fb3d86e3bfbecb5dd05b3207d0e1417",
+    "Sources/mac-vnc-server/CLI.swift": "c07652e63fe5022cbc1266ada208abb3ab3fca1bb34a76010c1f54ed76d29b1e",
+    "Sources/mac-vnc-server/CaptureOperation.swift": "ba5c1cd512be90d9bbefc4a7d77da795232763157626579efa870c7477f5d42e",
+    "Sources/mac-vnc-server/ClipboardContent.swift": "f9690fa1ead204fc587adf80db284f8b8e6fdfa52bf0151f50bbc9644f9cacc4",
+    "Sources/mac-vnc-server/Cursor.swift": "f6a6fd1b71a2cd438acc25be3ea8184ba2cb58e669d5655dbd8ef3fab14a3969",
+    "Sources/mac-vnc-server/FramebufferResampling.swift": "972d957e09f895902fc5d5603659bbf9cdf69357bbba9c42fc106afc7f94e3a4",
+    "Sources/mac-vnc-server/LaunchAgentService.swift": "1faad02a1920775eceb596d52f507f4459fb82bedab90fe02f6a825a30aa4275",
+    "Sources/mac-vnc-server/Logging.swift": "4f49e006614d6349e15f5e25a65fc7ceec024699236e16c0fa85dab8222d946a",
+    "Sources/mac-vnc-server/MacClipboard.swift": "b8f679cfc248b55283bd7d32a6559a40e99ecd1bf2a210c993cf1a90de22ea4d",
+    "Sources/mac-vnc-server/MacFileTransfer.swift": "0e23beb2a1ba28b8f57f223724ec29aff154c10fa2f745dcff666bb5017ab00e",
+    "Sources/mac-vnc-server/MacInputController.swift": "ae5dfe7187a49c076cb54d287a826151148ac69251afeb991ad626edee26170e",
+    "Sources/mac-vnc-server/MacScreenCapture.swift": "0e9d311b50e911c6b7a2d96dc6b64c082e777b63ba0fd19ad1d4a7e037b75b7f",
+    "Sources/mac-vnc-server/Main.swift": "58cc44c36340991ee3076834281c9c857d16749982b6d70acf5ddbeca1c97b14",
+    "Sources/mac-vnc-server/MouseClickTracker.swift": "4f69495c47f27032219203fa12e47003d1217b1c2efb41181bcc5d84f85da69d",
+    "Sources/mac-vnc-server/Permissions.swift": "a57e3f558d8d909b0d370b83363b9b39b59d0a1116fa826bf4812bd544f52ed8",
+    "Sources/mac-vnc-server/RFBServer.swift": "0b0734d3304b1f2d44da37d6fa494268c79c36d30a07fd04c905922f01494757",
+    "Sources/mac-vnc-server/RFBTypes.swift": "ea1e216324c4a7811c30420ead8e500348eb211baafe026a84a575b6f1371eb0",
+    "Sources/mac-vnc-server/RawEncoding.swift": "f18449622cdd1d69f00b6407bc5385e4a217a85e8063538ef7f782165d813811",
+    "Sources/mac-vnc-server/ServerPassword.swift": "e4c19fe985cf8365c46d373abdd1ad7e1f9087d379c2d41ac0aebe2296604659",
+    "Sources/mac-vnc-server/SharedInputController.swift": "6d6309899e40a2ba25633a66dc806708213352dd3bb1dd22c11cf04c7f09d0f9",
+    "Sources/mac-vnc-server/Socket.swift": "adae5284a7cbf89f2d4782b16833fc0a50e4f13bcfcc2e3553dfdff3eb6dfd7b",
+    "Sources/mac-vnc-server/StreamingScreenCapture.swift": "7aecdb14d991b7ebaa7bb182a8db83673e75a6be33efcca3a93a7f489f229ddc",
+    "Sources/mac-vnc-server/TransferDragSource.swift": "a71013d414e099f119fae274f9240d55c1b4bb308efeb9d48a9384cb92f11b96",
+    "Sources/mac-vnc-server/TransferInbox.swift": "202b68fba977ac53768845c59b762d4cde984e48418c67507f6970cfff8dfb10",
+    "Sources/mac-vnc-server/TransferStore.swift": "81dea6dd5f6782cc89eb15f21e01714fc9cdde39a087a224e31be8d62ad9e85d",
+    "Sources/mac-vnc-server/VNCAuth.swift": "0ded2f1254c03ecd5e51b39b3373c85869334c910ae9d220b2b465bdab6e9c18",
+    "Sources/mac-vnc-server/VirtualDisplayLayout.swift": "45fabdb46b6be3f398ce243f2cdeeac44a7df3376123042667bafdaee9e5d8b1",
+    "Sources/mac-vnc-server/ZRLEEncoding.swift": "c9c8cc3ad66578ecd9bd1ad1d5e9c12bf75b2ac5efdb306c5a9c6a0f91df7be0",
+    "Sources/mac-vnc-server/ZlibEncoding.swift": "328bc47288ff34d31ed951436628afc3a4927f6ce419de45422064ca50508347"
+  },
+  "scenario": "Identical generated BGRA fixtures; four frames per scenario, four warmups followed by twenty measured frames, two passes with reversed codec order. 1024x768, twelve 1024x64 rectangles per frame.",
+  "codecs": {
+    "zlib": "RFB 6, zlib-ng level 2, persistent stream",
+    "zrle": "RFB 16, current tile/palette implementation, system zlib level 1, persistent stream"
+  },
+  "validation": "Independent Python RFC 6143 tile decoder plus persistent zlib inflation; every source pixel compared. Raw/solid/packed/plain-RLE/palette-RLE reference vectors also passed.",
+  "limitations": [
+    "Encoder wall/thread CPU only; excludes capture, dirty detection, network and actual Screen Sharing decode.",
+    "Malformed ZRLE output invalidates bandwidth and latency comparisons on palette-runs, many-colors and document scenarios.",
+    "Synthetic fixtures on one VM; not general codec ratios or production-client FPS."
+  ],
+  "results": [
+    {
+      "name": "solid-zlib-0",
+      "scenario": "solid",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.1335374,
+        "p50": 1.100438,
+        "p95": 1.299125,
+        "max": 1.303166
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.13230845,
+        "p50": 1.100229,
+        "p95": 1.282833,
+        "max": 1.298709
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 15555,
+        "p50": 15555.0,
+        "p95": 15555,
+        "max": 15555
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "solid-zrle-0",
+      "scenario": "solid",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 12.23791885,
+        "p50": 12.199124999999999,
+        "p95": 12.817875,
+        "max": 12.882959
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 12.22698745,
+        "p50": 12.198812499999999,
+        "p95": 12.810333,
+        "max": 12.882667
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 156,
+        "p50": 156.0,
+        "p95": 156,
+        "max": 156
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "1": 4608
+      }
+    },
+    {
+      "name": "solid-zrle-1",
+      "scenario": "solid",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 12.96118955,
+        "p50": 12.596479,
+        "p95": 15.290667,
+        "max": 15.577333
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 12.96086465,
+        "p50": 12.5961875,
+        "p95": 15.290292,
+        "max": 15.576792
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 156,
+        "p50": 156.0,
+        "p95": 156,
+        "max": 156
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "1": 4608
+      }
+    },
+    {
+      "name": "solid-zlib-1",
+      "scenario": "solid",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.1856397,
+        "p50": 1.1613959999999999,
+        "p95": 1.282042,
+        "max": 1.452292
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.18541055,
+        "p50": 1.161146,
+        "p95": 1.281667,
+        "max": 1.451959
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 15555,
+        "p50": 15555.0,
+        "p95": 15555,
+        "max": 15555
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "two-color-zlib-0",
+      "scenario": "two-color",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.7362313,
+        "p50": 2.779375,
+        "p95": 4.267833,
+        "max": 4.386917
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.7359458,
+        "p50": 2.779021,
+        "p95": 4.267542,
+        "max": 4.386583
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 120306.25,
+        "p50": 116266.5,
+        "p95": 219844,
+        "max": 219844
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "two-color-zrle-0",
+      "scenario": "two-color",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 20.50404995,
+        "p50": 20.4631455,
+        "p95": 21.07375,
+        "max": 21.84925
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 20.497791499999998,
+        "p50": 20.462708499999998,
+        "p95": 20.983209,
+        "max": 21.83575
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 3207.75,
+        "p50": 3206.5,
+        "p95": 3215,
+        "max": 3215
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "2": 4608
+      }
+    },
+    {
+      "name": "two-color-zrle-1",
+      "scenario": "two-color",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 20.86363135,
+        "p50": 20.949792,
+        "p95": 21.693333,
+        "max": 22.203834
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 20.8567749,
+        "p50": 20.9486665,
+        "p95": 21.693041,
+        "max": 22.185541
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 3207.75,
+        "p50": 3206.5,
+        "p95": 3215,
+        "max": 3215
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "2": 4608
+      }
+    },
+    {
+      "name": "two-color-zlib-1",
+      "scenario": "two-color",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.7439084,
+        "p50": 2.703833,
+        "p95": 4.620292,
+        "max": 5.412875
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.74229375,
+        "p50": 2.703563,
+        "p95": 4.619916,
+        "max": 5.407625
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 120306.25,
+        "p50": 116266.5,
+        "p95": 219844,
+        "max": 219844
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zlib-0",
+      "scenario": "palette-runs",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.2742273,
+        "p50": 3.302417,
+        "p95": 3.544167,
+        "max": 3.713625
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.27252285,
+        "p50": 3.3017285,
+        "p95": 3.543625,
+        "max": 3.713
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 174886.65,
+        "p50": 176092.0,
+        "p95": 177313,
+        "max": 177313
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zrle-0",
+      "scenario": "palette-runs",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 20.79256465,
+        "p50": 20.6930625,
+        "p95": 22.07225,
+        "max": 22.481459
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 20.7876645,
+        "p50": 20.69075,
+        "p95": 22.053958,
+        "max": 22.481041
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 2346.5,
+        "p50": 2350.0,
+        "p95": 2367,
+        "max": 2367
+      },
+      "valid_frames": 0,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [
+        {
+          "frame": 0,
+          "rect_y": 0,
+          "error": "RLE palette index 9 exceeds palette size 4"
+        },
+        {
+          "frame": 0,
+          "rect_y": 64,
+          "error": "RLE palette index 9 exceeds palette size 4"
+        },
+        {
+          "frame": 0,
+          "rect_y": 128,
+          "error": "RLE palette index 9 exceeds palette size 4"
+        }
+      ],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zrle-1",
+      "scenario": "palette-runs",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 20.69852705,
+        "p50": 20.721208,
+        "p95": 21.459959,
+        "max": 21.723583
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 20.6970147,
+        "p50": 20.720771,
+        "p95": 21.459708,
+        "max": 21.71575
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 2346.5,
+        "p50": 2350.0,
+        "p95": 2367,
+        "max": 2367
+      },
+      "valid_frames": 0,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [
+        {
+          "frame": 0,
+          "rect_y": 0,
+          "error": "RLE palette index 9 exceeds palette size 4"
+        },
+        {
+          "frame": 0,
+          "rect_y": 64,
+          "error": "RLE palette index 9 exceeds palette size 4"
+        },
+        {
+          "frame": 0,
+          "rect_y": 128,
+          "error": "RLE palette index 9 exceeds palette size 4"
+        }
+      ],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zlib-1",
+      "scenario": "palette-runs",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.183698,
+        "p50": 3.1369585,
+        "p95": 3.452,
+        "max": 3.639792
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.1834103000000002,
+        "p50": 3.1366665,
+        "p95": 3.451708,
+        "max": 3.639458
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 174886.65,
+        "p50": 176092.0,
+        "p95": 177313,
+        "max": 177313
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "many-colors-zlib-0",
+      "scenario": "many-colors",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.23765825,
+        "p50": 1.213708,
+        "p95": 1.380833,
+        "max": 1.3865
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.2359938,
+        "p50": 1.2133545,
+        "p95": 1.380584,
+        "max": 1.386
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 25620.1,
+        "p50": 25609.5,
+        "p95": 25660,
+        "max": 25660
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "many-colors-zrle-0",
+      "scenario": "many-colors",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 37.2635542,
+        "p50": 37.361875,
+        "p95": 38.715875,
+        "max": 39.545125
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 37.25736245,
+        "p50": 37.3615625,
+        "p95": 38.715542,
+        "max": 39.521834
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 7723.1,
+        "p50": 7765.0,
+        "p95": 7895,
+        "max": 7992
+      },
+      "valid_frames": 0,
+      "checked_frames": 24,
+      "mismatching_pixels": 9437184,
+      "failure_examples": [
+        {
+          "frame": 0,
+          "rect_y": 0,
+          "error": "32768 decoded pixels differ from source"
+        },
+        {
+          "frame": 0,
+          "rect_y": 64,
+          "error": "32768 decoded pixels differ from source"
+        },
+        {
+          "frame": 0,
+          "rect_y": 128,
+          "error": "32768 decoded pixels differ from source"
+        }
+      ],
+      "tile_modes": {
+        "16": 4608
+      }
+    },
+    {
+      "name": "many-colors-zrle-1",
+      "scenario": "many-colors",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 37.5454208,
+        "p50": 37.7417295,
+        "p95": 38.857375,
+        "max": 39.640583
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 37.53253945,
+        "p50": 37.738875,
+        "p95": 38.857041,
+        "max": 39.570833
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 7723.1,
+        "p50": 7765.0,
+        "p95": 7895,
+        "max": 7992
+      },
+      "valid_frames": 0,
+      "checked_frames": 24,
+      "mismatching_pixels": 9437184,
+      "failure_examples": [
+        {
+          "frame": 0,
+          "rect_y": 0,
+          "error": "32768 decoded pixels differ from source"
+        },
+        {
+          "frame": 0,
+          "rect_y": 64,
+          "error": "32768 decoded pixels differ from source"
+        },
+        {
+          "frame": 0,
+          "rect_y": 128,
+          "error": "32768 decoded pixels differ from source"
+        }
+      ],
+      "tile_modes": {
+        "16": 4608
+      }
+    },
+    {
+      "name": "many-colors-zlib-1",
+      "scenario": "many-colors",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.3614666,
+        "p50": 1.368979,
+        "p95": 1.607125,
+        "max": 1.633208
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.36017725,
+        "p50": 1.3686045,
+        "p95": 1.606792,
+        "max": 1.632958
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 25620.1,
+        "p50": 25609.5,
+        "p95": 25660,
+        "max": 25660
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zlib-0",
+      "scenario": "document",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.7861812,
+        "p50": 3.7330414999999997,
+        "p95": 4.261791,
+        "max": 4.316542
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.78392715,
+        "p50": 3.7327505,
+        "p95": 4.261417,
+        "max": 4.277708
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 208919.5,
+        "p50": 208937.5,
+        "p95": 211169,
+        "max": 211169
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zrle-0",
+      "scenario": "document",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 27.4236208,
+        "p50": 27.394728999999998,
+        "p95": 27.974,
+        "max": 28.335542
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 27.41796445,
+        "p50": 27.38525,
+        "p95": 27.97075,
+        "max": 28.335291
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 42765,
+        "p50": 42878.5,
+        "p95": 43769,
+        "max": 43769
+      },
+      "valid_frames": 0,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [
+        {
+          "frame": 0,
+          "rect_y": 0,
+          "error": "RLE palette index 127 exceeds palette size 16"
+        },
+        {
+          "frame": 0,
+          "rect_y": 64,
+          "error": "RLE palette index 127 exceeds palette size 16"
+        },
+        {
+          "frame": 0,
+          "rect_y": 128,
+          "error": "RLE palette index 24 exceeds palette size 16"
+        }
+      ],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zrle-1",
+      "scenario": "document",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 34.87459165,
+        "p50": 28.3853535,
+        "p95": 31.8535,
+        "max": 154.505541
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 28.39225005,
+        "p50": 28.323979,
+        "p95": 29.181875,
+        "max": 30.44025
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 42765,
+        "p50": 42878.5,
+        "p95": 43769,
+        "max": 43769
+      },
+      "valid_frames": 0,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [
+        {
+          "frame": 0,
+          "rect_y": 0,
+          "error": "RLE palette index 127 exceeds palette size 16"
+        },
+        {
+          "frame": 0,
+          "rect_y": 64,
+          "error": "RLE palette index 127 exceeds palette size 16"
+        },
+        {
+          "frame": 0,
+          "rect_y": 128,
+          "error": "RLE palette index 24 exceeds palette size 16"
+        }
+      ],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zlib-1",
+      "scenario": "document",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 4.0473582,
+        "p50": 3.9943535,
+        "p95": 4.668458,
+        "max": 5.0045
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 4.04615405,
+        "p50": 3.9938535,
+        "p95": 4.667875,
+        "max": 5.004
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 208919.5,
+        "p50": 208937.5,
+        "p95": 211169,
+        "max": 211169
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    }
+  ],
+  "timings": [
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "solid-zlib-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.196917,
+          "fixture": 0,
+          "payload_bytes": 15559,
+          "wall_ms": 1.1975,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.130833,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.131084,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.234291,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.234541,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.30275,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.303041,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.298709,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.299125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.177833,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.178041,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.087541,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.08775,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.124291,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.124459,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.282833,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.303166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.088667,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.088875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.097708,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.097959,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.088709,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.088916,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.077084,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.07725,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.074417,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.074583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.095042,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.095209,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.065625,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.065791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.08275,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.082917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.178875,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.179166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.105542,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.106,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.10275,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.102917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.142959,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.143166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.09475,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.094917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.10825,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.108416,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.271834,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.272125,
+          "warmup": false
+        }
+      ],
+      "scenario": "solid",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "solid-zrle-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 12.811083,
+          "fixture": 0,
+          "payload_bytes": 164,
+          "wall_ms": 12.814166,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 12.198459,
+          "fixture": 1,
+          "payload_bytes": 160,
+          "wall_ms": 12.19875,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 11.930833,
+          "fixture": 2,
+          "payload_bytes": 160,
+          "wall_ms": 11.931125,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 12.419708,
+          "fixture": 3,
+          "payload_bytes": 160,
+          "wall_ms": 12.42,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 12.231875,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 12.232208,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.19525,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 12.195625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.410041,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 12.615584,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.327917,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 12.32825,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.882667,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 12.882959,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.999875,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 12.000208,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.6545,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 12.654834,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.51725,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 12.517542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.858042,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 11.858375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.977333,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 11.977542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.987667,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 11.988,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.397416,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 12.397708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.810333,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 12.817875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.124583,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 12.124958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.115833,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 12.116125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.202375,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 12.202625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.768584,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 11.768875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.207291,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 12.207667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.912625,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 11.912917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.958292,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 11.9585,
+          "warmup": false
+        }
+      ],
+      "scenario": "solid",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "solid-zrle-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 12.449583,
+          "fixture": 0,
+          "payload_bytes": 164,
+          "wall_ms": 12.45,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 12.568167,
+          "fixture": 1,
+          "payload_bytes": 160,
+          "wall_ms": 12.568417,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 12.445667,
+          "fixture": 2,
+          "payload_bytes": 160,
+          "wall_ms": 12.446041,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 13.162708,
+          "fixture": 3,
+          "payload_bytes": 160,
+          "wall_ms": 13.163042,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 12.263042,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 12.263333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.118042,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 12.118291,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.528375,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 12.528667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.734,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 12.734209,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.062334,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 12.0625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.889583,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 12.889833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 13.327625,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 13.327917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.664,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 12.664291,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.976,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 11.976333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.262958,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 12.263208,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.767959,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 12.768208,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 11.930166,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 11.930417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.407958,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 12.408209,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 14.176084,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 14.176416,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 15.290292,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 15.290667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 15.576792,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 15.577333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 13.795,
+          "fixture": 0,
+          "payload_bytes": 156,
+          "wall_ms": 13.795292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 13.533791,
+          "fixture": 1,
+          "payload_bytes": 156,
+          "wall_ms": 13.534875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.480458,
+          "fixture": 2,
+          "payload_bytes": 156,
+          "wall_ms": 12.480709,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 12.432834,
+          "fixture": 3,
+          "payload_bytes": 156,
+          "wall_ms": 12.433083,
+          "warmup": false
+        }
+      ],
+      "scenario": "solid",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "solid-zlib-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.262,
+          "fixture": 0,
+          "payload_bytes": 15559,
+          "wall_ms": 1.262834,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.267209,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.267542,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.269542,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.269833,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.265709,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.265917,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.146292,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.146458,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.113584,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.11375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.093417,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.093583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.112833,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.113042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.138083,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.138291,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.132959,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.133125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.160584,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.160917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.2055,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.205709,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.244042,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.244292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.161708,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.161875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.281667,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.282042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.270542,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.270792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.451959,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.452292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.17325,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.173542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.112833,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.113083,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.110625,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.110792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.1885,
+          "fixture": 0,
+          "payload_bytes": 15555,
+          "wall_ms": 1.188709,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.269167,
+          "fixture": 1,
+          "payload_bytes": 15555,
+          "wall_ms": 1.269375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.217375,
+          "fixture": 2,
+          "payload_bytes": 15555,
+          "wall_ms": 1.217625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.123291,
+          "fixture": 3,
+          "payload_bytes": 15555,
+          "wall_ms": 1.1235,
+          "warmup": false
+        }
+      ],
+      "scenario": "solid",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "two-color-zlib-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.350125,
+          "fixture": 0,
+          "payload_bytes": 28881,
+          "wall_ms": 1.351042,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 4.125083,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 4.126291,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 4.108167,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.108541,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.62175,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.622166,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.465416,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.465792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.972291,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 3.9725,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.951667,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 3.952,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.313833,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.314083,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.282709,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.282917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.257875,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 4.258292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.20175,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.202167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.39525,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.395541,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.352417,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.352625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.267542,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 4.267833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.017333,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.017709,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.606375,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.60675,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.288125,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.288375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.101458,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 4.101708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.096,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.09625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.211667,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.211916,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.183584,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.18375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.116208,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 4.116417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.386583,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.386917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.250833,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.251084,
+          "warmup": false
+        }
+      ],
+      "scenario": "two-color",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "two-color-zrle-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 20.229375,
+          "fixture": 0,
+          "payload_bytes": 3213,
+          "wall_ms": 20.230125,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.990917,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.991333,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.132625,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.132875,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.746042,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.746333,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.373291,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 20.373583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.095041,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.095291,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.625833,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.626125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.290666,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.290917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.528458,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 20.52875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.030833,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.031125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.767833,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.768167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.374,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.37425,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 19.59925,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 19.599583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.446834,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.447125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.3155,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.315917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.615041,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.615333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.011583,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 20.011875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.983209,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 21.07375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.781458,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.78175,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.83575,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 21.84925,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.318084,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 20.328375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.542792,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.543083,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.941791,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.947584,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.478583,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.479166,
+          "warmup": false
+        }
+      ],
+      "scenario": "two-color",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "two-color-zrle-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 20.203333,
+          "fixture": 0,
+          "payload_bytes": 3213,
+          "wall_ms": 20.243167,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.571834,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.774833,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.874959,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.875708,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.864625,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.864917,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.355167,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 20.355542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.956708,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.96275,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.262625,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 21.299334,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.062167,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 21.065042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.848125,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 20.870625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.171125,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 21.1715,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.207958,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.208333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.413083,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.4135,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 19.989458,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 19.989791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.739125,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.739417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.18975,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 20.20525,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.079375,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.079833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.958416,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 20.958709,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.520417,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 20.522833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.214166,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 21.225334,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.319584,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 21.337417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.029042,
+          "fixture": 0,
+          "payload_bytes": 3215,
+          "wall_ms": 21.029375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.693041,
+          "fixture": 1,
+          "payload_bytes": 3203,
+          "wall_ms": 21.693333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 22.185541,
+          "fixture": 2,
+          "payload_bytes": 3203,
+          "wall_ms": 22.203834,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.940625,
+          "fixture": 3,
+          "payload_bytes": 3210,
+          "wall_ms": 20.940875,
+          "warmup": false
+        }
+      ],
+      "scenario": "two-color",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "two-color-zlib-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.261292,
+          "fixture": 0,
+          "payload_bytes": 28881,
+          "wall_ms": 1.261792,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 4.346167,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 4.346416,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 4.355458,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.35575,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.5055,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.505792,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.565459,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.565791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 5.407625,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 5.412875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.619916,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.620292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.3845,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.384667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.214625,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.214833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.210208,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 4.227334,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.897458,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 3.897708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.2855,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.28575,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.300584,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.30075,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.934,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 3.934167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.841667,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 3.841875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.280291,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.2805,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.352833,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.353125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.9545,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 3.954834,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.85475,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 3.857708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.239959,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.240209,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.248666,
+          "fixture": 0,
+          "payload_bytes": 28848,
+          "wall_ms": 1.251625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.920167,
+          "fixture": 1,
+          "payload_bytes": 219844,
+          "wall_ms": 3.920375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.063292,
+          "fixture": 2,
+          "payload_bytes": 202010,
+          "wall_ms": 4.063625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.269875,
+          "fixture": 3,
+          "payload_bytes": 30523,
+          "wall_ms": 1.270125,
+          "warmup": false
+        }
+      ],
+      "scenario": "two-color",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "palette-runs-zlib-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.424333,
+          "fixture": 0,
+          "payload_bytes": 27526,
+          "wall_ms": 1.425167,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.5985,
+          "fixture": 1,
+          "payload_bytes": 36886,
+          "wall_ms": 1.598916,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.409583,
+          "fixture": 2,
+          "payload_bytes": 36493,
+          "wall_ms": 1.409875,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.203958,
+          "fixture": 3,
+          "payload_bytes": 159366,
+          "wall_ms": 3.222666,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.395416,
+          "fixture": 0,
+          "payload_bytes": 175604,
+          "wall_ms": 3.395792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.123791,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.124209,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.19725,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.197625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.320708,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.323333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.011792,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.012125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.32925,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.353125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.382,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.382375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.713,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.713625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.305834,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.306292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.543625,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.544167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.508333,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.508709,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.300041,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.301,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.091583,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.091875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.312209,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.312459,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.303416,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.303834,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.061042,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.061459,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.059666,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.059959,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.199084,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.1995,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.236209,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.236625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.056208,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.056458,
+          "warmup": false
+        }
+      ],
+      "scenario": "palette-runs",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "palette-runs-zrle-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 20.999375,
+          "fixture": 0,
+          "payload_bytes": 2345,
+          "wall_ms": 21.0035,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.237417,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.237667,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.485708,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.486,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.087667,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.087917,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.608125,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.6085,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.780875,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.803583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 19.860833,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 19.861125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.4505,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.471167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 22.053958,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 22.07225,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 22.481041,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 22.481459,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.618875,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.623083,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.066375,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.066708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.331458,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.331708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.360875,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 21.376292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.33625,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.336542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.337708,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.338041,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.1305,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.130833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.592334,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.592625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.852375,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.852584,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.882917,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.883125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.803458,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.81575,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.108708,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 21.109084,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.3335,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 21.333792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.762625,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.763042,
+          "warmup": false
+        }
+      ],
+      "scenario": "palette-runs",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "palette-runs-zrle-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 20.906333,
+          "fixture": 0,
+          "payload_bytes": 2345,
+          "wall_ms": 20.90675,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 21.690375,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 21.690625,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 22.475916,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 22.484792,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 21.160709,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 21.161042,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 20.306125,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.30675,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.928917,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.929333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.856208,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.8565,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.459708,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 21.459959,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.610917,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.62425,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.760459,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.760708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.804792,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.805125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.453584,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.453875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.521,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.52125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.7345,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.735125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.040125,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.040417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.438125,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.438417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.060042,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.06025,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.752,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.752333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.71575,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 21.723583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 21.438625,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 21.438958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.707042,
+          "fixture": 0,
+          "payload_bytes": 2359,
+          "wall_ms": 20.707291,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.5125,
+          "fixture": 1,
+          "payload_bytes": 2367,
+          "wall_ms": 20.516083,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.061375,
+          "fixture": 2,
+          "payload_bytes": 2341,
+          "wall_ms": 20.061584,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 20.7785,
+          "fixture": 3,
+          "payload_bytes": 2319,
+          "wall_ms": 20.77875,
+          "warmup": false
+        }
+      ],
+      "scenario": "palette-runs",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "palette-runs-zlib-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.244208,
+          "fixture": 0,
+          "payload_bytes": 27526,
+          "wall_ms": 1.244583,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.397,
+          "fixture": 1,
+          "payload_bytes": 36886,
+          "wall_ms": 1.39725,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.32925,
+          "fixture": 2,
+          "payload_bytes": 36493,
+          "wall_ms": 1.329459,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.454833,
+          "fixture": 3,
+          "payload_bytes": 159366,
+          "wall_ms": 3.455084,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.218416,
+          "fixture": 0,
+          "payload_bytes": 175604,
+          "wall_ms": 3.218708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.275083,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.275375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.099375,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.099583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.019334,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.019584,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.451708,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.452,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.639458,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.639792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.196583,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.196792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.184083,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.1845,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.068333,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.068542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.01975,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.019958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.04575,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.046,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.12125,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.121542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.296209,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.296583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.1005,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.100708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.29975,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.30025,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.305833,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.306292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.083959,
+          "fixture": 0,
+          "payload_bytes": 175616,
+          "wall_ms": 3.084209,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.152083,
+          "fixture": 1,
+          "payload_bytes": 170052,
+          "wall_ms": 3.152375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.044166,
+          "fixture": 2,
+          "payload_bytes": 176568,
+          "wall_ms": 3.044375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.046583,
+          "fixture": 3,
+          "payload_bytes": 177313,
+          "wall_ms": 3.046792,
+          "warmup": false
+        }
+      ],
+      "scenario": "palette-runs",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "many-colors-zlib-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.251791,
+          "fixture": 0,
+          "payload_bytes": 25711,
+          "wall_ms": 1.252583,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.215791,
+          "fixture": 1,
+          "payload_bytes": 25604,
+          "wall_ms": 1.215958,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.226791,
+          "fixture": 2,
+          "payload_bytes": 25602,
+          "wall_ms": 1.227042,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.266417,
+          "fixture": 3,
+          "payload_bytes": 25659,
+          "wall_ms": 1.266667,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.380584,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.380833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.267334,
+          "fixture": 1,
+          "payload_bytes": 25602,
+          "wall_ms": 1.267667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.177792,
+          "fixture": 2,
+          "payload_bytes": 25657,
+          "wall_ms": 1.178041,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.211292,
+          "fixture": 3,
+          "payload_bytes": 25607,
+          "wall_ms": 1.211666,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.386,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.3865,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.215417,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.21575,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.170333,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.170542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.175292,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.175541,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.164833,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.165042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.156916,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.157167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.218,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.218292,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.195708,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.195917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.3455,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.373958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.24275,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.243,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.204,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.204166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.305,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.305166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.199459,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.199667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.2225,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.222667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.207583,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.20775,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.273583,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.273833,
+          "warmup": false
+        }
+      ],
+      "scenario": "many-colors",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "many-colors-zrle-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 39.03325,
+          "fixture": 0,
+          "payload_bytes": 7344,
+          "wall_ms": 39.033834,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 38.793417,
+          "fixture": 1,
+          "payload_bytes": 7542,
+          "wall_ms": 38.83325,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 36.86725,
+          "fixture": 2,
+          "payload_bytes": 7545,
+          "wall_ms": 36.867709,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 35.879834,
+          "fixture": 3,
+          "payload_bytes": 8026,
+          "wall_ms": 35.880208,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 37.007542,
+          "fixture": 0,
+          "payload_bytes": 7705,
+          "wall_ms": 37.007875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.321125,
+          "fixture": 1,
+          "payload_bytes": 7895,
+          "wall_ms": 37.321458,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.026083,
+          "fixture": 2,
+          "payload_bytes": 7992,
+          "wall_ms": 37.026375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 35.760459,
+          "fixture": 3,
+          "payload_bytes": 7718,
+          "wall_ms": 35.760792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.403958,
+          "fixture": 0,
+          "payload_bytes": 7488,
+          "wall_ms": 37.434917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.231791,
+          "fixture": 1,
+          "payload_bytes": 7314,
+          "wall_ms": 38.232042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 39.521834,
+          "fixture": 2,
+          "payload_bytes": 7825,
+          "wall_ms": 39.545125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 36.439208,
+          "fixture": 3,
+          "payload_bytes": 7776,
+          "wall_ms": 36.439542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.715542,
+          "fixture": 0,
+          "payload_bytes": 7751,
+          "wall_ms": 38.715875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.999916,
+          "fixture": 1,
+          "payload_bytes": 7825,
+          "wall_ms": 38.000209,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.549083,
+          "fixture": 2,
+          "payload_bytes": 7776,
+          "wall_ms": 37.574875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 35.071625,
+          "fixture": 3,
+          "payload_bytes": 7754,
+          "wall_ms": 35.071958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.395666,
+          "fixture": 0,
+          "payload_bytes": 7424,
+          "wall_ms": 37.396,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.78475,
+          "fixture": 1,
+          "payload_bytes": 7885,
+          "wall_ms": 37.800541,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.327459,
+          "fixture": 2,
+          "payload_bytes": 7776,
+          "wall_ms": 37.32775,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 36.006667,
+          "fixture": 3,
+          "payload_bytes": 7682,
+          "wall_ms": 36.007,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.181041,
+          "fixture": 0,
+          "payload_bytes": 7742,
+          "wall_ms": 38.185458,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.005458,
+          "fixture": 1,
+          "payload_bytes": 7533,
+          "wall_ms": 37.02475,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.119375,
+          "fixture": 2,
+          "payload_bytes": 7825,
+          "wall_ms": 38.119625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 35.278667,
+          "fixture": 3,
+          "payload_bytes": 7776,
+          "wall_ms": 35.278917,
+          "warmup": false
+        }
+      ],
+      "scenario": "many-colors",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "many-colors-zrle-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 38.592083,
+          "fixture": 0,
+          "payload_bytes": 7344,
+          "wall_ms": 38.592583,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 38.174542,
+          "fixture": 1,
+          "payload_bytes": 7542,
+          "wall_ms": 38.188875,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 37.237958,
+          "fixture": 2,
+          "payload_bytes": 7545,
+          "wall_ms": 37.243916,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 35.496875,
+          "fixture": 3,
+          "payload_bytes": 8026,
+          "wall_ms": 35.497166,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 38.857041,
+          "fixture": 0,
+          "payload_bytes": 7705,
+          "wall_ms": 38.857375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.851791,
+          "fixture": 1,
+          "payload_bytes": 7895,
+          "wall_ms": 37.852166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 36.931083,
+          "fixture": 2,
+          "payload_bytes": 7992,
+          "wall_ms": 36.931334,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 35.628166,
+          "fixture": 3,
+          "payload_bytes": 7718,
+          "wall_ms": 35.639125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.810709,
+          "fixture": 0,
+          "payload_bytes": 7488,
+          "wall_ms": 38.820875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.301584,
+          "fixture": 1,
+          "payload_bytes": 7314,
+          "wall_ms": 37.301958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 39.570833,
+          "fixture": 2,
+          "payload_bytes": 7825,
+          "wall_ms": 39.640583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.262667,
+          "fixture": 3,
+          "payload_bytes": 7776,
+          "wall_ms": 37.308125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.557708,
+          "fixture": 0,
+          "payload_bytes": 7751,
+          "wall_ms": 38.586791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.104708,
+          "fixture": 1,
+          "payload_bytes": 7825,
+          "wall_ms": 38.1105,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.080291,
+          "fixture": 2,
+          "payload_bytes": 7776,
+          "wall_ms": 38.155167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 35.741458,
+          "fixture": 3,
+          "payload_bytes": 7754,
+          "wall_ms": 35.74175,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.135292,
+          "fixture": 0,
+          "payload_bytes": 7424,
+          "wall_ms": 38.135583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 38.272541,
+          "fixture": 1,
+          "payload_bytes": 7885,
+          "wall_ms": 38.272875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.081625,
+          "fixture": 2,
+          "payload_bytes": 7776,
+          "wall_ms": 37.081958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 36.302125,
+          "fixture": 3,
+          "payload_bytes": 7682,
+          "wall_ms": 36.302542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.405583,
+          "fixture": 0,
+          "payload_bytes": 7742,
+          "wall_ms": 37.406,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.71625,
+          "fixture": 1,
+          "payload_bytes": 7533,
+          "wall_ms": 37.716542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 37.7615,
+          "fixture": 2,
+          "payload_bytes": 7825,
+          "wall_ms": 37.766917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 35.277834,
+          "fixture": 3,
+          "payload_bytes": 7776,
+          "wall_ms": 35.28025,
+          "warmup": false
+        }
+      ],
+      "scenario": "many-colors",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "many-colors-zlib-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 1.37875,
+          "fixture": 0,
+          "payload_bytes": 25711,
+          "wall_ms": 1.379334,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.18625,
+          "fixture": 1,
+          "payload_bytes": 25604,
+          "wall_ms": 1.186459,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.249542,
+          "fixture": 2,
+          "payload_bytes": 25602,
+          "wall_ms": 1.24975,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.310417,
+          "fixture": 3,
+          "payload_bytes": 25659,
+          "wall_ms": 1.310625,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 1.345542,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.345833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.448708,
+          "fixture": 1,
+          "payload_bytes": 25602,
+          "wall_ms": 1.449166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.496209,
+          "fixture": 2,
+          "payload_bytes": 25657,
+          "wall_ms": 1.49675,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.489875,
+          "fixture": 3,
+          "payload_bytes": 25607,
+          "wall_ms": 1.510084,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.391667,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.392125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.442084,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.442334,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.477292,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.477625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.246875,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.247166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.234916,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.235125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.210375,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.210625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.467584,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.467916,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.327334,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.327583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.164959,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.165125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.402542,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.402792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.304291,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.304625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.606792,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.607125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.225791,
+          "fixture": 0,
+          "payload_bytes": 25612,
+          "wall_ms": 1.226042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.137167,
+          "fixture": 1,
+          "payload_bytes": 25660,
+          "wall_ms": 1.137333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.150584,
+          "fixture": 2,
+          "payload_bytes": 25604,
+          "wall_ms": 1.15075,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 1.632958,
+          "fixture": 3,
+          "payload_bytes": 25605,
+          "wall_ms": 1.633208,
+          "warmup": false
+        }
+      ],
+      "scenario": "many-colors",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "document-zlib-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 4.125,
+          "fixture": 0,
+          "payload_bytes": 206633,
+          "wall_ms": 4.125875,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.641542,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.641833,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.737125,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.737458,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 4.107,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 4.107333,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.539584,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 3.539875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.582667,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.583042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.738209,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.738542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.758125,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.758375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.614375,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 3.614583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.948375,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.948583,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.712792,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.713208,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.61275,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.613125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.277708,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 4.316542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.727292,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.727541,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.746375,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.746708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.680583,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.680917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.865583,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 3.866,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.915791,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.916167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.846708,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.846958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.601167,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.601417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.261417,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 4.261791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.051417,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 4.052,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.617667,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.617958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.579958,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.580292,
+          "warmup": false
+        }
+      ],
+      "scenario": "document",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "document-zrle-0",
+      "pass": 0,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 27.172708,
+          "fixture": 0,
+          "payload_bytes": 42674,
+          "wall_ms": 27.215334,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 27.321292,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 27.376583,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 26.420125,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 26.425584,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 28.065625,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 28.10725,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 26.956833,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 26.957125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 26.938917,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 26.939458,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.402875,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.411958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.637291,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 27.637625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 26.4685,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 26.46875,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.67725,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 27.6775,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.316291,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.316791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.893916,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 27.894166,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 26.841708,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 26.848458,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.307084,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 27.307458,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.511958,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.512334,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.910958,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 27.911375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.195541,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 27.214167,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.97075,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 27.974,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.814667,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.815083,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.110834,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 27.156042,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 26.895042,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 26.8955,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.805958,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 27.821584,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.367625,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.3775,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.335291,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 28.335542,
+          "warmup": false
+        }
+      ],
+      "scenario": "document",
+      "width": 1024
+    },
+    {
+      "codec": "zrle",
+      "depth": 32,
+      "height": 768,
+      "name": "document-zrle-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 28.313959,
+          "fixture": 0,
+          "payload_bytes": 42674,
+          "wall_ms": 28.314833,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 27.96925,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 27.96975,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 27.9385,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.941209,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 27.405875,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 27.406208,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 27.6725,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 27.672792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.571292,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 28.5775,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.117,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 28.117666,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 29.039209,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 29.049958,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.359167,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 28.451916,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.500917,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 28.670667,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.841791,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 154.505541,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.344,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 31.8535,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.893917,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 27.894208,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.130833,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 28.131333,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.036125,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.0365,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.989625,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 27.99,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.921417,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 27.921917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.686333,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 27.704,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 29.181834,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 29.326959,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.303958,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 28.318791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 28.655875,
+          "fixture": 0,
+          "payload_bytes": 41534,
+          "wall_ms": 28.667959,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 30.44025,
+          "fixture": 1,
+          "payload_bytes": 43561,
+          "wall_ms": 30.440792,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 27.977083,
+          "fixture": 2,
+          "payload_bytes": 42196,
+          "wall_ms": 27.977417,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 29.181875,
+          "fixture": 3,
+          "payload_bytes": 43769,
+          "wall_ms": 29.182417,
+          "warmup": false
+        }
+      ],
+      "scenario": "document",
+      "width": 1024
+    },
+    {
+      "codec": "zlib",
+      "depth": 32,
+      "height": 768,
+      "name": "document-zlib-1",
+      "pass": 1,
+      "rect_height": 64,
+      "samples": [
+        {
+          "cpu_ms": 4.61175,
+          "fixture": 0,
+          "payload_bytes": 206633,
+          "wall_ms": 4.61275,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.854917,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.855334,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.961666,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.972125,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.934875,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.935292,
+          "warmup": true
+        },
+        {
+          "cpu_ms": 3.987541,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 3.987916,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.450167,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 4.451375,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.809542,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.810125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.740167,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.740625,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.034833,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 4.03525,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.667875,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 4.668458,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.947583,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.948125,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.899125,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.899917,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.30525,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 4.305708,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.6725,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.676791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.616875,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.617291,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.0955,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 4.096959,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.000166,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 4.000791,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.719291,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 3.719833,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.633875,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 3.63425,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 3.958333,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 3.962542,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 5.004,
+          "fixture": 0,
+          "payload_bytes": 206634,
+          "wall_ms": 5.0045,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.067958,
+          "fixture": 1,
+          "payload_bytes": 211163,
+          "wall_ms": 4.068541,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.048709,
+          "fixture": 2,
+          "payload_bytes": 206712,
+          "wall_ms": 4.04925,
+          "warmup": false
+        },
+        {
+          "cpu_ms": 4.263791,
+          "fixture": 3,
+          "payload_bytes": 211169,
+          "wall_ms": 4.268917,
+          "warmup": false
+        }
+      ],
+      "scenario": "document",
+      "width": 1024
+    }
+  ]
+}

@@ -7,7 +7,7 @@ struct MacVNCServerApp {
     @MainActor static func main() {
         signal(SIGPIPE, SIG_IGN)
         do {
-            let command = try CLI.parse(arguments: Array(CommandLine.arguments.dropFirst()))
+            let command = try CLI.parse(arguments: Array(CommandLine.arguments.dropFirst())).resolvingPassword()
             var panel: TransferPanel?
             var inbox: TransferInbox?
             let storageOptions: TransferStore.Options?

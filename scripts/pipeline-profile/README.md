@@ -1,9 +1,17 @@
 **Local pipeline profiler**
 
-These helpers support the [2026-10-11 measurements](../../docs/pipeline-profile-2026-10-11.md).
+These helpers support the [current-source measurements](../../docs/pipeline-profile-current-2026-10-11.md)
+and the [earlier 2026-10-11 measurements](../../docs/pipeline-profile-2026-10-11.md).
 They instrument a disposable source copy and a disposable copy of the user's
 Screen Sharing 3.0 application. They do not install a service or modify the
 production checkout, original application, or existing server sessions.
+
+`compare-codecs.py OUTPUT_DIRECTORY` builds a disposable copy with the Swift
+encoder comparison harness and invokes `analyze-codecs.py` to check every pixel
+with an independent RFC 6143 decoder. It does not launch a listener or UI.
+The [Zlib/ZRLE comparison](../../docs/zrle-vs-zlib-2026-10-11.md) reports both
+timing and correctness; malformed output must not count as a compression win.
+Use a new output directory outside the repository or inside `.build`.
 
 `benchmark-zlib.c` is a separate synthetic compression benchmark. It compares
 levels, strategies, scratch-buffer sizes and zlib-compatible libraries, with
@@ -21,10 +29,10 @@ source layout has changed. Build that copy in release mode and set
 profile_dir=$(mktemp -d /tmp/mac-vnc-pipeline.XXXXXX)
 python3 scripts/pipeline-profile/instrument-server.py "$PWD" "$profile_dir/server"
 swift build -c release --package-path "$profile_dir/server"
-MAC_VNC_PROFILE="$profile_dir/server.csv" \
+VNC_PASSWORD=testpass MAC_VNC_PROFILE="$profile_dir/server.csv" \
   "$profile_dir/server/.build/release/mac-vnc-server-dev" \
   --bind 127.0.0.1 --port 5911 --display 1 --encoding zlib \
-  --file-transfer --password testpass --verbose
+  --file-transfer --verbose
 ```
 
 The server stays in the foreground. Use a separate terminal for subsequent
@@ -86,6 +94,13 @@ counts. Verify that every nonempty response in each timed interval matched.
 For the encrypted Zlib/BGRX profile, it combines per-rectangle and per-record
 measurements into per-frame totals. The analyzer assumes one client session per
 input client trace and no interleaved clients in its server trace.
+
+The analyzer reports capture-copy start, copied-frame readiness and capture PTS
+as separate latency boundaries. PTS is a presentation timestamp and can occur
+after readiness; a negative PTS-to-ready value is not negative processing time.
+It also reports capture delivery rate and intervals between matched client
+framebuffer notifications. Plaintext vector writes bypass `socket_write_raw`;
+use the enclosing `encrypt_and_write` span for their write cost.
 
 The native app and framework remain closed source. Draw submission, framebuffer
 notification, and kernel socket acceptance are distinct boundaries; neither a

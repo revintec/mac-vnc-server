@@ -1,6 +1,6 @@
 # Apple Screen Sharing file transfers
 
-`--file-transfer` enables file/folder drag and drop using an experimental
+File/folder drag and drop is enabled by default (`--file-transfer`); `--no-file-transfer` disables it. It uses an experimental
 Apple compatibility profile with encryption negotiation. The file option independently selects
 Apple RFB 3.889; classic VNC viewers continue to work without file transfer.
 `--clipboard-sync` separately enables text and image clipboard sharing.
@@ -26,7 +26,7 @@ into local Finder. Shared Clipboard is separate and is not required.
 [Application drop research](session-access-and-app-drops.md#drops-into-applications-other-than-finder)
 explains target-app differences and the reverse direction's constraints.
 Files are copied; the originals are retained. With a configured password and
-encryption allowed (the default), Apple viewers use security type 30 (Diffie–Hellman), which initializes the wrapping key
+encryption allowed (`--encryption`), Apple viewers use security type 30 (Diffie–Hellman), which initializes the wrapping key
 needed by Apple's record encryption. Enter any username and the existing server
 password in Screen Sharing's login dialog. The username is a label; this server
 does not authenticate macOS accounts. Standard VNC viewers retain security type 2.
@@ -44,14 +44,14 @@ is selected by the viewer, not forced by this option. SSH or a VPN supplies a
 trusted channel over untrusted networks. `--no-password` continues to offer None
 authentication and cannot negotiate Apple's record encryption.
 
-`--file-transfer --no-encryption` selects an experimental plaintext server mode
+`--file-transfer --no-encryption` is the default experimental plaintext server mode
 using the same plain URL. It retains native capabilities and classic VNC password
 authentication. The client still requests encryption, but the server consumes
 that request without sending encryption keys or enabling encrypted records.
 Tahoe's native viewer continues in plaintext, including key input and file-drop
 registration. This behavior is undocumented and has not been verified with real
-Finder gestures on macOS 13. The normal mode honors encryption requests; the
-explicit plaintext mode does not satisfy the client's encryption preference.
+Finder gestures on macOS 13. Opting in with `--encryption` honors encryption
+requests; the default plaintext mode does not satisfy the client's encryption preference.
 With file transfer disabled, framebuffer traffic is already unencrypted, including
 with text/image clipboard sharing. See [performance measurements](performance.md).
 
@@ -195,7 +195,7 @@ Reproduce the plaintext/encrypted file-copy and policy tests with the same
 
 ### Display negotiation
 
-The opt-in file-transfer profile advertises and implements `0x12` to enter the
+The file-transfer profile advertises and implements `0x12` to enter the
 native UI path. The viewer then waits for display metadata before completing
 session setup. Native macOS prefers DisplayInfo2 (encoding 1105) when the viewer
 offers it, regardless of encoding order or duplicates; encoding 1101 is the

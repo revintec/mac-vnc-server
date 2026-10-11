@@ -39,12 +39,18 @@ for f in sent:
  end=callbacks[ci]['start']+callbacks[ci]['wall'];di=bisect.bisect_left(drawtimes,end)
  matched.append({'sent':f,'decode_start':used[0]['start'],'decode_end':end,'inflate_wall':sum(x['wall']for x in used),'inflate_cpu':sum(x['cpu']for x in used),'draw':draws[di]if di<len(draws)else None})
 # Capture timestamp lookup includes the whole trace; sequence is per source, not per client.
-ready={int(attrs(r)['seq']):r for r in read('server.csv')if r['name']=='capture_ready'}
+all_server=read('server.csv')
+ready={int(attrs(r)['seq']):r for r in all_server if r['name']=='capture_ready'}
+copies=[r for r in all_server if r['name']=='capture_buffer_copy'];copy_starts=[r['start']for r in copies]
 spans=[r for r in s if r['name']=='response_including_throttle'];starts=[r['start']for r in spans]
 for m in matched:
  f=m['sent'];j=bisect.bisect_right(starts,f['start'])-1
  m['span']=spans[j]if j>=0 and spans[j]['start']+spans[j]['wall']>=f['start']else None
  m['capture']=ready.get(int(attrs(f)['seq']))
+ capture=m['capture'];m['copy']=None
+ if capture:
+  j=bisect.bisect_right(copy_starts,capture['start'])-1
+  if j>=0 and copies[j]['start']+copies[j]['wall']>=capture['start'] and copies[j]['thread']==capture['thread']:m['copy']=copies[j]
 results={'matched_frames':len(matched),'boundary_mismatch':mismatch,'incomplete_tail':incomplete_tail,'phases':{}}
 for fn in sorted(root.glob('*-cpu.json')):
  d=json.loads(fn.read_text());t0=d.get('start_uptime_ns');t1=d.get('end_uptime_ns')
@@ -58,9 +64,14 @@ for fn in sorted(root.glob('*-cpu.json')):
  fs=[f for f in sent if t0<=f['start']<t1];phase['responses']=len(fs);phase['responses_per_s']=len(fs)/d['duration_s'];phase['rfb_MB_per_s']=sum(int(attrs(f)['bytes'])for f in fs)/1e6/d['duration_s'];phase['changed_pixels']=stats([int(attrs(f)['pixels'])for f in fs]);phase['rectangles']=stats([int(attrs(f)['rects'])for f in fs])
  ms=[m for m in matched if t0<=m['sent']['start']<t1]
  phase['matching_validation']={'nonempty_responses':sum(int(attrs(f)['pixels'])>0 for f in fs),'matched_frames':len(ms)}
+ delivered=sorted(m['decode_end']for m in ms)
+ phase['client_frame_interval_ms']=stats([(b-a)/1e6 for a,b in zip(delivered,delivered[1:])])
+ captured=[r for r in all_server if r['name']=='capture_ready' and t0<=r['start']<t1]
+ phase['captured_frames']=len(captured);phase['captures_per_s']=len(captured)/d['duration_s']
  phase['frame_latency_ms']={
   'response_including_throttle':stats([m['span']['wall']/1e6 for m in ms if m['span']]),
   'response_thread_cpu':stats([m['span']['cpu']/1e6 for m in ms if m['span']]),
+  'capture_copy_start_to_client_framebuffer':stats([(m['decode_end']-m['copy']['start'])/1e6 for m in ms if m['copy']]),
   'capture_pts_to_client_framebuffer':stats([(m['decode_end']-float(attrs(m['capture'])['pts'])*1e9)/1e6 for m in ms if m['capture']]),
   'capture_pts_to_ready':stats([(m['capture']['start']-float(attrs(m['capture'])['pts'])*1e9)/1e6 for m in ms if m['capture']]),
   'send_complete_to_decode_complete':stats([(m['decode_end']-m['sent']['start'])/1e6 for m in ms]),

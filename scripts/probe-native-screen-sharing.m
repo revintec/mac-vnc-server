@@ -103,8 +103,8 @@ static BOOL readTestPixel(id view, int x, int y, uint8_t pixel[4]) {
 
 static int testPixelPhase(id view) {
     uint8_t pixel[4] = {0};
-    // Stay inside the animated 64x64 patch, away from the test cursor at 0,0.
-    if (!readTestPixel(view, 32, 32, pixel)) return -1;
+    // Stay inside the animated patch even at 0.5 scaling, away from the cursor.
+    if (!readTestPixel(view, 16, 16, pixel)) return -1;
     if (abs((int)pixel[0] - 192) >= 8 || abs((int)pixel[1] - 128) >= 8) return -1;
     if (abs((int)pixel[2] - 64) < 8) return 0;
     if (abs((int)pixel[2] - 160) < 8) return 1;
@@ -112,6 +112,49 @@ static int testPixelPhase(id view) {
 }
 
 static BOOL hasTestPixels(id view) { return testPixelPhase(view) >= 0; }
+
+static BOOL hasDetailedTestPixels(id view) {
+    ProbeFramebuffer *buffer = [[view session] frameBuffer];
+    if (!buffer) return NO;
+    [buffer lock];
+    CGImageRef image = [buffer newCGImage];
+    size_t width = image ? CGImageGetWidth(image) : 0, height = image ? CGImageGetHeight(image) : 0;
+    if (width != 1728 || height != 1118) {
+        if (image) CGImageRelease(image);
+        [buffer unlock];
+        return NO;
+    }
+    uint8_t *pixels = calloc(width * height, 4);
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = pixels ? CGBitmapContextCreate(pixels, width, height, 8, width * 4,
+        colorSpace, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big) : NULL;
+    if (context) CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+    CGColorSpaceRelease(colorSpace);
+    CGImageRelease(image);
+    [buffer unlock];
+    if (!context) { free(pixels); return NO; }
+    // Calibrate bitmap row orientation against the known animated top-left patch.
+    // This only accounts for CGImage/bitmap coordinate conventions, not bad pixels.
+    uint8_t *top = pixels + (32 * width + 32) * 4;
+    BOOL flipped = !(abs((int)top[0] - 192) < 8 && abs((int)top[1] - 128) < 8);
+    const int counts[] = {1, 2, 3, 5, 16, 17, 32, 127, 128, 4096}, runs[] = {1, 7, 256};
+    size_t mismatches = 0;
+    for (size_t y = 0; y < height; ++y) for (size_t x = 0; x < width; ++x) {
+        if (x < 64 && y < 64) continue; // animation and the native cursor
+        size_t tile = (y / 64) * ((width + 63) / 64) + x / 64;
+        int c = (int)(((y % 64) * 64 + x % 64) / runs[(tile / 10) % 3] % counts[tile % 10]);
+        uint8_t expected[] = {(uint8_t)(c * 11 + c / 64), (uint8_t)(c * 29 + c / 256), (uint8_t)(c * 73)};
+        uint8_t *actual = pixels + (((flipped ? height - 1 - y : y) * width + x) * 4);
+        if (abs((int)actual[0] - expected[0]) > 3 || abs((int)actual[1] - expected[1]) > 3
+            || abs((int)actual[2] - expected[2]) > 3) {
+            if (mismatches++ == 0) fprintf(stderr, "detailed pixel mismatch at %zu,%zu: got %u,%u,%u expected %u,%u,%u\n",
+                x, y, actual[0], actual[1], actual[2], expected[0], expected[1], expected[2]);
+        }
+    }
+    printf("detailedPixelMismatches=%zu\n", mismatches);
+    CGContextRelease(context); free(pixels);
+    return mismatches == 0;
+}
 
 int main(int argc, char **argv) {
     @autoreleasepool {
@@ -216,6 +259,11 @@ int main(int argc, char **argv) {
             passed = passed && restoredObserveBeforePixels;
         }
         printf("initialPixels=%d\n", initialPixels);
+        if (getenv("MAC_VNC_NATIVE_DETAILED")) {
+            BOOL detailed = hasDetailedTestPixels(view);
+            printf("detailedPixels=%d\n", detailed);
+            passed = passed && detailed;
+        }
         if (expectClientCursor) {
             // RichCursor is drawn by the viewer into its framebuffer. The
             // server's desktop has no red pixels; only the cursor is red.

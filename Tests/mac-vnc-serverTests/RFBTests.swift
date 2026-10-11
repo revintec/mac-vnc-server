@@ -64,6 +64,11 @@ import zlib
     #expect(propertyList["LimitLoadToSessionType"] as? String == "Aqua")
     #expect(propertyList["ProcessType"] as? String == "Interactive")
     #expect(propertyList["WorkingDirectory"] as? String == homeDirectory.path)
+    #expect(propertyList["EnvironmentVariables"] as? [String: String] == ["HOME": homeDirectory.path])
+    #expect(throws: (any Error).self) {
+        try LaunchAgentService.plistData(executableURL: URL(fileURLWithPath: "/usr/local/bin/mac-vnc-server"),
+            arguments: ["--password", "private-test-value"], homeDirectory: homeDirectory)
+    }
     #expect(
         propertyList["ProgramArguments"] as? [String]
             == ["/usr/local/bin/mac-vnc-server", "--port", "5901"]
@@ -193,13 +198,16 @@ import zlib
     #expect(ScrollDeltaPolicy.smoothMultiplier(current: 1, target: 4) < 4)
 }
 
-@Test func cliDisablesClipboardSyncByDefault() throws {
+@Test func cliDefaultsToTunnelAndPlaintextSharing() throws {
     guard case .run(let config) = try CLI.parse(arguments: ["run"]) else {
         Issue.record("expected run command")
         return
     }
 
-    #expect(!config.clipboardSync)
+    #expect(config.bindAddress == "utun4")
+    #expect(config.clipboardSync && config.fileTransfer)
+    #expect(!config.allowEncryption)
+    #expect(config.passwordFromEnvironment)
 }
 
 @Test func cliDefaultsToAdaptiveFrameRate() throws {
@@ -212,85 +220,49 @@ import zlib
     #expect(config.adaptiveFrameRate)
 }
 
-@Test func cliUsesGeneratedPasswordConfigByDefault() throws {
+@Test func cliUsesPasswordEnvironmentByDefault() throws {
     guard case .run(let config) = try CLI.parse(arguments: ["run"]) else {
         Issue.record("expected run command")
         return
     }
 
     #expect(config.password == nil)
-    #expect(config.passwordFromConfig)
+    #expect(config.passwordFromEnvironment)
 }
 
-@Test func cliAcceptsExplicitPasswordOverride() throws {
-    guard case .run(let config) = try CLI.parse(arguments: ["run", "--password", "override"]) else {
-        Issue.record("expected run command")
-        return
+@Test func cliRejectsPasswordArgumentsWithoutEchoingTheSecret() throws {
+    do {
+        _ = try CLI.parse(arguments: ["run", "--password", "private-test-value"])
+        Issue.record("expected removal error")
+    } catch {
+        #expect(error.localizedDescription.contains("VNC_PASSWORD"))
+        #expect(!error.localizedDescription.contains("private-test-value"))
     }
+}
 
-    #expect(config.password == "override")
-    #expect(!config.passwordFromConfig)
+@Test func passwordComesOnlyFromTheEnvironment() throws {
+    let command = try CLI.parse(arguments: ["run"])
+    #expect(throws: (any Error).self) { try command.resolvingPassword(environment: [:]) }
+    #expect(throws: (any Error).self) { try command.resolvingPassword(environment: ["VNC_PASSWORD": ""]) }
+    guard case .run(let config) = try command.resolvingPassword(environment: ["VNC_PASSWORD": "  testpass  "]) else {
+        Issue.record("expected run command"); return
+    }
+    #expect(config.password == "  testpass  ")
+    #expect(!config.passwordFromEnvironment)
+    #expect(config.bindAddress == "utun4" && config.clipboardSync && config.fileTransfer && !config.allowEncryption)
+    // Non-server commands must not require a password.
+    _ = try CLI.parse(arguments: ["version"]).resolvingPassword(environment: [:])
+    _ = try CLI.parse(arguments: ["transfers"]).resolvingPassword(environment: [:])
 }
 
 @Test func cliKeepsNoPasswordAsExplicitOverride() throws {
-    guard case .run(let config) = try CLI.parse(arguments: ["run", "--no-password"]) else {
+    guard case .run(let config) = try CLI.parse(arguments: ["run", "--bind", "lo0", "--no-password"]) else {
         Issue.record("expected run command")
         return
     }
 
     #expect(config.password == nil)
-    #expect(!config.passwordFromConfig)
-}
-
-@Test func passwordStoreCreatesAndReusesEightBytePassword() throws {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("mac-vnc-server-password-\(UUID().uuidString)", isDirectory: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-
-    let firstPassword = try PasswordStore.loadOrCreate(in: directory)
-    let secondPassword = try PasswordStore.loadOrCreate(in: directory)
-    let fileURL = directory.appendingPathComponent(PasswordStore.configFileName)
-    let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-    let directoryAttributes = try FileManager.default.attributesOfItem(atPath: directory.path)
-
-    #expect(firstPassword == secondPassword)
-    #expect(firstPassword.utf8.count == PasswordStore.passwordLength)
-    #expect((fileAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
-    #expect((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
-}
-
-@Test func passwordStoreRejectsSymlinkedPaths() throws {
-    let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("mac-vnc-server-password-links-\(UUID().uuidString)", isDirectory: true)
-    let fileManager = FileManager.default
-    defer { try? fileManager.removeItem(at: root) }
-
-    let targetDirectory = root.appendingPathComponent("target", isDirectory: true)
-    let linkedDirectory = root.appendingPathComponent("config-directory", isDirectory: true)
-    try fileManager.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
-    try fileManager.createSymbolicLink(at: linkedDirectory, withDestinationURL: targetDirectory)
-
-    var rejectedDirectoryLink = false
-    do {
-        _ = try PasswordStore.loadOrCreate(in: linkedDirectory)
-    } catch {
-        rejectedDirectoryLink = true
-    }
-    #expect(rejectedDirectoryLink)
-
-    try fileManager.removeItem(at: linkedDirectory)
-    let configURL = targetDirectory.appendingPathComponent(PasswordStore.configFileName)
-    let targetURL = targetDirectory.appendingPathComponent("target.json")
-    try Data(#"{"password":"ABCDEFGH"}"#.utf8).write(to: targetURL)
-    try fileManager.createSymbolicLink(at: configURL, withDestinationURL: targetURL)
-
-    var rejectedFileLink = false
-    do {
-        _ = try PasswordStore.loadOrCreate(in: targetDirectory)
-    } catch {
-        rejectedFileLink = true
-    }
-    #expect(rejectedFileLink)
+    #expect(!config.passwordFromEnvironment)
 }
 
 @Test func cliParsesFixedFrameRate() throws {
@@ -894,7 +866,7 @@ import zlib
         pixelFormat: .serverDefault
     )
     let plainRLEBytes = try inflatePayloads([plainRLEPayload], outputCounts: [512])
-    #expect(plainRLEBytes.first == 128)
+    #expect(plainRLEBytes.first == 145) // Complete 17-color palette-RLE is smaller than plain RLE.
 }
 
 @Test func zrleEncodingHonorsClientRequestedColorShifts() throws {
@@ -1022,6 +994,9 @@ func inflatePayloads(_ payloads: [[UInt8]], outputCounts: [Int]) throws -> [UInt
             throw RFBError.protocolError("test payload is missing its length")
         }
         let compressedLength = Int(UInt32.be(payload[0], payload[1], payload[2], payload[3]))
+        guard compressedLength == payload.count - 4 else {
+            throw RFBError.protocolError("test payload compressed length mismatch")
+        }
         var compressed = Array(payload.dropFirst(4))
         var output = [UInt8](repeating: 0, count: outputCount)
         let status = compressed.withUnsafeMutableBytes { inputPointer in

@@ -1,7 +1,7 @@
 // Interactive regression probe: native ScreenSharing sender -> real server ->
 // an AppKit receiving app. Input is triggered by the visible Begin/Release buttons.
 // Build: xcrun clang -fobjc-arc -framework AppKit scripts/probe-staged-drag-release.m -o /tmp/staged-drag-release
-// Use a separate server on loopback with --password testpass --file-transfer.
+// Use a separate server on loopback with VNC_PASSWORD=testpass and --file-transfer.
 // Run: /tmp/staged-drag-release vnc://127.0.0.1:5906/
 // Wait after Begin: the target must stay orange, with no "target perform" log.
 // Release: expect content_matches=1 original_held=0, and server operation=1.

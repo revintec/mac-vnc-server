@@ -7,6 +7,31 @@ import Testing
 @Suite(.serialized)
 struct MultiClientTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil),
+          arguments: ["raw", "zlib", "zrle"])
+    func nativeScreenSharingDecodesEachSupportedEncoding(encoding: String) throws {
+        print("Native plaintext encoding check: \(encoding)")
+        try runNativeProbe(fileTransfer: true, initialMode: "restore-saved-control",
+            clientCursor: true, allowEncryption: false,
+            encodingPreference: try #require(EncodingPreference(rawValue: encoding)), detailedPattern: true)
+    }
+
+    @Test(arguments: [false, true])
+    func zrleCompactPixelsFollowAppleNegotiation(apple: Bool) throws {
+        let server = try MultiClientServer(encodingPreference: .zrle)
+        defer { server.finish() }
+        let peer = try server.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: apple ? "RFB 003.889\n" : "RFB 003.008\n")
+        var format = PixelFormat.serverDefault; format.depth = 32
+        try peer.write([0, 0, 0, 0] + format.bytes)
+        try peer.write([2, 0, 0, 1] + UInt32(16).beBytes)
+        try peer.write(fullUpdate)
+        let payload = try framePayload(peer, encoding: 16)
+        let tiles = try inflatePayloads([payload], outputCounts: [32])
+        // A solid black tile: one mode byte followed by one compact pixel.
+        #expect(tiles == [1] + [UInt8](repeating: 0, count: apple ? 3 : 4))
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil),
           arguments: [false, true], ["default", "observe", "control", "saved-observe", "restore-observe", "restore-saved-control", "restore-saved-observe"])
     func nativeScreenSharingKeepsSelectedModeAndStreams(fileTransfer: Bool, initialMode: String) throws {
         try runNativeProbe(fileTransfer: fileTransfer, initialMode: initialMode)
@@ -65,10 +90,130 @@ struct MultiClientTests {
         #expect(try Data(contentsOf: #require(store.urls(batch.id).first)) == payload)
     }
 
+    @Test func genericRequestsAreConsumedAndRetainPendingIncrementalInterest() throws {
+        let server = try MultiClientServer()
+        defer { server.finish() }
+        let peer = try server.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: "RFB 003.008\n")
+        try peer.write([2, 0, 0, 1] + UInt32(0).beBytes)
+        try peer.write(fullUpdate)
+        _ = try framePayload(peer, encoding: 0)
+        func change(_ color: UInt8, _ sequence: UInt64) {
+            server.screen.setFrame(Framebuffer(width: 2, height: 1, bgra: [color, 0, 0, 0, color, 0, 0, 0],
+                layout: VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 2, height: 1), sequence: sequence))
+        }
+        change(25, 2)
+        #expect(!peer.hasData(timeout: 0.15), "ordinary requests must not arm unsolicited streaming")
+        try peer.write([3, 1, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(try framePayload(peer, encoding: 0)[0] == 25)
+        try peer.write([3, 1, 0, 0, 0, 0, 0, 2, 0, 1])
+        #expect(!peer.hasData(timeout: 0.1), "unchanged request should remain pending")
+        change(42, 3)
+        #expect(try framePayload(peer, encoding: 0)[0] == 42)
+        #expect(!peer.hasData(timeout: 0.1))
+    }
+
+    @Test func continuousUpdatesNegotiateBoundOutstandingFramesAndStop() throws {
+        let server = try MultiClientServer()
+        defer { server.finish() }
+        let peer = try server.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: "RFB 003.008\n")
+        try peer.write([2, 0, 0, 3] + UInt32(0).beBytes
+            + UInt32(bitPattern: Int32(-313)).beBytes + UInt32(bitPattern: Int32(-312)).beBytes)
+        #expect(try peer.read(1) == [150])
+        func readFence() throws -> (UInt32, [UInt8]) {
+            #expect(try peer.read(4) == [248, 0, 0, 0])
+            let flags = try peer.number(), size = try peer.read(1)[0]
+            return (flags, try peer.read(Int(size)))
+        }
+        #expect(try readFence().0 == 0x80000000)
+        try peer.write(fullUpdate); _ = try framePayload(peer, encoding: 0)
+        try peer.write([150, 1, 0, 0, 0, 0, 0, 2, 0, 1])
+        var tokens: [[UInt8]] = []
+        func change(_ color: UInt8) {
+            server.screen.setFrame(Framebuffer(width: 2, height: 1, bgra: [color, 0, 0, 0, color, 0, 0, 0],
+                layout: VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 2, height: 1), sequence: UInt64(color) + 1))
+        }
+        for color: UInt8 in [10, 20, 30] {
+            change(color)
+            #expect(try framePayload(peer, encoding: 0)[0] == color)
+            let fence = try readFence(); #expect(fence.0 == 0x80000001); tokens.append(fence.1)
+        }
+        change(40)
+        #expect(!peer.hasData(timeout: 0.15), "at most three frames may be awaiting decode fences")
+        try peer.write([248, 0, 0, 0] + UInt32(1).beBytes + [8] + tokens[0])
+        #expect(try framePayload(peer, encoding: 0)[0] == 40)
+        _ = try readFence()
+        try peer.write([150, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        #expect(try peer.read(1) == [150])
+        change(50)
+        #expect(!peer.hasData(timeout: 0.15))
+        try peer.write(fullUpdate)
+        #expect(try framePayload(peer, encoding: 0)[0] == 50)
+        try peer.write([248, 0, 0, 0] + UInt32(0x80000003).beBytes + [3, 1, 2, 3])
+        let reply = try readFence()
+        #expect(reply.0 == 3 && reply.1 == [1, 2, 3])
+    }
+
+    @Test func copyRectIsNegotiatedUsesDeliveredPixelsAndNeverServesFullRefresh() throws {
+        let w = 256, h = 192
+        let server = try MultiClientServer(width: w, height: h)
+        defer { server.finish() }
+        let peer = try server.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: "RFB 003.008\n")
+        try peer.write([2, 0, 0, 2] + UInt32(0).beBytes + UInt32(1).beBytes)
+        let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: w, height: h)
+        var original = [UInt8](repeating: 0, count: w * h * 4)
+        for y in 0..<h { for x in 0..<w {
+            original[(y * w + x) * 4] = UInt8(truncatingIfNeeded: x * 31 ^ y)
+            original[(y * w + x) * 4 + 1] = UInt8(truncatingIfNeeded: y * 17 ^ x)
+        } }
+        server.screen.setFrame(Framebuffer(width: w, height: h, bgra: original, layout: layout, sequence: 2))
+        var client = [UInt8](repeating: 0, count: original.count)
+        func update(_ incremental: UInt8, x: UInt16 = 0, width: UInt16 = 256) throws {
+            try peer.write([3, incremental] + x.beBytes + UInt16(0).beBytes + width.beBytes + UInt16(h).beBytes)
+        }
+        func apply() throws -> [UInt32] {
+            let header = try peer.read(4); #expect(Array(header.prefix(2)) == [0, 0])
+            var encodings: [UInt32] = []
+            for _ in 0..<Int(UInt16.be(header[2], header[3])) {
+                let rect = try peer.read(8), kind = try peer.number(); encodings.append(kind)
+                let x = Int(UInt16.be(rect[0], rect[1])), y = Int(UInt16.be(rect[2], rect[3]))
+                let width = Int(UInt16.be(rect[4], rect[5])), height = Int(UInt16.be(rect[6], rect[7]))
+                if kind == 0 {
+                    let bytes = try peer.read(width * height * 4)
+                    for row in 0..<height {
+                        let offset = ((y + row) * w + x) * 4
+                        client.replaceSubrange(offset..<(offset + width * 4), with: bytes[(row * width * 4)..<((row + 1) * width * 4)])
+                    }
+                } else {
+                    #expect(kind == 1)
+                    let src = try peer.read(4), sx = Int(UInt16.be(src[0], src[1])), sy = Int(UInt16.be(src[2], src[3]))
+                    let snapshot = client
+                    for row in 0..<height {
+                        let dst = ((y + row) * w + x) * 4, source = ((sy + row) * w + sx) * 4
+                        client.replaceSubrange(dst..<(dst + width * 4), with: snapshot[source..<(source + width * 4)])
+                    }
+                }
+            }
+            return encodings
+        }
+        // Expanding interest after a partial response must establish all pixels.
+        try update(0, width: 128); _ = try apply()
+        try update(1); #expect(try apply() == [0]); #expect(client == original)
+        var scrolled = original
+        for y in 0..<(h - 7) { scrolled.replaceSubrange((y * w * 4)..<((y + 1) * w * 4), with: original[((y + 7) * w * 4)..<((y + 8) * w * 4)]) }
+        server.screen.setFrame(Framebuffer(width: w, height: h, bgra: scrolled, layout: layout, sequence: 3))
+        try update(1); #expect(try apply().contains(1)); #expect(client == scrolled)
+        try update(0); #expect(try apply() == [0]); #expect(client == scrolled)
+    }
+
     private func runNativeProbe(fileTransfer: Bool, initialMode: String,
-                                clientCursor: Bool = false, allowEncryption: Bool = true) throws {
+                                clientCursor: Bool = false, allowEncryption: Bool = true,
+                                encodingPreference: EncodingPreference = .auto, detailedPattern: Bool = false) throws {
         let server = try MultiClientServer(fileTransfer: fileTransfer, width: 1728, height: 1118,
-            nativePattern: true, clientCursor: clientCursor, allowEncryption: allowEncryption)
+            nativePattern: true, clientCursor: clientCursor, allowEncryption: allowEncryption,
+            encodingPreference: encodingPreference, detailedPattern: detailedPattern)
         defer { server.finish() }
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"]))
@@ -76,6 +221,7 @@ struct MultiClientTests {
                            fileTransfer ? "1" : "0", initialMode]
         var environment = ProcessInfo.processInfo.environment
         if clientCursor { environment["MAC_VNC_NATIVE_CURSOR"] = "1" }
+        if detailedPattern { environment["MAC_VNC_NATIVE_DETAILED"] = "1" }
         if !allowEncryption { environment["MAC_VNC_NATIVE_STREAM_SECONDS"] = "20" }
         probe.environment = environment
         let output = Pipe()
@@ -100,6 +246,7 @@ struct MultiClientTests {
         #expect(text.contains("streamingPixels=1"), "\(text)")
         #expect(text.contains("observing=1 canResumeControl=1 resumedControl=1"), "\(text)")
         #expect(text.contains("initialPixels=1"), "\(text)")
+        if detailedPattern { #expect(text.contains("detailedPixels=1"), "\(text)") }
         if clientCursor { #expect(text.contains("clientCursorReceived=1"), "\(text)") }
         #expect(server.input.snapshot.keyTransitions == [true, false], "native key down/up must reach mock input")
         #expect(server.input.snapshot.keySymbols == [0x61, 0x61])
@@ -876,7 +1023,7 @@ struct MultiClientTests {
         #expect(try peer.read(4) == [0, 0, 0, 1])
         #expect(try peer.read(8) == [0, 0, 0, 0, 0, 2, 0, 1])
         #expect(try peer.number() == encoding)
-        if encoding == 6 {
+        if encoding == 6 || encoding == 16 {
             let count = try peer.number()
             return try count.beBytes + peer.read(Int(count))
         }
@@ -896,7 +1043,8 @@ private final class MultiClientServer: @unchecked Sendable {
     init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5,
          authenticationTimeout: TimeInterval = 120, messageTimeout: TimeInterval = 5,
          fileTransfer: Bool = false, width: Int = 2, height: Int = 1, nativePattern: Bool = false,
-         clientCursor: Bool = false, allowEncryption: Bool = true, transferInbox: TransferInbox? = nil) throws {
+         clientCursor: Bool = false, allowEncryption: Bool = true, transferInbox: TransferInbox? = nil,
+         encodingPreference: EncodingPreference = .auto, detailedPattern: Bool = false) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)
@@ -909,12 +1057,13 @@ private final class MultiClientServer: @unchecked Sendable {
         guard status == 0 else { throw RFBError.socketError("test getsockname failed") }
         port = UInt16(bigEndian: address.sin_port)
         let config = ServerConfig(bindAddress: "127.0.0.1", port: port, password: "testpass",
-            passwordFromConfig: false, fps: 30, scale: 1, encodingPreference: .auto,
+            passwordFromEnvironment: false, fps: 30, scale: 1, encodingPreference: encodingPreference,
             displaySelection: .all, verbose: false, clipboardSync: true,
             adaptiveStreaming: false, adaptiveFrameRate: false, fileTransfer: fileTransfer,
             allowEncryption: allowEncryption)
         let inputs = SharedInputController(input: input)
-        screen = MultiClientScreen(width: width, height: height, nativePattern: nativePattern, clientCursor: clientCursor)
+        screen = MultiClientScreen(width: width, height: height, nativePattern: nativePattern,
+            clientCursor: clientCursor, detailedPattern: detailedPattern)
         server = RFBServer(config: config, capture: screen,
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
@@ -972,6 +1121,11 @@ private final class MultiClientScreen: FramebufferSource {
     private var size: (width: Int, height: Int)
     let nativePattern: Bool
     let clientCursor: Bool
+    let detailedPattern: Bool
+    private var overrideFrame: Framebuffer?
+    let changes = FrameChangeHub()
+    var frameChanges: FrameChangeHub? { changes }
+    func setFrame(_ frame: Framebuffer) { lock.withLock { overrideFrame = frame }; changes.signal() }
     private var image = CursorImage(width: 1, height: 1, hotX: 0, hotY: 0, bgra: [0, 0, 255, 255])
     var cursorImage: CursorImage {
         get { lock.withLock { image } }
@@ -980,16 +1134,18 @@ private final class MultiClientScreen: FramebufferSource {
     var cursorSnapshot: CursorSnapshot? {
         clientCursor ? CursorSnapshot(image: cursorImage, position: .zero) : nil
     }
-    init(width: Int, height: Int, nativePattern: Bool, clientCursor: Bool) {
+    init(width: Int, height: Int, nativePattern: Bool, clientCursor: Bool, detailedPattern: Bool) {
         size = (width, height)
         self.nativePattern = nativePattern
         self.clientCursor = clientCursor
+        self.detailedPattern = detailedPattern
     }
     func resize(width: Int, height: Int) {
         lock.withLock { size = (width, height) }
     }
     var includesCursor: Bool { nativePattern && !clientCursor }
     func capture() throws -> Framebuffer {
+        if let frame = lock.withLock({ overrideFrame }) { return frame }
         let (width, height) = lock.withLock { size }
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         // Alternate a synthetic color twice per second. The native probe must
@@ -999,6 +1155,20 @@ private final class MultiClientScreen: FramebufferSource {
             for offset in stride(from: 0, to: pixels.count, by: 4) {
                 pixels[offset] = 64; pixels[offset + 1] = 128
                 pixels[offset + 2] = 192; pixels[offset + 3] = 255
+            }
+            if detailedPattern {
+                // Exercise all palette sizes, raw tiles, and short/long runs.
+                // The native probe checks every pixel outside the animated patch.
+                let counts = [1, 2, 3, 5, 16, 17, 32, 127, 128, 4096]
+                let runs = [1, 7, 256]
+                for y in 0..<height { for x in 0..<width where x >= 64 || y >= 64 {
+                    let tile = (y / 64) * ((width + 63) / 64) + x / 64
+                    let color = ((y % 64) * 64 + x % 64) / runs[(tile / 10) % 3] % counts[tile % 10]
+                    let offset = (y * width + x) * 4
+                    pixels[offset] = UInt8(truncatingIfNeeded: color * 73)
+                    pixels[offset + 1] = UInt8(truncatingIfNeeded: color * 29 + color / 256)
+                    pixels[offset + 2] = UInt8(truncatingIfNeeded: color * 11 + color / 64)
+                } }
             }
             if phase % 2 != 0 {
                 for y in 0..<min(64, height) {

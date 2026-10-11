@@ -4,7 +4,7 @@ struct ServerConfig {
     let bindAddress: String
     let port: UInt16
     let password: String?
-    let passwordFromConfig: Bool
+    let passwordFromEnvironment: Bool
     let fps: Int
     let scale: Double
     let encodingPreference: EncodingPreference
@@ -13,12 +13,13 @@ struct ServerConfig {
     let clipboardSync: Bool
     let adaptiveStreaming: Bool
     let adaptiveFrameRate: Bool
-    var fileTransfer = false
+    var fileTransfer = true
     var cursorMode: CursorMode = .auto
-    var allowEncryption = true
+    var allowEncryption = false
     var zlibConfiguration = ZlibConfiguration()
     var transferOptions = TransferStore.Options()
     var nativeFileDrops = false
+    var insecureAllowNoAuth = false
 }
 
 enum DisplaySelection: Equatable {
@@ -49,12 +50,16 @@ enum RFBPseudoEncoding {
     static let xCursor: Int32 = -240
     static let richCursor: Int32 = -239
     static let desktopSize: Int32 = -223
+    static let continuousUpdates: Int32 = -313
+    static let fence: Int32 = -312
     static let extendedDesktopSize: Int32 = -308
 }
 
 struct RFBClientCapabilities: Equatable {
     let advertisedEncodings: [Int32]
     let supportsRaw: Bool
+    let supportsContinuousUpdates: Bool
+    let supportsFence: Bool
     let supportsCopyRect: Bool
     let supportsTight: Bool
     let supportsZlib: Bool
@@ -68,6 +73,8 @@ struct RFBClientCapabilities: Equatable {
     init(encodings: [Int32]) {
         advertisedEncodings = encodings
         supportsRaw = encodings.contains(RFBEncoding.raw.rawValue)
+        supportsContinuousUpdates = encodings.contains(RFBPseudoEncoding.continuousUpdates)
+        supportsFence = encodings.contains(RFBPseudoEncoding.fence)
         supportsCopyRect = encodings.contains(RFBStandardEncoding.copyRect)
         supportsTight = encodings.contains(RFBStandardEncoding.tight)
         supportsZlib = encodings.contains(RFBEncoding.zlib.rawValue)
@@ -86,6 +93,8 @@ struct RFBClientCapabilities: Equatable {
         let names = [
             supportsRaw ? "raw" : nil,
             supportsCopyRect ? "copyrect" : nil,
+            supportsContinuousUpdates ? "continuous-updates" : nil,
+            supportsFence ? "fence" : nil,
             supportsTight ? "tight" : nil,
             supportsZlib ? "zlib" : nil,
             supportsZRLE ? "zrle" : nil,
@@ -147,12 +156,19 @@ final class RFBServer: @unchecked Sendable {
 
     func run(listener suppliedListener: ListeningSocket? = nil) throws {
         let listener = try suppliedListener ?? ListeningSocket(bindAddress: config.bindAddress, port: config.port)
+        // Recheck the actual address: an interface may change after CLI parsing
+        // or between service installation and launch.
+        guard config.password != nil || config.passwordFromEnvironment || config.insecureAllowNoAuth
+                || BindAddress.isLoopback(listener.bindAddress) else {
+            throw RFBError.socketError("refusing unauthenticated VNC on \(listener.bindAddress); use --insecure-allow-no-auth to opt in")
+        }
         defer {
             stop()
             workers.wait()
         }
         logger.info("mac-vnc-server \(AppVersion.current)")
-        logger.info("mac-vnc-server listening on \(config.bindAddress):\(config.port)")
+        let interfaceDescription = listener.bindAddress == config.bindAddress ? "" : " (interface \(config.bindAddress))"
+        logger.info("mac-vnc-server listening on \(listener.bindAddress):\(config.port)\(interfaceDescription)")
         let fpsDescription = config.adaptiveFrameRate ? "auto(60-45-30)" : "\(config.fps)"
         logger.info("fps=\(fpsDescription) scale=\(config.scale) encoding=\(config.encodingPreference.rawValue) display=\(config.displaySelection.description)")
         logger.info("zlib backend=\(config.zlibConfiguration.backend.rawValue) version=\(config.zlibConfiguration.backend.version) level=\(config.zlibConfiguration.initialLevel) adaptive=\(config.adaptiveStreaming && config.zlibConfiguration.level == nil)")
@@ -177,7 +193,7 @@ final class RFBServer: @unchecked Sendable {
         }
         logger.info("shared desktop: up to \(maximumClients) concurrent clients per port")
         let connectionSuffix = config.fileTransfer ? "/" : ""
-        logger.info("Connect with vnc://\(config.bindAddress == "0.0.0.0" ? "127.0.0.1" : config.bindAddress):\(config.port)\(connectionSuffix)")
+        logger.info("Connect with vnc://\(listener.bindAddress == "0.0.0.0" ? "127.0.0.1" : listener.bindAddress):\(config.port)\(connectionSuffix)")
 
         while !lock.withLock({ stopped }) {
             guard let client = try listener.acceptClient(timeout: 0.25) else { continue }
@@ -389,6 +405,8 @@ final class RFBClientSession: @unchecked Sendable {
         let encoding: RFBEncoding
         let pixelFormat: PixelFormat
         let rects: [Rect]
+        let coverage: Rect
+        let copiedPixels: Int
         let encodedRects: [[UInt8]]
         let desktopSizeChanged: Bool
         let changedPixels: Int
@@ -423,10 +441,13 @@ final class RFBClientSession: @unchecked Sendable {
     private var pixelFormat = PixelFormat.serverDefault
     private var clientCapabilities = RFBClientCapabilities(encodings: [RFBEncoding.raw.rawValue])
     private var previousFramebuffer: Framebuffer?
+    private var previousCoverage: Rect?
     private var currentLayout = VirtualDisplayLayout.empty
     private var lastCursorImage: CursorImage?
     private var lastCursorFormat: PixelFormat?
-    private var lastFramebufferUpdate = Date.distantPast
+    private var pacer = FramePacer()
+    private let wake = FrameWakeSignal()
+    private var scaledCache = ScaledFramebufferCache()
     private var hasSentFramebufferUpdate = false
     private let zrleEncoder: ZRLEEncoder
     private let zlibEncoder: ZlibEncoder
@@ -462,7 +483,12 @@ final class RFBClientSession: @unchecked Sendable {
     private var appleClipboardGeneration: UInt64 = 0
     private var appleAutomaticUpdate: FramebufferUpdateRequest?
     private var applePushInterval: TimeInterval = 0
-    private var appleNextPush = Date.distantPast
+    private var appleNextPush: UInt64 = 0
+    private var continuousUpdate: FramebufferUpdateRequest?
+    private var announcedContinuous = false
+    private var announcedFence = false
+    private var fenceCounter: UInt64 = 0
+    private var outstandingFences: Set<UInt64> = []
     // Accessed only by the writer; retained between a promises-only and a full fetch.
     private var applePromisedContent: (generation: UInt64, content: ClipboardContent)?
     private var appleIncomingPromise = false
@@ -471,6 +497,8 @@ final class RFBClientSession: @unchecked Sendable {
     private static let maxClassicClipboardBytes = 16 * 1_024 * 1_024
 
     private enum WriterCommand {
+        case protocolMessage([UInt8])
+        case barrier([UInt8], DispatchSemaphore)
         case clipboardFetch(requestID: UInt32, promises: Bool)
         case clipboardReceived(ClipboardContent, promises: Bool, canRequest: Bool)
         case clipboardReset
@@ -523,7 +551,7 @@ final class RFBClientSession: @unchecked Sendable {
         self.adaptiveFrameRate = adaptiveFrameRate
         self.logger = logger
         adaptiveFrameRateController = AdaptiveFrameRateController(startingFrameRate: fps)
-        zrleEncoder = try ZRLEEncoder()
+        zrleEncoder = try ZRLEEncoder(configuration: zlibConfiguration)
         zlibEncoder = try ZlibEncoder(configuration: zlibConfiguration)
     }
 
@@ -553,8 +581,10 @@ final class RFBClientSession: @unchecked Sendable {
                 }
             }
         }
+        let observer = capture.frameChanges?.observe { [weak self] in self?.wake.signal() }
         startFramebufferWriter()
         defer {
+            if let observer { capture.frameChanges?.remove(observer) }
             fileTransfer?.stop()
             stopFramebufferWriter()
             input.releaseKeys()
@@ -584,6 +614,10 @@ final class RFBClientSession: @unchecked Sendable {
             try handleSetEncodings()
         case 3:
             try handleFramebufferUpdateRequestMessage()
+        case 150:
+            try handleContinuousUpdates()
+        case 248:
+            try handleFence()
         case 4:
             try handleKeyEvent()
         case 5:
@@ -828,13 +862,26 @@ final class RFBClientSession: @unchecked Sendable {
         let capabilities = RFBClientCapabilities(encodings: encodings)
         state.lock()
         clientCapabilities = capabilities
+        if !usesAppleExtensions {
+            if capabilities.supportsContinuousUpdates && !announcedContinuous {
+                announcedContinuous = true
+                writerCommands.append(.protocolMessage([150]))
+            }
+            if capabilities.supportsFence && !announcedFence {
+                announcedFence = true
+                writerCommands.append(.protocolMessage(Self.fenceMessage(flags: 0x80000000, payload: [])))
+            }
+            if !capabilities.supportsContinuousUpdates { continuousUpdate = nil }
+            if !capabilities.supportsFence { outstandingFences.removeAll() }
+            wake.signal()
+        }
         pendingAppleDisplayInfo = usesAppleExtensions && fileTransferEnabled
             && AppleRFB.preferredDisplayEncoding(in: encodings) != nil
-        if pendingAppleDisplayInfo { state.signal() }
+        if pendingAppleDisplayInfo { state.signal(); wake.signal() }
         if capture.includesCursor || capture.cursorSnapshot != nil {
             pendingCursorEncoding = capabilities.supportsRichCursor ? RFBPseudoEncoding.richCursor
                 : (capabilities.supportsXCursor ? RFBPseudoEncoding.xCursor : nil)
-            state.signal()
+            state.signal(); wake.signal()
         }
         state.unlock()
         logger.verbose("client capabilities: \(capabilities.summary)")
@@ -849,14 +896,25 @@ final class RFBClientSession: @unchecked Sendable {
         let height = Int(UInt16.be(header[7], header[8]))
 
         state.lock()
-        latestUpdateRequest = FramebufferUpdateRequest(
-            incremental: incremental,
-            rect: Rect(x: x, y: y, width: width, height: height)
-        )
+        if continuousUpdate != nil && incremental {
+            state.unlock()
+            return
+        }
+        var pending = FramebufferUpdateRequest(incremental: incremental,
+            rect: Rect(x: x, y: y, width: width, height: height))
+        // A newer request must not discard an outstanding refresh or region.
+        for old in [activeUpdateRequest, latestUpdateRequest].compactMap({ $0 }) {
+            let x0 = min(old.rect.x, pending.rect.x), y0 = min(old.rect.y, pending.rect.y)
+            let x1 = max(old.rect.x + old.rect.width, pending.rect.x + pending.rect.width)
+            let y1 = max(old.rect.y + old.rect.height, pending.rect.y + pending.rect.height)
+            pending = FramebufferUpdateRequest(incremental: old.incremental && pending.incremental,
+                rect: Rect(x: x0, y: y0, width: x1 - x0, height: y1 - y0))
+        }
+        latestUpdateRequest = pending
         updateRequestsReceived += 1
         let requestNumber = updateRequestsReceived
         let fullRefresh = forceFullFramebuffer
-        state.signal()
+        state.signal(); wake.signal()
         state.unlock()
         if requestNumber <= 8 || !incremental || fullRefresh {
             logger.verbose("FramebufferUpdateRequest: number=\(requestNumber) incremental=\(incremental) rect=\(x),\(y) \(width)x\(height) full_refresh=\(fullRefresh) [client_fd=\(socket.fd)]")
@@ -876,7 +934,7 @@ final class RFBClientSession: @unchecked Sendable {
                 state.lock()
                 writerError = error
                 stopped = true
-                state.broadcast()
+                state.broadcast(); wake.signal()
                 state.unlock()
             }
         }
@@ -885,10 +943,12 @@ final class RFBClientSession: @unchecked Sendable {
     private func framebufferWriterLoop() throws {
         while true {
             state.lock()
-            let automaticUpdateDue = appleAutomaticUpdate != nil && Date() >= appleNextPush
+            let automaticUpdateDue = (appleAutomaticUpdate != nil && DispatchTime.now().uptimeNanoseconds >= appleNextPush) || continuousUpdate != nil
             if latestUpdateRequest == nil && activeUpdateRequest == nil && !automaticUpdateDue && writerCommands.isEmpty && !pendingAppleDisplayInfo && pendingAppleFramebufferScale == nil && !stopped {
                 // Pasteboard monitoring must keep running without framebuffer requests.
-                _ = state.wait(until: Date().addingTimeInterval(0.1))
+                state.unlock()
+                wake.wait(until: .now() + 0.1)
+                state.lock()
             }
             if stopped {
                 state.unlock()
@@ -906,13 +966,16 @@ final class RFBClientSession: @unchecked Sendable {
                 request = nil
             } else if let latest = latestUpdateRequest {
                 latestUpdateRequest = nil
-                activeUpdateRequest = usesAppleExtensions ? nil : latest
+                activeUpdateRequest = latest
                 request = latest
-            } else if let automatic = appleAutomaticUpdate, Date() >= appleNextPush {
+            } else if let continuous = continuousUpdate, outstandingFences.count < 3 {
+                request = continuous
+                unsolicited = true
+            } else if let automatic = appleAutomaticUpdate, DispatchTime.now().uptimeNanoseconds >= appleNextPush {
                 request = automatic
                 unsolicited = true
             } else if let active = activeUpdateRequest {
-                request = FramebufferUpdateRequest(incremental: true, rect: active.rect)
+                request = active
             } else {
                 request = nil
             }
@@ -942,12 +1005,21 @@ final class RFBClientSession: @unchecked Sendable {
             }
             try sendClipboardChangeIfNeeded()
             if let request {
-                try sendFramebufferUpdate(request, unsolicited: unsolicited, forceCursor: cursorEncoding != nil)
+                let sent = try sendFramebufferUpdate(request, unsolicited: unsolicited, forceCursor: cursorEncoding != nil)
+                if sent && !unsolicited { state.withLock { activeUpdateRequest = nil } }
+                if sent && !usesAppleExtensions { try sendFrameFenceIfNeeded() }
+                if !sent {
+                    // Frame arrivals wake this wait immediately; the short poll
+                    // also catches cursor changes and sources without callbacks.
+                    wake.wait(until: .now() + min(frameInterval, 1.0 / 30))
+                }
                 if usesAppleExtensions {
                     state.lock()
-                    appleNextPush = Date().addingTimeInterval(applePushInterval)
+                    appleNextPush = DispatchTime.now().uptimeNanoseconds + UInt64(applePushInterval * 1_000_000_000)
                     state.unlock()
                 }
+            } else {
+                wake.wait(until: .now() + 0.033)
             }
         }
     }
@@ -955,7 +1027,7 @@ final class RFBClientSession: @unchecked Sendable {
     private func stopFramebufferWriter() {
         state.lock()
         stopped = true
-        state.broadcast()
+        state.broadcast(); wake.signal()
         state.unlock()
         socket.shutdown()
         writer.wait()
@@ -979,6 +1051,7 @@ final class RFBClientSession: @unchecked Sendable {
         // next request. This snapshot is not a valid diff baseline until the
         // forced full refresh has been sent.
         previousFramebuffer = framebuffer
+        previousCoverage = nil
         currentLayout = sourceLayout
         state.unlock()
         let message = encoding == AppleRFB.displayLayoutEncoding
@@ -991,16 +1064,11 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private func captureClientFramebuffer() throws -> (framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout) {
-        var captured = try capture.capture()
-        if !capture.includesCursor, !state.withLock({ usesClientCursorLocked }),
-           let cursor = capture.cursorSnapshot {
-            captured = try cursor.composited(over: captured)
-        }
+        let captured = try capture.capture()
+        let cursor = !capture.includesCursor && !state.withLock({ usesClientCursorLocked })
+            ? capture.cursorSnapshot : nil
         let scale = state.withLock { CGFloat(usesAppleExtensions ? appleFramebufferScale : adaptiveScale) }
-        // Legacy DisplayInfo records infer scaled bounds by rounding the
-        // original pixel dimensions, including on physical Retina displays.
-        let framebuffer = try FramebufferResampling.scale(captured, factor: scale,
-            roundPixelDimensions: usesAppleExtensions)
+        let framebuffer = try scaledCache.frame(captured, factor: scale, rounded: usesAppleExtensions, cursor: cursor)
         return (framebuffer, captured.layout)
     }
 
@@ -1009,9 +1077,10 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private func sendFramebufferUpdate(_ request: FramebufferUpdateRequest, unsolicited: Bool = false,
-                                       forceCursor: Bool = false) throws {
+                                       forceCursor: Bool = false) throws -> Bool {
         frameHadNetworkStall = false
-        throttleFrameRate()
+        try throttleFrameRate()
+        let pacingStarted = DispatchTime.now().uptimeNanoseconds
         let frameStarted = Date()
         let measureTimings = logger.isVerbose
         state.lock()
@@ -1038,7 +1107,7 @@ final class RFBClientSession: @unchecked Sendable {
                 // Do this before encoding: an unsent zlib/ZRLE frame must not
                 // advance the persistent compression stream.
                 try sendAppleDisplayInfo(framebuffer: captured.framebuffer, sourceLayout: captured.sourceLayout)
-                return
+                return true
             }
             let candidate = try prepareFramebufferUpdate(request, framebuffer: captured.framebuffer,
                 sourceLayout: captured.sourceLayout, captureDuration: capturedDuration)
@@ -1076,10 +1145,13 @@ final class RFBClientSession: @unchecked Sendable {
                 cursorImage = image
             }
         }
-        if unsolicited && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && cursorRectangle == nil {
-            return
+        if (unsolicited || !usesAppleExtensions) && request.incremental && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && cursorRectangle == nil {
+            return false
         }
 
+        // Empty capture checks must not consume an FPS slot. When the next
+        // buffer arrives it can be sent immediately if the deadline has passed.
+        pacer.started(at: pacingStarted, interval: frameInterval)
         if let transaction = prepared.transaction {
             try commit(transaction)
         }
@@ -1098,7 +1170,7 @@ final class RFBClientSession: @unchecked Sendable {
             forceFullFramebuffer = true
             networkStallNotifications = 0
             state.unlock()
-            return
+            return true
         }
 
         let rectCount = prepared.encodedRects.count + (cursorRectangle == nil ? 0 : 1)
@@ -1134,7 +1206,7 @@ final class RFBClientSession: @unchecked Sendable {
             logger.verbose(
                 "updates=\(updatesSent) encoding=\(prepared.encoding) last_rects=\(prepared.rects.count) " +
                 "bytes=\(updateBytes) total_bytes=\(bytesSent) " +
-                "changed_pixels=\(prepared.changedPixels) " +
+                "changed_pixels=\(prepared.changedPixels) copyrect_pixels=\(prepared.copiedPixels) " +
                 "raw_bytes=\(prepared.uncompressedBytes) payload_bytes=\(prepared.payloadBytes) " +
                 "compression_ratio=\(String(format: "%.2f", compressionRatio)) " +
                 "stale_retries=\(staleFrameRetries) network_stalls=\(networkStalls) " +
@@ -1146,7 +1218,9 @@ final class RFBClientSession: @unchecked Sendable {
                 "[client_fd=\(socket.fd)]"
             )
         }
-        previousFramebuffer = prepared.framebuffer
+        previousFramebuffer = committedBaseline(prepared)
+        if prepared.coverage == Rect(x: 0, y: 0, width: prepared.framebuffer.width, height: prepared.framebuffer.height)
+            || previousCoverage?.contains(prepared.coverage) != true { previousCoverage = prepared.coverage }
         // Apple's pointer messages stay in the original framebuffer coordinates
         // even when its transmitted image is scaled down.
         currentLayout = usesAppleExtensions ? prepared.sourceLayout : prepared.framebuffer.layout
@@ -1170,6 +1244,7 @@ final class RFBClientSession: @unchecked Sendable {
             hadNetworkStall: hadNetworkStall
         )
         adaptFrameRate(frameDuration: frameDuration)
+        return true
 
     }
 
@@ -1188,9 +1263,11 @@ final class RFBClientSession: @unchecked Sendable {
         state.lock()
         format = pixelFormat
         encoding = selectedEncodingLocked()
+        let zrleFormat = format.zrleFormat(forAppleClient: usesAppleExtensions || clientCapabilities.isAppleScreenSharingClient)
         previous = previousFramebuffer
         sentBefore = hasSentFramebufferUpdate
         supportsResize = !usesAppleExtensions && clientCapabilities.supportsDynamicResize
+        let supportsCopyRect = clientCapabilities.supportsCopyRect
         let useEncodingTransaction = !clientCapabilities.isAppleScreenSharingClient
         forceFull = forceFullFramebuffer
         state.unlock()
@@ -1201,7 +1278,12 @@ final class RFBClientSession: @unchecked Sendable {
         let requested = framebufferSizeChanged || forceFull
             ? Rect(x: 0, y: 0, width: framebuffer.width, height: framebuffer.height)
             : request.rect
+        let coverage = Rect(x: max(0, min(framebuffer.width, requested.x)),
+            y: max(0, min(framebuffer.height, requested.y)),
+            width: max(0, min(framebuffer.width, requested.x + requested.width) - max(0, requested.x)),
+            height: max(0, min(framebuffer.height, requested.y + requested.height) - max(0, requested.y)))
         let shouldDiff = sentBefore && request.incremental && !framebufferSizeChanged && !forceFull
+            && previousCoverage?.contains(coverage) == true
         let diffStarted = logger.isVerbose ? Date() : .distantPast
         let dirtyRects: [Rect]?
         if shouldDiff,
@@ -1214,7 +1296,7 @@ final class RFBClientSession: @unchecked Sendable {
             dirtyRects = nil
         }
 
-        let rects: [Rect]
+        var rects: [Rect]
         if resizeUpdate {
             rects = []
         } else if shouldDiff,
@@ -1236,9 +1318,16 @@ final class RFBClientSession: @unchecked Sendable {
                 tileSize: tileSize
             )
         }
+        var copies: [ScrollCopy] = []
+        if shouldDiff, supportsCopyRect, let previous, let valid = previousCoverage {
+            let plan = ScrollCopyPlanner.plan(current: framebuffer, previous: previous, dirty: rects, valid: valid)
+            copies = plan.copies
+            rects = plan.repaint
+        }
+        let copiedPixels = copies.reduce(0) { $0 + $1.rect.area }
         let diffDuration = logger.isVerbose ? Date().timeIntervalSince(diffStarted) : 0
         let transaction: EncodingTransaction?
-        if resizeUpdate {
+        if resizeUpdate || rects.isEmpty {
             transaction = nil
         } else if useEncodingTransaction {
             switch encoding {
@@ -1253,12 +1342,12 @@ final class RFBClientSession: @unchecked Sendable {
             transaction = nil
         }
 
-        var encodedRects: [[UInt8]] = []
-        encodedRects.reserveCapacity(rects.count)
+        var encodedRects = copies.map(\.bytes)
+        encodedRects.reserveCapacity(rects.count + copies.count)
         var encodeDuration = 0.0
-        var changedPixels = 0
+        var changedPixels = copiedPixels
         var uncompressedBytes = 0
-        var payloadBytes = 0
+        var payloadBytes = copies.count * 4
 
         for rect in rects {
             let encodeStarted = DispatchTime.now().uptimeNanoseconds
@@ -1267,9 +1356,9 @@ final class RFBClientSession: @unchecked Sendable {
             switch encoding {
             case .zrle:
                 if case .zrle(let transaction) = transaction {
-                    payload = try transaction.encode(rect: rect, framebuffer: framebuffer, pixelFormat: format)
+                    payload = try transaction.encode(rect: rect, framebuffer: framebuffer, pixelFormat: zrleFormat)
                 } else {
-                    payload = try zrleEncoder.encode(rect: rect, framebuffer: framebuffer, pixelFormat: format)
+                    payload = try zrleEncoder.encode(rect: rect, framebuffer: framebuffer, pixelFormat: zrleFormat)
                 }
             case .zlib:
                 if case .zlib(let transaction) = transaction {
@@ -1282,7 +1371,7 @@ final class RFBClientSession: @unchecked Sendable {
             }
             encodeDuration += elapsedSeconds(since: encodeStarted)
             changedPixels += rect.width * rect.height
-            let bytesPerPixel = encoding == .zrle ? format.cPixelByteCount : Int(format.bitsPerPixel / 8)
+            let bytesPerPixel = encoding == .zrle ? zrleFormat.cPixelByteCount : Int(format.bitsPerPixel / 8)
             uncompressedBytes += rect.width * rect.height * bytesPerPixel
             let encodedPayloadBytes: Int
             switch encoding {
@@ -1309,7 +1398,9 @@ final class RFBClientSession: @unchecked Sendable {
             sourceLayout: sourceLayout,
             encoding: encoding,
             pixelFormat: format,
-            rects: rects,
+            rects: copies.map(\.rect) + rects,
+            coverage: coverage,
+            copiedPixels: copiedPixels,
             encodedRects: encodedRects,
             desktopSizeChanged: resizeUpdate,
             changedPixels: changedPixels,
@@ -1320,6 +1411,29 @@ final class RFBClientSession: @unchecked Sendable {
             encodeDuration: encodeDuration,
             transaction: transaction
         )
+    }
+
+    private func committedBaseline(_ prepared: PreparedFramebufferUpdate) -> Framebuffer {
+        let frame = prepared.framebuffer
+        let full = Rect(x: 0, y: 0, width: frame.width, height: frame.height)
+        if prepared.coverage == full { return frame }
+        // A captured pixel outside the transmitted region is NOT client state.
+        // Preserve those pixels and disable sequence-based dirty shortcuts.
+        let old = previousFramebuffer
+        var pixels = old?.width == frame.width && old?.height == frame.height
+            && old?.bytesPerRow == frame.bytesPerRow ? old!.bgra
+            : [UInt8](repeating: 0, count: frame.bytesPerRow * frame.height)
+        let rect = prepared.coverage
+        pixels.withUnsafeMutableBytes { destination in
+            frame.bgra.withUnsafeBytes { source in
+                for y in rect.y..<(rect.y + rect.height) {
+                    let offset = y * frame.bytesPerRow + rect.x * 4
+                    memcpy(destination.baseAddress!.advanced(by: offset), source.baseAddress!.advanced(by: offset), rect.width * 4)
+                }
+            }
+        }
+        return Framebuffer(width: frame.width, height: frame.height, bytesPerRow: frame.bytesPerRow,
+            bgra: pixels, layout: frame.layout)
     }
 
     private func isStale(_ framebuffer: Framebuffer) throws -> Bool {
@@ -1377,22 +1491,21 @@ final class RFBClientSession: @unchecked Sendable {
         case .zlib:
             return clientCapabilities.supportsZlib ? .zlib : .raw
         case .auto:
-            if clientCapabilities.isAppleScreenSharingClient, clientCapabilities.supportsZlib {
+            if clientCapabilities.supportsZlib {
                 return .zlib
             }
             if clientCapabilities.supportsZRLE {
                 return .zrle
             }
-            return clientCapabilities.supportsZlib ? .zlib : .raw
+            return .raw
         }
     }
 
-    private func throttleFrameRate() {
-        let elapsed = Date().timeIntervalSince(lastFramebufferUpdate)
-        if elapsed < frameInterval {
-            usleep(useconds_t((frameInterval - elapsed) * 1_000_000))
+    private func throttleFrameRate() throws {
+        while DispatchTime.now().uptimeNanoseconds < pacer.next {
+            if state.withLock({ stopped }) { throw RFBError.socketError("session stopped") }
+            wake.wait(until: DispatchTime(uptimeNanoseconds: pacer.next))
         }
-        lastFramebufferUpdate = Date()
     }
 
     private func adaptStreaming(
@@ -1415,10 +1528,8 @@ final class RFBClientSession: @unchecked Sendable {
 
         if encoding == .zlib {
             try zlibEncoder.adaptCompression(encodeDominates: encodeDuration >= writeDuration)
-        } else if encodeDuration >= writeDuration {
-            try setCompressionLevel(1, for: encoding)
-        } else {
-            try setCompressionLevel(3, for: encoding)
+        } else if encoding == .zrle {
+            try zrleEncoder.adaptCompression(encodeDominates: encodeDuration >= writeDuration)
         }
     }
 
@@ -1642,7 +1753,7 @@ final class RFBClientSession: @unchecked Sendable {
         defer { state.unlock() }
         guard !stopped else { throw RFBError.socketError("session closed") }
         guard writerCommands.count < 64 else {
-            throw RFBError.protocolError("too many pending Apple messages")
+            throw RFBError.protocolError("too many pending server messages")
         }
         if case .clipboardReceived(let content, _, _) = command {
             let pendingBytes = writerCommands.reduce(0) { count, pending in
@@ -1654,7 +1765,7 @@ final class RFBClientSession: @unchecked Sendable {
             }
         }
         writerCommands.append(command)
-        state.signal()
+        state.signal(); wake.signal()
     }
 
     private func handleAppleViewerInfo() throws {
@@ -1746,7 +1857,7 @@ final class RFBClientSession: @unchecked Sendable {
         let supportsDisplayInfo = AppleRFB.preferredDisplayEncoding(in: clientCapabilities.advertisedEncodings) != nil
         if supportsDisplayInfo {
             pendingAppleFramebufferScale = scale
-            state.signal()
+            state.signal(); wake.signal()
         }
         state.unlock()
         logger.verbose("Apple SetServerScaling: requested=\(scale) display_info=\(supportsDisplayInfo) [client_fd=\(socket.fd)]")
@@ -1766,10 +1877,68 @@ final class RFBClientSession: @unchecked Sendable {
         appleAutomaticUpdate = interval == UInt32.max || rect.width == 0 || rect.height == 0
             ? nil : FramebufferUpdateRequest(incremental: true, rect: rect)
         applePushInterval = interval == UInt32.max ? 0 : Double(interval) / 1_000_000
-        appleNextPush = .distantPast
-        state.signal()
+        appleNextPush = 0
+        state.signal(); wake.signal()
         state.unlock()
         logger.verbose("Apple AutoFrameBufferUpdate: interval_us=\(interval) rect=\(rect.x),\(rect.y) \(rect.width)x\(rect.height) [client_fd=\(socket.fd)]")
+    }
+
+    private static func fenceMessage(flags: UInt32, payload: [UInt8]) -> [UInt8] {
+        [248, 0, 0, 0] + flags.beBytes + [UInt8(payload.count)] + payload
+    }
+
+    private func handleContinuousUpdates() throws {
+        let bytes = try socket.readExact(9)
+        guard !usesAppleExtensions, state.withLock({ clientCapabilities.supportsContinuousUpdates }) else {
+            throw RFBError.protocolError("ContinuousUpdates was not negotiated")
+        }
+        let rect = Rect(x: Int(UInt16.be(bytes[1], bytes[2])), y: Int(UInt16.be(bytes[3], bytes[4])),
+            width: Int(UInt16.be(bytes[5], bytes[6])), height: Int(UInt16.be(bytes[7], bytes[8])))
+        state.lock()
+        continuousUpdate = bytes[0] != 0 && rect.width > 0 && rect.height > 0
+            ? FramebufferUpdateRequest(incremental: true, rect: rect) : nil
+        if activeUpdateRequest?.incremental == true { activeUpdateRequest = nil }
+        if latestUpdateRequest?.incremental == true { latestUpdateRequest = nil }
+        wake.signal()
+        state.unlock()
+        if bytes[0] == 0 { try enqueueWriterCommand(.protocolMessage([150])) }
+        logger.verbose("ContinuousUpdates: enabled=\(bytes[0] != 0) rect=\(rect)")
+    }
+
+    private func handleFence() throws {
+        let header = try socket.readExact(8)
+        guard !usesAppleExtensions, state.withLock({ clientCapabilities.supportsFence }), header[7] <= 64 else {
+            throw RFBError.protocolError("invalid or unnegotiated Fence")
+        }
+        let flags = UInt32.be(header[3], header[4], header[5], header[6])
+        let payload = try socket.readExact(Int(header[7]))
+        if flags & 0x80000000 != 0 {
+            // BlockBefore/After are satisfied by the sole, ordered writer.
+            // SyncNext is not offered; unsupported flags are cleared in reply.
+            let response = Self.fenceMessage(flags: flags & 3, payload: payload)
+            if flags & 2 != 0 {
+                let done = DispatchSemaphore(value: 0)
+                try enqueueWriterCommand(.barrier(response, done))
+                guard done.wait(timeout: .now() + messageTimeout) == .success else {
+                    throw RFBError.protocolError("Fence barrier timed out")
+                }
+            } else { try enqueueWriterCommand(.protocolMessage(response)) }
+        } else if payload.count == 8 {
+            let token = payload.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            state.withLock { _ = outstandingFences.remove(token) }
+            wake.signal()
+        }
+    }
+
+    private func sendFrameFenceIfNeeded() throws {
+        state.lock()
+        guard continuousUpdate != nil && clientCapabilities.supportsFence else { state.unlock(); return }
+        fenceCounter &+= 1
+        let token = fenceCounter
+        outstandingFences.insert(token)
+        state.unlock()
+        let payload = (0..<8).map { UInt8(truncatingIfNeeded: token >> (56 - $0 * 8)) }
+        try socket.writeAll(Self.fenceMessage(flags: 0x80000001, payload: payload))
     }
 
     private func handleAppleSetMode() throws {
@@ -1816,7 +1985,7 @@ final class RFBClientSession: @unchecked Sendable {
             appleAutoPasteboard = enabled
             appleInitialClipboardNotification = enabled
             appleClipboardGeneration &+= 1
-            state.signal()
+            state.signal(); wake.signal()
         }
         state.unlock()
         if changed && !enabled { try enqueueWriterCommand(.clipboardReset) }
@@ -1906,6 +2075,11 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func sendWriterCommand(_ command: WriterCommand) throws {
         switch command {
+        case .protocolMessage(let bytes):
+            try socket.writeAll(bytes)
+        case .barrier(let bytes, let done):
+            try socket.writeAll(bytes)
+            done.signal()
         case .rekey(let keys, let wrappingKey, let level, let completion):
             defer { completion.signal() }
             let cipher = level == 1 ? try AppleEncryption.Cipher(keys: keys, encrypt: true) : nil

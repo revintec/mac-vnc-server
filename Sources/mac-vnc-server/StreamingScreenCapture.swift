@@ -7,6 +7,8 @@ import ScreenCaptureKit
 
 final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, FramebufferSequenceSource, InputRecoverySource, CaptureFrameRateController {
     let includesCursor: Bool
+    private let changes = FrameChangeHub()
+    var frameChanges: FrameChangeHub? { changes }
     private let cursorMonitor: MacCursorMonitor?
     var cursorSnapshot: CursorSnapshot? { cursorMonitor?.snapshot }
     private let scale: CGFloat
@@ -58,6 +60,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
             displaySelection: displaySelection,
             includesCursor: includesCursor,
             eventSink: eventSink,
+            changes: changes,
             logger: logger
         )
 
@@ -305,6 +308,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         displaySelection: DisplaySelection,
         includesCursor: Bool,
         eventSink: StreamEventSink,
+        changes: FrameChangeHub,
         logger: ServerLogger
     ) async throws -> StartedCapture {
         logger.verbose("ScreenCaptureKit: enumerating displays")
@@ -326,7 +330,8 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         let store = StreamingFrameStore(
             layout: layout,
             expectedDisplayIDs: Set(displays.map(\.id)),
-            acceptedFrameRate: fps
+            acceptedFrameRate: fps,
+            changes: changes
         )
         var streams: [SCStream] = []
         var configurations: [SCStreamConfiguration] = []
@@ -423,6 +428,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                     displaySelection: displaySelection,
                     includesCursor: includesCursor,
                     eventSink: streamEventSink,
+                    changes: changes,
                     logger: logger
                 )
                 guard started.store.waitForFirstFrames(timeout: 5) else {
@@ -610,16 +616,19 @@ final class StreamingFrameStore: @unchecked Sendable {
     private var frames: [CGDirectDisplayID: DisplayFrame] = [:]
     private var displaySequences: [CGDirectDisplayID: UInt64] = [:]
     private var acceptedFrameInterval: TimeInterval
-    private var lastAcceptedPresentationTimes: [CGDirectDisplayID: TimeInterval] = [:]
+    private var nextPresentationTimes: [CGDirectDisplayID: TimeInterval] = [:]
+    private let changes: FrameChangeHub
     private var droppedFramePending: [CGDirectDisplayID: Bool] = [:]
     private var sequence: UInt64 = 0
 
     init(
         layout: VirtualDisplayLayout,
         expectedDisplayIDs: Set<CGDirectDisplayID>,
-        acceptedFrameRate: Int
+        acceptedFrameRate: Int,
+        changes: FrameChangeHub = FrameChangeHub()
     ) {
         self.layout = layout
+        self.changes = changes
         self.expectedDisplayIDs = expectedDisplayIDs
         acceptedFrameInterval = 1.0 / Double(max(1, acceptedFrameRate))
     }
@@ -627,6 +636,7 @@ final class StreamingFrameStore: @unchecked Sendable {
     func setAcceptedFrameRate(_ fps: Int) {
         condition.lock()
         acceptedFrameInterval = 1.0 / Double(max(1, fps))
+        nextPresentationTimes.removeAll()
         condition.unlock()
     }
 
@@ -638,24 +648,32 @@ final class StreamingFrameStore: @unchecked Sendable {
     ) {
         let acceptedDirtyRects: [Rect]?
         condition.lock()
-        if let presentationTime,
-           let lastPresentationTime = lastAcceptedPresentationTimes[displayID] {
-            let elapsed = presentationTime - lastPresentationTime
-            if elapsed >= 0, elapsed + 0.0005 < acceptedFrameInterval {
+        if dirtyRects?.isEmpty == true, frames[displayID] != nil,
+           droppedFramePending[displayID] != true {
+            condition.unlock()
+            return
+        }
+        if let time = presentationTime {
+            let next = nextPresentationTimes[displayID] ?? time
+            if time + 0.0005 < next, time > next - 1 {
                 droppedFramePending[displayID] = true
                 condition.unlock()
                 return
             }
-        }
-        if let presentationTime {
-            lastAcceptedPresentationTimes[displayID] = presentationTime
+            // Accumulate the requested cadence instead of rounding 45 FPS down
+            // to 30 when capture delivers at 60 Hz. Rebase after discontinuities.
+            nextPresentationTimes[displayID] = abs(time - next) > acceptedFrameInterval
+                ? time + acceptedFrameInterval : next + acceptedFrameInterval
         }
         acceptedDirtyRects = droppedFramePending.removeValue(forKey: displayID) == true
             ? nil
             : dirtyRects
         condition.unlock()
 
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
+            condition.withLock { droppedFramePending[displayID] = true }
+            return
+        }
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
@@ -669,14 +687,19 @@ final class StreamingFrameStore: @unchecked Sendable {
         let height = CVPixelBufferGetHeight(pixelBuffer)
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let byteCount = bytesPerRow * height
-        var bytes = [UInt8](repeating: 0, count: byteCount)
-        _ = bytes.withUnsafeMutableBytes { destination in
+        // The copy initializes every byte. Avoid zero-filling the entire image
+        // before overwriting it, and do not retain scarce SCStream surfaces.
+        let bytes = [UInt8](unsafeUninitializedCapacity: byteCount) { destination, initialized in
             memcpy(destination.baseAddress!, baseAddress, byteCount)
+            initialized = byteCount
         }
 
         condition.lock()
-        sequence &+= 1
-        let displaySequence = (displaySequences[displayID] ?? 0) &+ 1
+        // The hub survives stream recovery. Never reuse an old sequence/cache
+        // identity when ScreenCaptureKit restarts at the same dimensions.
+        let sequences = changes.nextSequences(displayID: displayID)
+        sequence = sequences.0
+        let displaySequence = sequences.1
         displaySequences[displayID] = displaySequence
         frames[displayID] = DisplayFrame(
             sequence: displaySequence,
@@ -688,6 +711,7 @@ final class StreamingFrameStore: @unchecked Sendable {
         )
         condition.broadcast()
         condition.unlock()
+        changes.signal()
     }
 
     func waitForFirstFrames(timeout: TimeInterval) -> Bool {
@@ -873,6 +897,7 @@ final class SelectedDisplayFramebufferSource: @unchecked Sendable, FramebufferSo
     private let displayIndex: Int?
 
     var includesCursor: Bool { source.includesCursor }
+    var frameChanges: FrameChangeHub? { source.frameChanges }
     var cursorSnapshot: CursorSnapshot? { source.cursorSnapshot }
 
     init(source: StreamingScreenCapture, displayIndex: Int?) {
@@ -920,9 +945,18 @@ final class SelectedDisplayFramebufferSource: @unchecked Sendable, FramebufferSo
     }
 }
 
-private final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput {
+private final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let displayID: CGDirectDisplayID
     private let store: StreamingFrameStore
+    private struct Delivery {
+        let pixelBuffer: CVPixelBuffer
+        var dirtyRects: [Rect]?
+        let presentationTime: TimeInterval?
+    }
+    private let deliveryLock = NSLock()
+    private let deliveryQueue = DispatchQueue(label: "mac-vnc.capture-copy", qos: .userInteractive)
+    private var pending: Delivery?
+    private var copying = false
 
     init(displayID: CGDirectDisplayID, store: StreamingFrameStore) {
         self.displayID = displayID
@@ -933,6 +967,10 @@ private final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput {
         guard type == .screen, sampleBuffer.isValid, let pixelBuffer = sampleBuffer.imageBuffer else {
             return
         }
+        if let entries = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+            as? [[SCStreamFrameInfo: Any]],
+           let status = entries.first?[.status] as? Int,
+           status != SCFrameStatus.complete.rawValue { return }
         let dirtyRects = Self.dirtyRects(
             from: sampleBuffer,
             width: CVPixelBufferGetWidth(pixelBuffer),
@@ -942,12 +980,33 @@ private final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput {
         let presentationSeconds = presentationTime.isValid
             ? CMTimeGetSeconds(presentationTime)
             : nil
-        store.update(
-            displayID: displayID,
-            pixelBuffer: pixelBuffer,
-            dirtyRects: dirtyRects,
-            presentationTime: presentationSeconds?.isFinite == true ? presentationSeconds : nil
-        )
+        let delivery = Delivery(pixelBuffer: pixelBuffer, dirtyRects: dirtyRects,
+            presentationTime: presentationSeconds?.isFinite == true ? presentationSeconds : nil)
+        deliveryLock.lock()
+        var newest = delivery
+        if pending != nil { newest.dirtyRects = nil }
+        pending = newest
+        let start = !copying
+        copying = true
+        deliveryLock.unlock()
+        if start { deliveryQueue.async { [self] in drain() } }
+    }
+
+    private func drain() {
+        while true {
+            deliveryLock.lock()
+            guard let next = pending else {
+                copying = false
+                deliveryLock.unlock()
+                return
+            }
+            pending = nil
+            deliveryLock.unlock()
+            autoreleasepool {
+                store.update(displayID: displayID, pixelBuffer: next.pixelBuffer,
+                    dirtyRects: next.dirtyRects, presentationTime: next.presentationTime)
+            }
+        }
     }
 
     private static func dirtyRects(

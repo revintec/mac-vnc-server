@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-12",
+  "release_path": "/Users/revin/code/mac-vnc-server/.build/out/Products/Release/mac-vnc-server-dev",
+  "binary_sha256": "ef7c5a0a8eb11bbe91bde60b25983442fc204d9f5c38f5811c1543ba3b4c2488",
+  "source_sha256": {
+    "Sources/mac-vnc-server/RFBServer.swift": "48f0df7122f15de8252e697881cd34b6271823fe1a392b67e865bcc39f3979b8",
+    "Sources/mac-vnc-server/RFBTypes.swift": "38837c77016aa4aba5e01741c9089554fa856912bea7ef3bafd5616aaaec425c",
+    "Sources/mac-vnc-server/ZRLEEncoding.swift": "63e2fe3c5310a2209e44d77052bd3fe243af5075b991b73acd5125b4637948b3",
+    "Sources/CVNCZlib/zrle.c": "7e3fd2c5b9edc87977399ba81190b055c56502e170207cfdbe99466991e54b01",
+    "scripts/probe-native-screen-sharing.m": "2be1b3941d2ffd2ff11926af87139e241eaa1db68825643a2013dbe3fae829f5"
+  },
+  "regression_suite": "210 tests in 11 suites passed",
+  "final_targeted_suite": "3 tests passed, including Apple and generic wire formats",
+  "native_codec_tests": [
+    "Raw passed",
+    "Zlib passed",
+    "ZRLE passed"
+  ],
+  "native_pixels_checked_per_codec": 1927808,
+  "native_rgb_tolerance": 3,
+  "native_client": "Tahoe ScreenSharing.framework; plain URI, normal encryption preference",
+  "remote_macos13_retested": false,
+  "server_restarted": false
+}

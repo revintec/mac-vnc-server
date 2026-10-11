@@ -1,0 +1,1471 @@
+{
+  "date": "2026-10-12",
+  "base_commit": "9fbeb86",
+  "codec_results": [
+    {
+      "name": "solid-zlib-0",
+      "scenario": "solid",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.17185625,
+        "p50": 1.1245835,
+        "p95": 1.2495,
+        "max": 1.631666
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.1707791,
+        "p50": 1.1242079999999999,
+        "p95": 1.24925,
+        "max": 1.631292
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 15555,
+        "p50": 15555.0,
+        "p95": 15555,
+        "max": 15555
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "solid-zrle-0",
+      "scenario": "solid",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.34939795,
+        "p50": 1.3124995,
+        "p95": 1.538209,
+        "max": 1.656917
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.34560005,
+        "p50": 1.310875,
+        "p95": 1.537792,
+        "max": 1.590541
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 156,
+        "p50": 156.0,
+        "p95": 156,
+        "max": 156
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "1": 4608
+      }
+    },
+    {
+      "name": "solid-zrle-1",
+      "scenario": "solid",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.35687495,
+        "p50": 1.3075,
+        "p95": 1.578042,
+        "max": 1.749208
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.35562705,
+        "p50": 1.3072295,
+        "p95": 1.577583,
+        "max": 1.730083
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 156,
+        "p50": 156.0,
+        "p95": 156,
+        "max": 156
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "1": 4608
+      }
+    },
+    {
+      "name": "solid-zlib-1",
+      "scenario": "solid",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.24018335,
+        "p50": 1.2586255,
+        "p95": 1.377625,
+        "max": 1.568041
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.2394104,
+        "p50": 1.258375,
+        "p95": 1.377209,
+        "max": 1.558083
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 15555,
+        "p50": 15555.0,
+        "p95": 15555,
+        "max": 15555
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "two-color-zlib-0",
+      "scenario": "two-color",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.79162095,
+        "p50": 2.895146,
+        "p95": 4.477167,
+        "max": 4.808417
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.77410205,
+        "p50": 2.795125,
+        "p95": 4.473292,
+        "max": 4.760834
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 120306.25,
+        "p50": 116266.5,
+        "p95": 219844,
+        "max": 219844
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "two-color-zrle-0",
+      "scenario": "two-color",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.15921235,
+        "p50": 2.1343335000000003,
+        "p95": 2.540625,
+        "max": 2.794666
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.15421045,
+        "p50": 2.131917,
+        "p95": 2.475333,
+        "max": 2.783542
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 4066.75,
+        "p50": 4066.5,
+        "p95": 4072,
+        "max": 4072
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "2": 4608
+      }
+    },
+    {
+      "name": "two-color-zrle-1",
+      "scenario": "two-color",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.1979646,
+        "p50": 2.1305005,
+        "p95": 2.560042,
+        "max": 2.81025
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.19701255,
+        "p50": 2.1302705,
+        "p95": 2.5595,
+        "max": 2.8095
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 4066.75,
+        "p50": 4066.5,
+        "p95": 4072,
+        "max": 4072
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "2": 4608
+      }
+    },
+    {
+      "name": "two-color-zlib-1",
+      "scenario": "two-color",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.6785854000000002,
+        "p50": 2.6279795,
+        "p95": 4.342584,
+        "max": 4.344417
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.67825425,
+        "p50": 2.6276875,
+        "p95": 4.342334,
+        "max": 4.343833
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 120306.25,
+        "p50": 116266.5,
+        "p95": 219844,
+        "max": 219844
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zlib-0",
+      "scenario": "palette-runs",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.27750835,
+        "p50": 3.1530625,
+        "p95": 3.896,
+        "max": 3.985083
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.2770395,
+        "p50": 3.1527079999999996,
+        "p95": 3.895292,
+        "max": 3.984708
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 174886.65,
+        "p50": 176092.0,
+        "p95": 177313,
+        "max": 177313
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zrle-0",
+      "scenario": "palette-runs",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.6328646,
+        "p50": 1.6171455,
+        "p95": 1.787459,
+        "max": 1.99075
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.63258545,
+        "p50": 1.6168965,
+        "p95": 1.787125,
+        "max": 1.990291
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 2475.5,
+        "p50": 2525.0,
+        "p95": 2666,
+        "max": 2666
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "132": 4176,
+        "4": 432
+      }
+    },
+    {
+      "name": "palette-runs-zrle-1",
+      "scenario": "palette-runs",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.7846376,
+        "p50": 1.7639170000000002,
+        "p95": 1.979709,
+        "max": 2.091
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.78066025,
+        "p50": 1.754458,
+        "p95": 1.97575,
+        "max": 2.090625
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 2475.5,
+        "p50": 2525.0,
+        "p95": 2666,
+        "max": 2666
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "132": 4176,
+        "4": 432
+      }
+    },
+    {
+      "name": "palette-runs-zlib-1",
+      "scenario": "palette-runs",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.3829188,
+        "p50": 3.3345205,
+        "p95": 4.25075,
+        "max": 4.287708
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.3482125,
+        "p50": 3.3207085000000003,
+        "p95": 3.805917,
+        "max": 4.21
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 174886.65,
+        "p50": 176092.0,
+        "p95": 177313,
+        "max": 177313
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "many-colors-zlib-0",
+      "scenario": "many-colors",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.3375061,
+        "p50": 1.279229,
+        "p95": 1.536583,
+        "max": 2.401291
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.2861022,
+        "p50": 1.2787920000000002,
+        "p95": 1.438291,
+        "max": 1.535583
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 25620.1,
+        "p50": 25609.5,
+        "p95": 25660,
+        "max": 25660
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "many-colors-zrle-0",
+      "scenario": "many-colors",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.42804585,
+        "p50": 3.3421665000000003,
+        "p95": 3.764125,
+        "max": 4.473416
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.42467915,
+        "p50": 3.3411875,
+        "p95": 3.763459,
+        "max": 4.421208
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 12470.3,
+        "p50": 12527.5,
+        "p95": 12898,
+        "max": 12898
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "160": 4608
+      }
+    },
+    {
+      "name": "many-colors-zrle-1",
+      "scenario": "many-colors",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.50137705,
+        "p50": 3.4490835,
+        "p95": 3.894583,
+        "max": 3.918625
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.49784995,
+        "p50": 3.4453745,
+        "p95": 3.894083,
+        "max": 3.918
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 12470.3,
+        "p50": 12527.5,
+        "p95": 12898,
+        "max": 12898
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "160": 4608
+      }
+    },
+    {
+      "name": "many-colors-zlib-1",
+      "scenario": "many-colors",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.43609385,
+        "p50": 1.352042,
+        "p95": 1.841792,
+        "max": 2.145875
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.4300625,
+        "p50": 1.3516460000000001,
+        "p95": 1.8415,
+        "max": 2.062084
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 25620.1,
+        "p50": 25609.5,
+        "p95": 25660,
+        "max": 25660
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zlib-0",
+      "scenario": "document",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 4.19477915,
+        "p50": 3.9912295,
+        "p95": 5.033583,
+        "max": 5.33775
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 4.16941875,
+        "p50": 3.9907085,
+        "p95": 4.964875,
+        "max": 5.109042
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 208919.5,
+        "p50": 208937.5,
+        "p95": 211169,
+        "max": 211169
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zrle-0",
+      "scenario": "document",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.951598,
+        "p50": 3.889354,
+        "p95": 4.626583,
+        "max": 4.758375
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.906798,
+        "p50": 3.888625,
+        "p95": 4.349166,
+        "max": 4.555833
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 92466,
+        "p50": 92051.0,
+        "p95": 94158,
+        "max": 94158
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "128": 1080,
+        "246": 594,
+        "251": 306,
+        "249": 312,
+        "245": 318,
+        "242": 306,
+        "243": 300,
+        "225": 288,
+        "1": 864,
+        "253": 18,
+        "255": 24,
+        "254": 30,
+        "244": 18,
+        "252": 30,
+        "250": 30,
+        "248": 42,
+        "241": 6,
+        "233": 6,
+        "247": 36
+      }
+    },
+    {
+      "name": "document-zrle-1",
+      "scenario": "document",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.8581167,
+        "p50": 3.7751460000000003,
+        "p95": 4.330833,
+        "max": 4.601167
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.84049385,
+        "p50": 3.774271,
+        "p95": 4.292583,
+        "max": 4.523708
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 92466,
+        "p50": 92051.0,
+        "p95": 94158,
+        "max": 94158
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "128": 1080,
+        "246": 594,
+        "251": 306,
+        "249": 312,
+        "245": 318,
+        "242": 306,
+        "243": 300,
+        "225": 288,
+        "1": 864,
+        "253": 18,
+        "255": 24,
+        "254": 30,
+        "244": 18,
+        "252": 30,
+        "250": 30,
+        "248": 42,
+        "241": 6,
+        "233": 6,
+        "247": 36
+      }
+    },
+    {
+      "name": "document-zlib-1",
+      "scenario": "document",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 4.07693955,
+        "p50": 3.977521,
+        "p95": 4.769292,
+        "max": 4.94
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 4.0593061,
+        "p50": 3.977021,
+        "p95": 4.741,
+        "max": 4.893958
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 208919.5,
+        "p50": 208937.5,
+        "p95": 211169,
+        "max": 211169
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    }
+  ],
+  "observe_streaming": [
+    {
+      "updates_per_s": 52.97310820162144,
+      "capture_per_s": 57.237609993953235,
+      "rfb_MB_per_s": 12.897913241009869,
+      "send_interval_ms": {
+        "n": 794,
+        "p50": 18.710708500000003,
+        "p95": 22.715334,
+        "max": 57.503917
+      },
+      "capture_ready_to_send_ms": null,
+      "copy_ms": {
+        "n": 858,
+        "p50": 1.0933745,
+        "p95": 3.068125,
+        "max": 11.795541
+      },
+      "pacing_wait_ms": {
+        "n": 805,
+        "p50": 12.473166,
+        "p95": 16.355083,
+        "max": 18.066208
+      },
+      "sample": {
+        "scenario": "before",
+        "start_uptime_ns": 1821152633430500,
+        "end_uptime_ns": 1821167641045250,
+        "duration_s": 15.00761475,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "65514": {
+            "cpu_percent": 37.69080043182745,
+            "before": {
+              "user_ns": 2400801458.3333335,
+              "system_ns": 249829583.33333334,
+              "rss_bytes": 105545728
+            },
+            "after": {
+              "user_ns": 7737137958.333333,
+              "system_ns": 569983208.3333334,
+              "rss_bytes": 105529344
+            }
+          },
+          "65601": {
+            "cpu_percent": 67.59693635970144,
+            "before": {
+              "user_ns": 2522660708.3333335,
+              "system_ns": 2432959291.6666665,
+              "rss_bytes": 351027200
+            },
+            "after": {
+              "user_ns": 7988456208.333333,
+              "system_ns": 7111851583.333333,
+              "rss_bytes": 318046208
+            }
+          },
+          "65513": {
+            "cpu_percent": 11.963023915353816,
+            "before": {
+              "user_ns": 889039791.6666666,
+              "system_ns": 356295916.6666667,
+              "rss_bytes": 76496896
+            },
+            "after": {
+              "user_ns": 2247421375.0,
+              "system_ns": 793278875.0,
+              "rss_bytes": 76513280
+            }
+          }
+        },
+        "roles": {
+          "server": 65514,
+          "client": 65601,
+          "workload": 65513
+        }
+      },
+      "case": "before",
+      "sample_index": 1
+    },
+    {
+      "updates_per_s": 57.35939687754162,
+      "capture_per_s": 57.42601638611019,
+      "rfb_MB_per_s": 14.87688146918527,
+      "send_interval_ms": {
+        "n": 860,
+        "p50": 17.312229,
+        "p95": 20.340292,
+        "max": 39.449375
+      },
+      "capture_ready_to_send_ms": null,
+      "copy_ms": {
+        "n": 862,
+        "p50": 0.945812,
+        "p95": 2.503625,
+        "max": 8.607
+      },
+      "pacing_wait_ms": {
+        "n": 1610,
+        "p50": 0.000417,
+        "p95": 10.763583,
+        "max": 15.00225
+      },
+      "sample": {
+        "scenario": "after",
+        "start_uptime_ns": 1821174490252833,
+        "end_uptime_ns": 1821189500870916,
+        "duration_s": 15.010618083,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "65806": {
+            "cpu_percent": 46.18980935137021,
+            "before": {
+              "user_ns": 2686349791.6666665,
+              "system_ns": 192157125.0,
+              "rss_bytes": 106037248
+            },
+            "after": {
+              "user_ns": 9273217375.0,
+              "system_ns": 538665416.6666666,
+              "rss_bytes": 113770496
+            }
+          },
+          "65807": {
+            "cpu_percent": 68.81634626601716,
+            "before": {
+              "user_ns": 2288682958.3333335,
+              "system_ns": 1801929333.3333333,
+              "rss_bytes": 318324736
+            },
+            "after": {
+              "user_ns": 8001995541.666667,
+              "system_ns": 6418375666.666667,
+              "rss_bytes": 348946432
+            }
+          },
+          "65513": {
+            "cpu_percent": 11.66794336503849,
+            "before": {
+              "user_ns": 2811632083.3333335,
+              "system_ns": 975542625.0,
+              "rss_bytes": 77004800
+            },
+            "after": {
+              "user_ns": 4126884041.6666665,
+              "system_ns": 1411721083.3333333,
+              "rss_bytes": 77004800
+            }
+          }
+        },
+        "roles": {
+          "server": 65806,
+          "client": 65807,
+          "workload": 65513
+        }
+      },
+      "case": "after",
+      "sample_index": 1
+    },
+    {
+      "updates_per_s": 57.572870542648424,
+      "capture_per_s": 57.6395058094802,
+      "rfb_MB_per_s": 15.028545123648726,
+      "send_interval_ms": {
+        "n": 863,
+        "p50": 17.244208,
+        "p95": 20.078166,
+        "max": 28.814875
+      },
+      "capture_ready_to_send_ms": null,
+      "copy_ms": {
+        "n": 864,
+        "p50": 0.9300835000000001,
+        "p95": 2.614167,
+        "max": 7.301708
+      },
+      "pacing_wait_ms": {
+        "n": 1617,
+        "p50": 0.000583,
+        "p95": 10.156125,
+        "max": 15.770625
+      },
+      "sample": {
+        "scenario": "after",
+        "start_uptime_ns": 1821196534761083,
+        "end_uptime_ns": 1821211541829375,
+        "duration_s": 15.007068292,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "65848": {
+            "cpu_percent": 50.160168274480014,
+            "before": {
+              "user_ns": 3091100666.6666665,
+              "system_ns": 283330958.3333333,
+              "rss_bytes": 105758720
+            },
+            "after": {
+              "user_ns": 10146046875.0,
+              "system_ns": 755955458.3333334,
+              "rss_bytes": 106070016
+            }
+          },
+          "65849": {
+            "cpu_percent": 74.63517156537151,
+            "before": {
+              "user_ns": 2764392666.6666665,
+              "system_ns": 2194072833.3333335,
+              "rss_bytes": 316784640
+            },
+            "after": {
+              "user_ns": 8945670833.333334,
+              "system_ns": 7213345833.333333,
+              "rss_bytes": 344850432
+            }
+          },
+          "65513": {
+            "cpu_percent": 12.550473750230777,
+            "before": {
+              "user_ns": 4809225500.0,
+              "system_ns": 1649614541.6666667,
+              "rss_bytes": 77037568
+            },
+            "after": {
+              "user_ns": 6202124833.333333,
+              "system_ns": 2140173375.0,
+              "rss_bytes": 75137024
+            }
+          }
+        },
+        "roles": {
+          "server": 65848,
+          "client": 65849,
+          "workload": 65513
+        }
+      },
+      "case": "after",
+      "sample_index": 2
+    },
+    {
+      "updates_per_s": 52.971423682637344,
+      "capture_per_s": 57.23578986589368,
+      "rfb_MB_per_s": 12.864124966717954,
+      "send_interval_ms": {
+        "n": 794,
+        "p50": 18.723729,
+        "p95": 23.18375,
+        "max": 40.811958
+      },
+      "capture_ready_to_send_ms": null,
+      "copy_ms": {
+        "n": 859,
+        "p50": 1.157125,
+        "p95": 3.359792,
+        "max": 9.282375
+      },
+      "pacing_wait_ms": {
+        "n": 807,
+        "p50": 12.0925,
+        "p95": 16.363167,
+        "max": 18.368625
+      },
+      "sample": {
+        "scenario": "before",
+        "start_uptime_ns": 1821218725020583,
+        "end_uptime_ns": 1821233733112583,
+        "duration_s": 15.008092,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "65866": {
+            "cpu_percent": 40.733351270323595,
+            "before": {
+              "user_ns": 2504414916.6666665,
+              "system_ns": 256920083.33333334,
+              "rss_bytes": 105644032
+            },
+            "after": {
+              "user_ns": 8188936000.0,
+              "system_ns": 685697833.3333334,
+              "rss_bytes": 105644032
+            }
+          },
+          "65867": {
+            "cpu_percent": 70.62358787290661,
+            "before": {
+              "user_ns": 2664202375.0,
+              "system_ns": 2203221208.3333335,
+              "rss_bytes": 324042752
+            },
+            "after": {
+              "user_ns": 8482485916.666667,
+              "system_ns": 6984190708.333333,
+              "rss_bytes": 321978368
+            }
+          },
+          "65513": {
+            "cpu_percent": 12.735358309814904,
+            "before": {
+              "user_ns": 6922543916.666667,
+              "system_ns": 2390605458.3333335,
+              "rss_bytes": 75137024
+            },
+            "after": {
+              "user_ns": 8341395583.333333,
+              "system_ns": 2883088083.3333335,
+              "rss_bytes": 73351168
+            }
+          }
+        },
+        "roles": {
+          "server": 65866,
+          "client": 65867,
+          "workload": 65513
+        }
+      },
+      "case": "before",
+      "sample_index": 2
+    }
+  ],
+  "control_streaming": [
+    {
+      "updates_per_s": 52.9638579047313,
+      "capture_per_s": 57.094372609251224,
+      "rfb_MB_per_s": 12.878720335232574,
+      "send_interval_ms": {
+        "n": 794,
+        "p50": 18.678791,
+        "p95": 23.161875,
+        "max": 92.612125
+      },
+      "capture_ready_to_send_ms": {
+        "n": 795,
+        "p50": 15.004291,
+        "p95": 23.15325,
+        "max": 36.266458
+      },
+      "copy_ms": {
+        "n": 857,
+        "p50": 1.107042,
+        "p95": 3.5355,
+        "max": 12.368625
+      },
+      "pacing_wait_ms": {
+        "n": 808,
+        "p50": 12.282729,
+        "p95": 16.462,
+        "max": 19.44775
+      },
+      "sample": {
+        "scenario": "before",
+        "start_uptime_ns": 1821280211722333,
+        "end_uptime_ns": 1821295221958208,
+        "duration_s": 15.010235875,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "65980": {
+            "cpu_percent": 40.18603044326466,
+            "before": {
+              "user_ns": 2855265791.6666665,
+              "system_ns": 307271500.0,
+              "rss_bytes": 105562112
+            },
+            "after": {
+              "user_ns": 8405642875.0,
+              "system_ns": 788912375.0,
+              "rss_bytes": 105578496
+            }
+          },
+          "65981": {
+            "cpu_percent": 72.30588823108684,
+            "before": {
+              "user_ns": 2906762125.0,
+              "system_ns": 2548489791.6666665,
+              "rss_bytes": 353189888
+            },
+            "after": {
+              "user_ns": 8733961791.666666,
+              "system_ns": 7574574500.0,
+              "rss_bytes": 310034432
+            }
+          },
+          "65979": {
+            "cpu_percent": 13.090390282313491,
+            "before": {
+              "user_ns": 888775666.6666666,
+              "system_ns": 337535833.3333333,
+              "rss_bytes": 75169792
+            },
+            "after": {
+              "user_ns": 2344413250.0,
+              "system_ns": 846796708.3333334,
+              "rss_bytes": 75382784
+            }
+          }
+        },
+        "roles": {
+          "server": 65980,
+          "client": 65981,
+          "workload": 65979
+        }
+      },
+      "case": "before",
+      "sample_index": 1
+    },
+    {
+      "updates_per_s": 57.51134051745829,
+      "capture_per_s": 57.577981699981414,
+      "rfb_MB_per_s": 14.95314046114482,
+      "send_interval_ms": {
+        "n": 862,
+        "p50": 17.243667000000002,
+        "p95": 20.7135,
+        "max": 36.653875
+      },
+      "capture_ready_to_send_ms": {
+        "n": 863,
+        "p50": 6.653417,
+        "p95": 11.759292,
+        "max": 20.57525
+      },
+      "copy_ms": {
+        "n": 864,
+        "p50": 0.851271,
+        "p95": 4.075334,
+        "max": 15.324708
+      },
+      "pacing_wait_ms": {
+        "n": 1574,
+        "p50": 0.0005,
+        "p95": 10.377083,
+        "max": 15.796209
+      },
+      "sample": {
+        "scenario": "after",
+        "start_uptime_ns": 1821303231331083,
+        "end_uptime_ns": 1821318237067208,
+        "duration_s": 15.005736125,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "66012": {
+            "cpu_percent": 45.069108808326895,
+            "before": {
+              "user_ns": 3264193375.0,
+              "system_ns": 306321250.0,
+              "rss_bytes": 121421824
+            },
+            "after": {
+              "user_ns": 9553887166.666666,
+              "system_ns": 779579000.0,
+              "rss_bytes": 121700352
+            }
+          },
+          "66013": {
+            "cpu_percent": 80.2797517428245,
+            "before": {
+              "user_ns": 3088890083.3333335,
+              "system_ns": 2498748166.6666665,
+              "rss_bytes": 284311552
+            },
+            "after": {
+              "user_ns": 9557857875.0,
+              "system_ns": 8076348083.333333,
+              "rss_bytes": 336838656
+            }
+          },
+          "65979": {
+            "cpu_percent": 13.447793562787753,
+            "before": {
+              "user_ns": 3116313291.6666665,
+              "system_ns": 1113174416.6666667,
+              "rss_bytes": 75694080
+            },
+            "after": {
+              "user_ns": 4602061833.333333,
+              "system_ns": 1645366291.6666667,
+              "rss_bytes": 75399168
+            }
+          }
+        },
+        "roles": {
+          "server": 66012,
+          "client": 66013,
+          "workload": 65979
+        }
+      },
+      "case": "after",
+      "sample_index": 1
+    },
+    {
+      "updates_per_s": 57.24323049432949,
+      "capture_per_s": 57.24323049432949,
+      "rfb_MB_per_s": 14.92283151917945,
+      "send_interval_ms": {
+        "n": 858,
+        "p50": 17.186354,
+        "p95": 20.461375,
+        "max": 91.83725
+      },
+      "capture_ready_to_send_ms": {
+        "n": 859,
+        "p50": 6.336833,
+        "p95": 9.805334,
+        "max": 20.409166
+      },
+      "copy_ms": {
+        "n": 859,
+        "p50": 0.864208,
+        "p95": 2.642167,
+        "max": 74.326958
+      },
+      "pacing_wait_ms": {
+        "n": 1590,
+        "p50": 0.0005,
+        "p95": 10.73875,
+        "max": 14.748709
+      },
+      "sample": {
+        "scenario": "after",
+        "start_uptime_ns": 1821326488508583,
+        "end_uptime_ns": 1821341494649791,
+        "duration_s": 15.006141208,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "66085": {
+            "cpu_percent": 42.65036862544408,
+            "before": {
+              "user_ns": 3367043500.0,
+              "system_ns": 338451291.6666667,
+              "rss_bytes": 113688576
+            },
+            "after": {
+              "user_ns": 9364038833.333334,
+              "system_ns": 741630500.0,
+              "rss_bytes": 105955328
+            }
+          },
+          "66086": {
+            "cpu_percent": 73.60561928324529,
+            "before": {
+              "user_ns": 3209496833.3333335,
+              "system_ns": 2673447500.0,
+              "rss_bytes": 332808192
+            },
+            "after": {
+              "user_ns": 9260998000.0,
+              "system_ns": 7667309500.0,
+              "rss_bytes": 362364928
+            }
+          },
+          "65979": {
+            "cpu_percent": 12.23006423100249,
+            "before": {
+              "user_ns": 5411727666.666667,
+              "system_ns": 1920451541.6666667,
+              "rss_bytes": 75399168
+            },
+            "after": {
+              "user_ns": 6784549166.666667,
+              "system_ns": 2382890750.0,
+              "rss_bytes": 75399168
+            }
+          }
+        },
+        "roles": {
+          "server": 66085,
+          "client": 66086,
+          "workload": 65979
+        }
+      },
+      "case": "after",
+      "sample_index": 2
+    },
+    {
+      "updates_per_s": 52.70061152363831,
+      "capture_per_s": 56.898005361804195,
+      "rfb_MB_per_s": 12.692080953602575,
+      "send_interval_ms": {
+        "n": 790,
+        "p50": 18.8010205,
+        "p95": 22.933833,
+        "max": 46.078291
+      },
+      "capture_ready_to_send_ms": {
+        "n": 791,
+        "p50": 14.811167,
+        "p95": 22.765833,
+        "max": 28.77325
+      },
+      "copy_ms": {
+        "n": 854,
+        "p50": 1.1295415,
+        "p95": 2.879834,
+        "max": 6.378125
+      },
+      "pacing_wait_ms": {
+        "n": 798,
+        "p50": 13.0232915,
+        "p95": 16.939292,
+        "max": 20.420416
+      },
+      "sample": {
+        "scenario": "before",
+        "start_uptime_ns": 1821349666736250,
+        "end_uptime_ns": 1821364676049750,
+        "duration_s": 15.0093135,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "66137": {
+            "cpu_percent": 35.30331683724242,
+            "before": {
+              "user_ns": 2628762125.0,
+              "system_ns": 215150791.66666666,
+              "rss_bytes": 105693184
+            },
+            "after": {
+              "user_ns": 7630933375.0,
+              "system_ns": 511765041.6666667,
+              "rss_bytes": 105693184
+            }
+          },
+          "66138": {
+            "cpu_percent": 62.3650414346621,
+            "before": {
+              "user_ns": 2627543333.3333335,
+              "system_ns": 2094815583.3333333,
+              "rss_bytes": 342130688
+            },
+            "after": {
+              "user_ns": 7774974875.0,
+              "system_ns": 6307948625.0,
+              "rss_bytes": 311951360
+            }
+          },
+          "65979": {
+            "cpu_percent": 11.336480623625237,
+            "before": {
+              "user_ns": 7488779791.666667,
+              "system_ns": 2611515791.6666665,
+              "rss_bytes": 75399168
+            },
+            "after": {
+              "user_ns": 8762246958.333334,
+              "system_ns": 3039576541.6666665,
+              "rss_bytes": 75399168
+            }
+          }
+        },
+        "roles": {
+          "server": 66137,
+          "client": 66138,
+          "workload": 65979
+        }
+      },
+      "case": "before",
+      "sample_index": 2
+    }
+  ],
+  "method": {
+    "codec": "1024x768 depth-32 BGRX, twelve 1024x64 bands, 4 warmups + 20 measured frames per pass, reverse codec order, both zlib-ng level 2",
+    "streaming": "1728x1118, real ScreenCaptureKit + scrolling AppKit workload + hidden Tahoe ScreenSharing.framework view over loopback, plain URL and registered default encryption preference 2, server plaintext policy, actual size, Zlib auto FPS",
+    "sampling": "Two 15-second CPU/timing windows per version per mode in before/after/after/before order; CPU 100% = one logical core",
+    "control": "Control selected via setControlMode after plain-URL connection; no URI query or persistent preference changes",
+    "latency": "Server capture buffer ready to end of socket write; not physical presentation or input-to-photon latency",
+    "before": "Working source snapshot before this upgrade; includes earlier uncommitted changes, not clean base commit",
+    "limits": [
+      "Instrumented builds add profiling overhead",
+      "No live iOS, TigerVNC or noVNC client benchmark",
+      "Local virtual Mac scheduling and GUI background work add variance",
+      "Observe mode cursor composition drops capture sequence identity, so that mode has no capture-ready matching"
+    ]
+  },
+  "source_manifest_sha256": {
+    "codec": "1d6ae75f70f93cdd0e27275132750109a96333a793a73219f3a6317d5ea3fda4",
+    "before": "1d2476b7048542e8f5a03c9868f06eccae52d04917bc375971400f9e2ff4204a",
+    "after_instrumented": "492dc8f6550910ab7b07006e435fe1e80d35567689a6b60b9964538b467fc193"
+  },
+  "release_verification": {
+    "binary_sha256": "56f3af3efe5c697168eef9030dcc465a3b9104fbda64c9731c9becb8e145ceba",
+    "source_manifest_sha256": "ddfd1433b455eb193e04539ec45d3078eadb7719b538525a065da98894c99ecd",
+    "test_result": "208 tests in 11 suites passed",
+    "native_result": "6 tests including 3 codec cases and 2 cursor cases passed",
+    "existing_5902_pid": 52581,
+    "existing_5902_restarted": false
+  }
+}

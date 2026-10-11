@@ -89,6 +89,16 @@ struct PixelFormat: Equatable {
             && redShift == 16 && greenShift == 8 && blueShift == 0
     }
 
+    /// Apple's viewer declares depth 32 for BGRX but its ZRLE decoder consumes
+    /// three-byte BGR compact pixels. Keep the negotiated format intact for Raw,
+    /// Zlib and cursors, and keep RFC depth handling for non-Apple clients.
+    func zrleFormat(forAppleClient apple: Bool) -> PixelFormat {
+        guard apple, depth == 32, usesBGRX8888 else { return self }
+        var compact = self
+        compact.depth = 24
+        return compact
+    }
+
     func pixelBytes(red: UInt8, green: UInt8, blue: UInt8) -> [UInt8] {
         var bytes: [UInt8] = []
         bytes.reserveCapacity(Int(bitsPerPixel / 8))
@@ -116,8 +126,9 @@ struct PixelFormat: Equatable {
         appendCPixelValue(pixel, to: &output)
     }
 
-    func appendCPixelValue(_ pixel: UInt32, to output: inout [UInt8]) {
+    func appendCPixelValue(_ value: UInt32, to output: inout [UInt8]) {
         let byteCount = Int(bitsPerPixel / 8)
+        let pixel = cPixelOmitsLowByte ? value >> 8 : value
 
         guard usesThreeByteCPixel else {
             appendIntegerBytes(pixel, byteCount: byteCount, to: &output)
@@ -142,12 +153,15 @@ struct PixelFormat: Equatable {
     private var usesThreeByteCPixel: Bool {
         bitsPerPixel == 32
             && depth <= 24
-            && redMax <= 255
-            && greenMax <= 255
-            && blueMax <= 255
-            && redShift < 24
-            && greenShift < 24
-            && blueShift < 24
+            && (colorMask & 0xff000000 == 0 || colorMask & 0xff == 0)
+    }
+
+    private var colorMask: UInt32 {
+        (UInt32(redMax) << redShift) | (UInt32(greenMax) << greenShift) | (UInt32(blueMax) << blueShift)
+    }
+
+    var cPixelOmitsLowByte: Bool {
+        usesThreeByteCPixel && colorMask & 0xff000000 != 0
     }
 
     func packedPixel(red: UInt8, green: UInt8, blue: UInt8) -> UInt32 {
@@ -213,12 +227,14 @@ struct Rect: Equatable {
 }
 
 protocol FramebufferSource {
+    var frameChanges: FrameChangeHub? { get }
     var includesCursor: Bool { get }
     var cursorSnapshot: CursorSnapshot? { get }
     func capture() throws -> Framebuffer
 }
 
 extension FramebufferSource {
+    var frameChanges: FrameChangeHub? { nil }
     var includesCursor: Bool { false }
     var cursorSnapshot: CursorSnapshot? { nil }
 }

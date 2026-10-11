@@ -1,0 +1,967 @@
+{
+  "date": "2026-10-12",
+  "release_binary_sha256": "56f3af3efe5c697168eef9030dcc465a3b9104fbda64c9731c9becb8e145ceba",
+  "profile_source_manifest_sha256": "ddfd1433b455eb193e04539ec45d3078eadb7719b538525a065da98894c99ecd",
+  "method": {
+    "encoder": "Existing validated current-code 1024x768 depth32 benchmark, two reverse-order passes, zlib-ng level2. ZRLE has since gained only the adaptive-level forwarding method; fixed-level encode path is unchanged.",
+    "live": "Current source instrumented in an isolated release build. Real 1728x1118 ScreenCaptureKit input, synthetic scrolling AppKit window, hidden Tahoe ScreenSharing.framework client, plain URL, normal encryption preference2, server default plaintext policy, Actual Size, Control selected after connecting. Both codecs fixed to zlib-ng level2.",
+    "attempt_order": [
+      "zlib-1",
+      "zrle-1",
+      "zrle-2",
+      "zlib-2"
+    ],
+    "cpu": "Process CPU100%=one logical core; encoder CPU in milliseconds per synthetic frame.",
+    "validity": "No successful live ZRLE samples. Zlib repeats also differ substantially in capture throughput, so no matched live codec performance ratio is reported."
+  },
+  "encoder_results": [
+    {
+      "name": "solid-zlib-0",
+      "scenario": "solid",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.17185625,
+        "p50": 1.1245835,
+        "p95": 1.2495,
+        "max": 1.631666
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.1707791,
+        "p50": 1.1242079999999999,
+        "p95": 1.24925,
+        "max": 1.631292
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 15555,
+        "p50": 15555.0,
+        "p95": 15555,
+        "max": 15555
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "solid-zrle-0",
+      "scenario": "solid",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.34939795,
+        "p50": 1.3124995,
+        "p95": 1.538209,
+        "max": 1.656917
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.34560005,
+        "p50": 1.310875,
+        "p95": 1.537792,
+        "max": 1.590541
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 156,
+        "p50": 156.0,
+        "p95": 156,
+        "max": 156
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "1": 4608
+      }
+    },
+    {
+      "name": "solid-zrle-1",
+      "scenario": "solid",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.35687495,
+        "p50": 1.3075,
+        "p95": 1.578042,
+        "max": 1.749208
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.35562705,
+        "p50": 1.3072295,
+        "p95": 1.577583,
+        "max": 1.730083
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 156,
+        "p50": 156.0,
+        "p95": 156,
+        "max": 156
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "1": 4608
+      }
+    },
+    {
+      "name": "solid-zlib-1",
+      "scenario": "solid",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.24018335,
+        "p50": 1.2586255,
+        "p95": 1.377625,
+        "max": 1.568041
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.2394104,
+        "p50": 1.258375,
+        "p95": 1.377209,
+        "max": 1.558083
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 15555,
+        "p50": 15555.0,
+        "p95": 15555,
+        "max": 15555
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "two-color-zlib-0",
+      "scenario": "two-color",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.79162095,
+        "p50": 2.895146,
+        "p95": 4.477167,
+        "max": 4.808417
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.77410205,
+        "p50": 2.795125,
+        "p95": 4.473292,
+        "max": 4.760834
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 120306.25,
+        "p50": 116266.5,
+        "p95": 219844,
+        "max": 219844
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "two-color-zrle-0",
+      "scenario": "two-color",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.15921235,
+        "p50": 2.1343335000000003,
+        "p95": 2.540625,
+        "max": 2.794666
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.15421045,
+        "p50": 2.131917,
+        "p95": 2.475333,
+        "max": 2.783542
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 4066.75,
+        "p50": 4066.5,
+        "p95": 4072,
+        "max": 4072
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "2": 4608
+      }
+    },
+    {
+      "name": "two-color-zrle-1",
+      "scenario": "two-color",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.1979646,
+        "p50": 2.1305005,
+        "p95": 2.560042,
+        "max": 2.81025
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.19701255,
+        "p50": 2.1302705,
+        "p95": 2.5595,
+        "max": 2.8095
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 4066.75,
+        "p50": 4066.5,
+        "p95": 4072,
+        "max": 4072
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "2": 4608
+      }
+    },
+    {
+      "name": "two-color-zlib-1",
+      "scenario": "two-color",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 2.6785854000000002,
+        "p50": 2.6279795,
+        "p95": 4.342584,
+        "max": 4.344417
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 2.67825425,
+        "p50": 2.6276875,
+        "p95": 4.342334,
+        "max": 4.343833
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 120306.25,
+        "p50": 116266.5,
+        "p95": 219844,
+        "max": 219844
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zlib-0",
+      "scenario": "palette-runs",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.27750835,
+        "p50": 3.1530625,
+        "p95": 3.896,
+        "max": 3.985083
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.2770395,
+        "p50": 3.1527079999999996,
+        "p95": 3.895292,
+        "max": 3.984708
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 174886.65,
+        "p50": 176092.0,
+        "p95": 177313,
+        "max": 177313
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "palette-runs-zrle-0",
+      "scenario": "palette-runs",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.6328646,
+        "p50": 1.6171455,
+        "p95": 1.787459,
+        "max": 1.99075
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.63258545,
+        "p50": 1.6168965,
+        "p95": 1.787125,
+        "max": 1.990291
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 2475.5,
+        "p50": 2525.0,
+        "p95": 2666,
+        "max": 2666
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "132": 4176,
+        "4": 432
+      }
+    },
+    {
+      "name": "palette-runs-zrle-1",
+      "scenario": "palette-runs",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.7846376,
+        "p50": 1.7639170000000002,
+        "p95": 1.979709,
+        "max": 2.091
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.78066025,
+        "p50": 1.754458,
+        "p95": 1.97575,
+        "max": 2.090625
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 2475.5,
+        "p50": 2525.0,
+        "p95": 2666,
+        "max": 2666
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "132": 4176,
+        "4": 432
+      }
+    },
+    {
+      "name": "palette-runs-zlib-1",
+      "scenario": "palette-runs",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.3829188,
+        "p50": 3.3345205,
+        "p95": 4.25075,
+        "max": 4.287708
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.3482125,
+        "p50": 3.3207085000000003,
+        "p95": 3.805917,
+        "max": 4.21
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 174886.65,
+        "p50": 176092.0,
+        "p95": 177313,
+        "max": 177313
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "many-colors-zlib-0",
+      "scenario": "many-colors",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.3375061,
+        "p50": 1.279229,
+        "p95": 1.536583,
+        "max": 2.401291
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.2861022,
+        "p50": 1.2787920000000002,
+        "p95": 1.438291,
+        "max": 1.535583
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 25620.1,
+        "p50": 25609.5,
+        "p95": 25660,
+        "max": 25660
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "many-colors-zrle-0",
+      "scenario": "many-colors",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.42804585,
+        "p50": 3.3421665000000003,
+        "p95": 3.764125,
+        "max": 4.473416
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.42467915,
+        "p50": 3.3411875,
+        "p95": 3.763459,
+        "max": 4.421208
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 12470.3,
+        "p50": 12527.5,
+        "p95": 12898,
+        "max": 12898
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "160": 4608
+      }
+    },
+    {
+      "name": "many-colors-zrle-1",
+      "scenario": "many-colors",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.50137705,
+        "p50": 3.4490835,
+        "p95": 3.894583,
+        "max": 3.918625
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.49784995,
+        "p50": 3.4453745,
+        "p95": 3.894083,
+        "max": 3.918
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 12470.3,
+        "p50": 12527.5,
+        "p95": 12898,
+        "max": 12898
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "160": 4608
+      }
+    },
+    {
+      "name": "many-colors-zlib-1",
+      "scenario": "many-colors",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 1.43609385,
+        "p50": 1.352042,
+        "p95": 1.841792,
+        "max": 2.145875
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 1.4300625,
+        "p50": 1.3516460000000001,
+        "p95": 1.8415,
+        "max": 2.062084
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 25620.1,
+        "p50": 25609.5,
+        "p95": 25660,
+        "max": 25660
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zlib-0",
+      "scenario": "document",
+      "codec": "zlib",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 4.19477915,
+        "p50": 3.9912295,
+        "p95": 5.033583,
+        "max": 5.33775
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 4.16941875,
+        "p50": 3.9907085,
+        "p95": 4.964875,
+        "max": 5.109042
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 208919.5,
+        "p50": 208937.5,
+        "p95": 211169,
+        "max": 211169
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    },
+    {
+      "name": "document-zrle-0",
+      "scenario": "document",
+      "codec": "zrle",
+      "pass": 0,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.951598,
+        "p50": 3.889354,
+        "p95": 4.626583,
+        "max": 4.758375
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.906798,
+        "p50": 3.888625,
+        "p95": 4.349166,
+        "max": 4.555833
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 92466,
+        "p50": 92051.0,
+        "p95": 94158,
+        "max": 94158
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "128": 1080,
+        "246": 594,
+        "251": 306,
+        "249": 312,
+        "245": 318,
+        "242": 306,
+        "243": 300,
+        "225": 288,
+        "1": 864,
+        "253": 18,
+        "255": 24,
+        "254": 30,
+        "244": 18,
+        "252": 30,
+        "250": 30,
+        "248": 42,
+        "241": 6,
+        "233": 6,
+        "247": 36
+      }
+    },
+    {
+      "name": "document-zrle-1",
+      "scenario": "document",
+      "codec": "zrle",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 3.8581167,
+        "p50": 3.7751460000000003,
+        "p95": 4.330833,
+        "max": 4.601167
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 3.84049385,
+        "p50": 3.774271,
+        "p95": 4.292583,
+        "max": 4.523708
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 92466,
+        "p50": 92051.0,
+        "p95": 94158,
+        "max": 94158
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {
+        "128": 1080,
+        "246": 594,
+        "251": 306,
+        "249": 312,
+        "245": 318,
+        "242": 306,
+        "243": 300,
+        "225": 288,
+        "1": 864,
+        "253": 18,
+        "255": 24,
+        "254": 30,
+        "244": 18,
+        "252": 30,
+        "250": 30,
+        "248": 42,
+        "241": 6,
+        "233": 6,
+        "247": 36
+      }
+    },
+    {
+      "name": "document-zlib-1",
+      "scenario": "document",
+      "codec": "zlib",
+      "pass": 1,
+      "width": 1024,
+      "height": 768,
+      "depth": 32,
+      "wall_ms": {
+        "n": 20,
+        "mean": 4.07693955,
+        "p50": 3.977521,
+        "p95": 4.769292,
+        "max": 4.94
+      },
+      "cpu_ms": {
+        "n": 20,
+        "mean": 4.0593061,
+        "p50": 3.977021,
+        "p95": 4.741,
+        "max": 4.893958
+      },
+      "payload_bytes": {
+        "n": 20,
+        "mean": 208919.5,
+        "p50": 208937.5,
+        "p95": 211169,
+        "max": 211169
+      },
+      "valid_frames": 24,
+      "checked_frames": 24,
+      "mismatching_pixels": 0,
+      "failure_examples": [],
+      "tile_modes": {}
+    }
+  ],
+  "live_attempts": [
+    {
+      "updates_per_s": 57.64959373948072,
+      "capture_per_s": 57.582946810302126,
+      "rfb_MB_per_s": 14.776662691343958,
+      "send_interval_ms": {
+        "n": 864,
+        "p50": 17.220083,
+        "p95": 19.502958,
+        "max": 32.193166
+      },
+      "capture_ready_to_send_ms": {
+        "n": 865,
+        "p50": 5.6925,
+        "p95": 7.316958,
+        "max": 21.868458
+      },
+      "copy_ms": {
+        "n": 864,
+        "p50": 0.954021,
+        "p95": 2.091834,
+        "max": 15.446083
+      },
+      "pacing_wait_ms": {
+        "n": 1627,
+        "p50": 0.000542,
+        "p95": 11.157041,
+        "max": 14.736708
+      },
+      "sample": {
+        "scenario": "zlib",
+        "start_uptime_ns": 1822222280591625,
+        "end_uptime_ns": 1822237285033875,
+        "duration_s": 15.00444225,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "67747": {
+            "cpu_percent": 38.128103084493745,
+            "before": {
+              "user_ns": 3156888125.0,
+              "system_ns": 306330166.6666667,
+              "rss_bytes": 105873408
+            },
+            "after": {
+              "user_ns": 8548788500.0,
+              "system_ns": 635339000.0,
+              "rss_bytes": 105906176
+            }
+          },
+          "67748": {
+            "cpu_percent": 69.87075610891168,
+            "before": {
+              "user_ns": 3191128916.6666665,
+              "system_ns": 2821952625.0,
+              "rss_bytes": 309231616
+            },
+            "after": {
+              "user_ns": 8878543500.0,
+              "system_ns": 7618255291.666667,
+              "rss_bytes": 351027200
+            }
+          },
+          "67746": {
+            "cpu_percent": 11.945994971367009,
+            "before": {
+              "user_ns": 941937041.6666666,
+              "system_ns": 336741708.3333333,
+              "rss_bytes": 75005952
+            },
+            "after": {
+              "user_ns": 2292652041.6666665,
+              "system_ns": 778456625.0,
+              "rss_bytes": 74989568
+            }
+          }
+        },
+        "roles": {
+          "server": 67747,
+          "client": 67748,
+          "workload": 67746
+        }
+      },
+      "case": "zlib",
+      "sample_index": 1
+    },
+    {
+      "case": "zrle",
+      "sample_index": 1,
+      "status": "failed",
+      "reason": "Native client disconnected during startup before sampling",
+      "native_error": "Unknown ZRLE tile subencoding 24. Closing connection."
+    },
+    {
+      "status": "failed",
+      "reason": "client.log exited 3: 2026-10-12 00:26:47.723 capture-client[67922:20070553] Warning: Column selection is not supported in view-based table and outline views (<NSTableView: 0x102d31350>).\nminimumEncryptionLevel=2 plainURL=1\n",
+      "case": "zrle",
+      "sample_index": 2,
+      "native_error": "Unknown ZRLE tile subencoding 129. Closing connection."
+    },
+    {
+      "updates_per_s": 22.52564895747534,
+      "capture_per_s": 22.59229288930219,
+      "rfb_MB_per_s": 1.7687560751058784,
+      "send_interval_ms": {
+        "n": 337,
+        "p50": 49.08925,
+        "p95": 69.754375,
+        "max": 82.919084
+      },
+      "capture_ready_to_send_ms": {
+        "n": 338,
+        "p50": 2.530354,
+        "p95": 8.338709,
+        "max": 10.570792
+      },
+      "copy_ms": {
+        "n": 338,
+        "p50": 5.7462295,
+        "p95": 32.336167,
+        "max": 40.324208
+      },
+      "pacing_wait_ms": {
+        "n": 980,
+        "p50": 0.001083,
+        "p95": 15.789958,
+        "max": 17.322417
+      },
+      "sample": {
+        "scenario": "zlib",
+        "start_uptime_ns": 1822339995935291,
+        "end_uptime_ns": 1822355001052375,
+        "duration_s": 15.005117084,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "67924": {
+            "cpu_percent": 11.654267331229399,
+            "before": {
+              "user_ns": 1625549583.3333333,
+              "system_ns": 403260875.0,
+              "rss_bytes": 113082368
+            },
+            "after": {
+              "user_ns": 3033649083.3333335,
+              "system_ns": 743897833.3333334,
+              "rss_bytes": 105136128
+            }
+          },
+          "67925": {
+            "cpu_percent": 35.79429250656822,
+            "before": {
+              "user_ns": 2090563125.0,
+              "system_ns": 2330847333.3333335,
+              "rss_bytes": 304054272
+            },
+            "after": {
+              "user_ns": 4630503583.333333,
+              "system_ns": 5161882375.0,
+              "rss_bytes": 260915200
+            }
+          },
+          "67919": {
+            "cpu_percent": 12.552075498353373,
+            "before": {
+              "user_ns": 1729290125.0,
+              "system_ns": 890023791.6666666,
+              "rss_bytes": 70828032
+            },
+            "after": {
+              "user_ns": 2949584291.6666665,
+              "system_ns": 1553183250.0,
+              "rss_bytes": 73695232
+            }
+          }
+        },
+        "roles": {
+          "server": 67924,
+          "client": 67925,
+          "workload": 67919
+        }
+      },
+      "case": "zlib",
+      "sample_index": 2
+    }
+  ]
+}

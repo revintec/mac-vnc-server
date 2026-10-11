@@ -2,16 +2,18 @@
 
 `mac-vnc-server` is a macOS-only VNC/RFB server written in Swift. It captures the local Mac screen, accepts keyboard and mouse input from a VNC client, and exposes the session on a configurable TCP port.
 
-The default setup is optimized for local testing with Apple Screen Sharing:
+The default setup targets Apple Screen Sharing over the `utun4` interface:
 
-- bind address: `127.0.0.1`
+- bind target: `utun4` (its first active IPv4 address at startup)
 - base port: `5900`
-- password: generated and stored in `~/.mac-vnc-server/config.json`
+- password: required through the `VNC_PASSWORD` environment variable
 - FPS target: adaptive `60 -> 45 -> 30`
 - scale: `1.0`
 - encoding: `auto`
+- session encryption: off; password authentication remains enabled
+- clipboard sync and file transfer: on
 
-Use SSH tunneling or an explicit LAN bind for remote use.
+Use `--bind 127.0.0.1` for loopback, `--bind en0` for another interface, or an explicit IPv4 address. An unavailable interface is an error; the server never falls back to listening on all interfaces.
 
 ## Requirements
 
@@ -101,21 +103,22 @@ If ScreenCaptureKit reports no displays after the Mac turns the screen off, wake
 ./.build/release/mac-vnc-server-dev wakeup
 ```
 
-## Run locally
+## Run
 
-Default command:
+Set `VNC_PASSWORD` in the launching environment, then run:
 
 ```sh
+export VNC_PASSWORD='<your-password>'
 ./.build/release/mac-vnc-server-dev
 ```
 
 Equivalent explicit command:
 
 ```sh
-./.build/release/mac-vnc-server-dev run --bind 127.0.0.1 --port 5900 --fps auto --scale 1 --encoding auto
+./.build/release/mac-vnc-server-dev run --bind utun4 --port 5900 --fps auto --scale 1 --encoding auto --no-encryption --clipboard-sync --file-transfer
 ```
 
-Register the server as a per-user macOS service and start it immediately:
+Set the user launchd environment as described under Password and storage, then register the server as a per-user macOS service:
 
 ```sh
 ./.build/release/mac-vnc-server-dev --service
@@ -129,7 +132,7 @@ throttling to the frame-streaming workload. It uses the same server options, so 
 can be combined with `--service`, for example:
 
 ```sh
-mac-vnc-server --service --bind 0.0.0.0 --port 5900 --password '<your-password>'
+mac-vnc-server --service --bind 0.0.0.0 --port 5900
 ```
 
 Restart the registered service after replacing the binary:
@@ -161,17 +164,13 @@ By default, the server exposes both the combined desktop and each display indivi
 ...   one additional port per display
 ```
 
-Connect with Apple Screen Sharing:
+For loopback testing, start the server with `--bind 127.0.0.1`, then connect with Apple Screen Sharing:
 
 ```sh
 open 'vnc://127.0.0.1:5900'
 ```
 
-Password printed at startup:
-
-```text
-VNC password: XXXXXXXX
-```
+Authenticate with the password supplied through `VNC_PASSWORD`.
 
 For unattended local testing, fill the native Screen Sharing password dialog with AppleScript:
 
@@ -189,13 +188,13 @@ Do not store test credentials in Keychain unless you explicitly want that behavi
 Bind all interfaces:
 
 ```sh
-./.build/release/mac-vnc-server-dev --bind 0.0.0.0 --port 5900 --password '<your-password>'
+./.build/release/mac-vnc-server-dev --bind 0.0.0.0 --port 5900
 ```
 
 Or bind a specific LAN IP:
 
 ```sh
-./.build/release/mac-vnc-server-dev --bind 192.168.1.10 --port 5900 --password '<your-password>'
+./.build/release/mac-vnc-server-dev --bind 192.168.1.10 --port 5900
 ```
 
 The server refuses unauthenticated non-loopback binds by default. To disable auth for clients that support unauthenticated VNC, you must opt in explicitly:
@@ -230,44 +229,75 @@ Options:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--bind <ipv4>` | `127.0.0.1` | IPv4 address to listen on. |
+| `--bind <ipv4 or interface>` | `utun4` | Listen on an IPv4 address or the first active IPv4 address of an interface such as `utun4`, `en0`, or `lo0`. Resolved at startup; restart after an address change. |
 | `--port <port>` / `-p <port>` | `5900` | TCP port, or base port when `--display` is omitted. |
-| `--password <value>` | config file | Override the generated/configured classic VNC auth password for this run. |
+| `VNC_PASSWORD` (environment) | required | Password for authenticated runs; never generated, printed, or written to disk. |
 | `--no-password` | off | Use unauthenticated VNC. Apple Screen Sharing does not accept this path. |
 | `--insecure-allow-no-auth` | off | Required with `--no-password` on non-loopback binds. |
 | `--fps <auto\|1...120>` | `auto` | Adaptive `60 -> 45 -> 30` target, or a fixed framebuffer update rate when an explicit number is provided. |
-| `--scale <value>` | `1.0` | Base virtual framebuffer scale. Adaptive sessions may temporarily use `0.75` or `0.67` for compatible generic clients that advertise DesktopSize when encoding or network pressure persists. Apple Screen Sharing remains at the negotiated framebuffer size until its resize dialect is implemented. |
+| `--scale <value>` | `1.0` | Base virtual framebuffer scale. Adaptive sessions may temporarily use `0.75` or `0.67` for compatible generic clients that advertise DesktopSize when encoding or network pressure persists. Apple Screen Sharing uses its own display/scaling negotiation and is excluded from these automatic scale changes. |
 | `--encoding <auto\|zrle\|zlib\|raw>` | `auto` | Framebuffer encoding preference. |
 | `--display <all\|number>` | automatic | Display mode. Omit it to serve all displays on the base port and each display on consecutive ports. Use `all` for only the combined desktop, or a 1-based display number for only that display. |
 | `--service` | off | Install and start a per-user macOS LaunchAgent in the logged-in Aqua UI session. |
 | `--service-restart` | — | Restart the registered per-user macOS LaunchAgent. |
 | `--verbose` | off | Enable periodic framebuffer-update logs on stdout. |
-| `--clipboard-sync` | off | Share text and PNG/TIFF/JPEG images with Apple Screen Sharing; text with classic VNC. |
+| `--clipboard-sync` | on | Share text and images (PNG, TIFF, JPEG, GIF, BMP, WebP, HEIC/HEIF, AVIF, JPEG 2000) with Apple Screen Sharing; text with classic VNC. |
 | `--cursor auto\|embedded` | `auto` | Send system cursor shapes to RichCursor viewers for local pointer motion. Fall back to embedded rendering when unavailable, for other viewers, and in Apple Observe mode. |
-| `--no-encryption` | off | Require plaintext session traffic while retaining password authentication. With `--file-transfer`, experimentally suppress the native viewer's encryption key exchange on a plain URL. Encrypted traffic is refused. |
-| `--file-transfer` | off | Enable Apple file/folder drag and drop with persistent incoming staging and Apple authentication/encryption negotiation. |
+| `--no-encryption` | on | Require plaintext session traffic while retaining password authentication. With `--file-transfer`, experimentally suppress the native viewer's encryption key exchange on a plain URL. Encrypted traffic is refused. |
+| `--file-transfer` | on | Enable Apple file/folder drag and drop with persistent incoming staging and Apple authentication/encryption negotiation. |
+| `--encryption` | off | Negotiate Apple encryption when file transfer is enabled. |
+| `--no-clipboard-sync` | off | Disable clipboard sharing. |
+| `--no-file-transfer` | off | Disable file transfer and its receiving panel. |
 | `--file-drop-mode` | `staged` | `staged` offers real local files and a receiving panel; `native` keeps the original Finder/file-promise workflow. |
 | `--transfer-directory` | `~/Library/Application Support/mac-vnc-server/Transfers` | Persistent storage for received copies. Supply an absolute path. |
 | `--transfer-limit-gib` | 10 | Limit retained files plus active transfer storage reservations. |
 | `--transfer-free-gib` | 1 | Minimum free disk space to preserve while receiving. |
 | `--no-adaptive` | off | Disable adaptive FPS, compression, and automatic scale changes. |
 
-### Password configuration
+### Password and storage
 
-On the first authenticated run, the server generates an 8-character ASCII password and stores it in:
+Authenticated runs read a nonempty `VNC_PASSWORD` from their environment. A
+missing or empty variable is an error. `--password` has been removed. The
+server never generates a password, prints it, or saves it. `--no-password`
+remains an explicit opt-out for clients supporting unauthenticated VNC, with
+`--insecure-allow-no-auth` still required outside loopback.
 
-```text
-~/.mac-vnc-server/config.json
+There is no runtime read/write code for `~/.mac-vnc-server`, and a legacy
+`config.json` is no longer used. Settings come from CLI arguments and the
+password from the environment.
+
+For a LaunchAgent, set the variable in the **user launchd environment** before
+installing or restarting it; exporting in a terminal alone does not reach an
+already-running launchd:
+
+```sh
+export VNC_PASSWORD='<your-password>'
+launchctl setenv VNC_PASSWORD "$VNC_PASSWORD"
+./.build/release/mac-vnc-server-dev --service
 ```
 
-The directory is created with permissions `0700` and the file with `0600`. The password is printed to stdout at startup. Subsequent runs reuse the same value. Use `--password <value>` for a one-off override, or `--no-password` for an explicitly unauthenticated server.
+The service installer checks that launchd has the variable. It never copies
+the password into the plist. This environment is session-scoped and must be
+supplied again after login/reboot. Reinstall an older service whose arguments
+still contain the removed `--password` option.
+
+Other persistent data lives outside the old directory:
+
+| Data | Location |
+| --- | --- |
+| Received files, partial data, manifests and process leases | `~/Library/Application Support/mac-vnc-server/Transfers` (or `--transfer-directory`) |
+| Service executable and arguments | `~/Library/LaunchAgents/com.pablozaiden.mac-vnc-server.plist` |
+| Service standard output | `~/Library/Logs/mac-vnc-server/stdout.log` |
+| Service errors | `~/Library/Logs/mac-vnc-server/stderr.log` |
+
+Clipboard snapshots and session encryption keys remain in memory.
 
 ### Display modes
 
 Omitting `--display` starts multiple listeners. With the default base port, `5900` keeps the previous combined-desktop behavior and `5901`, `5902`, ... expose each monitor separately:
 
 ```sh
-./.build/release/mac-vnc-server-dev
+./.build/release/mac-vnc-server-dev --bind 127.0.0.1
 open 'vnc://127.0.0.1:5900'  # all displays
 open 'vnc://127.0.0.1:5901'  # display 1
 open 'vnc://127.0.0.1:5902'  # display 2
@@ -322,17 +352,22 @@ Clients that advertise the standard `DesktopSize` pseudo-encoding can also enter
 
 `--encoding auto` chooses a compatible encoding based on the client:
 
-- Apple Screen Sharing: persistent Zlib encoding (`6`)
-- generic clients with ZRLE: ZRLE (`16`)
-- generic clients with Zlib: Zlib (`6`)
+- clients advertising Zlib: persistent Zlib encoding (`6`), including Apple Screen Sharing
+- otherwise, clients advertising ZRLE: ZRLE (`16`)
 - fallback: Raw (`0`)
 
 Zlib is kept as a persistent stream per VNC connection, which is required for stable compressed updates with Apple Screen Sharing.
-Adaptive compression prioritizes sender throughput: it uses level 1 when encoding is the bottleneck and at most level 3 when the network is the bottleneck. It does not automatically switch to high compression levels during video or animation.
+Adaptive compression prioritizes sender throughput: it starts at level 2 with zlib-ng (level 1 with system zlib) and uses at most level 3 when the network is the bottleneck. It does not automatically switch to high compression levels during video or animation.
 ZRLE uses lossless solid-color, palette, packed-palette, and run-length tile modes, selecting the smallest representation for each changed tile. Dirty regions use smaller tiles when appropriate, and framebuffer update rectangles are batched into fewer socket writes.
+
+Capture arrivals wake the sender, which uses monotonic frame deadlines and skips obsolete slots. A bounded capture-copy worker keeps at most one pending buffer, and unchanged scaled snapshots are cached. Generic clients receive updates only for pending requests or negotiated ContinuousUpdates; Fence acknowledgements bound automatic frames to three in flight when supported. Clients advertising CopyRect can reuse verified vertical scroll regions from their last delivered framebuffer. Apple Screen Sharing does not advertise CopyRect in the observed sessions and benefits from the capture, caching and pacing changes instead.
+
 With `--cursor auto` (the default), the server reads the system cursor through AppKit and excludes it from ScreenCaptureKit frames. RichCursor viewers receive shape/hotspot updates and move the cursor locally, without waiting for a round trip or another compressed frame. If cursor sampling is unavailable at startup, the server uses embedded capture. Viewers without RichCursor and Apple Observe sessions receive a composited cursor. Use `--cursor embedded` to retain capture-based rendering throughout.
 
 The BGRX pixel-copy path supports Screen Sharing's depth-32 format as well as depth 24. Large visible scroll updates are coalesced and sent in one framebuffer update. See [performance measurements and limitations](docs/performance.md) for the benchmark, encryption policy, and why offscreen application content cannot be prefetched through RFB.
+
+See [encoding compatibility and smoother scrolling](docs/encoding-compatibility.md) for per-client support, fallback behavior and CopyRect limits.
+The [ZRLE repair and scrolling measurements](docs/scrolling-upgrade-2026-10-12.md) document the corrected encoder, full-pixel validation and measured CPU/timing results. ZRLE now shares the zlib-ng backend and compression controls with Zlib. Apple viewers receive the [three-byte compact-pixel format](docs/apple-zrle-compatibility-2026-10-12.md) their ZRLE decoder expects despite advertising depth 32.
 
 ### Multiple clients
 
@@ -356,7 +391,7 @@ For Apple Screen Sharing, `Alt_L` / `Alt_R` keysyms are remapped to macOS Comman
 
 ### Clipboard
 
-Clipboard synchronization is disabled by default because the native macOS Screen Sharing client can apply incoming clipboard updates to the client's local pasteboard. Enable clipboard synchronization explicitly when it is needed:
+Clipboard synchronization is enabled by default. Use `--no-clipboard-sync` to disable it. The explicit enabling option remains available:
 
 ```sh
 ./.build/release/mac-vnc-server-dev run --clipboard-sync
@@ -364,12 +399,11 @@ Clipboard synchronization is disabled by default because the native macOS Screen
 
 With `--clipboard-sync`, the server advertises Apple's RFB 3.889 dialect and negotiates an extended ServerInit with compatible viewers. Apple Screen Sharing uses native pasteboard notifications, fetches, and compressed text and image archives. Other viewers can negotiate RFB 3.3, 3.7, or 3.8 and continue using classic cut text messages. The configured password remains required in either mode.
 
-On the client, enable **Edit → Use Shared Clipboard** after connecting. Screen Sharing owns this checkbox through its saved clipboard preference. Verbose logs report when clipboard sharing is available but disabled by the viewer. The implementation supports Unicode and multiline text, PNG/TIFF/JPEG images, clearing, and deferred clipboard requests in both directions. Apple clipboard archives are limited to 100 MiB; classic VNC text remains limited to 16 MiB. Rich-text preservation and macOS account authentication are not implemented. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
+On the client, enable **Edit → Use Shared Clipboard** after connecting. Screen Sharing owns this checkbox through its saved clipboard preference. Verbose logs report when clipboard sharing is available but disabled by the viewer. The implementation supports Unicode and multiline text, PNG, TIFF, JPEG, GIF, BMP, WebP, HEIC/HEIF, AVIF and JPEG 2000 images, clearing, and deferred clipboard requests in both directions. Image bytes are preserved, including GIF animation when the source app supplies the original GIF representation; a still-image copy cannot restore animation. The receiving app must support the supplied format. Apple clipboard archives are limited to 100 MiB; classic VNC text remains limited to 16 MiB. Rich-text preservation and macOS account authentication are not implemented. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
 
-File/folder drag and drop is enabled separately with `--file-transfer`. This uses
-an experimental Apple compatibility profile with encryption negotiation. Restart the updated
-server with that flag, disconnect the existing viewer session, and connect from
-the client with:
+File/folder drag and drop is enabled by default. Use `--no-file-transfer` to disable it.
+The default is the experimental plaintext Apple profile; `--encryption` enables
+Apple encryption negotiation. Connect from the client with:
 
 ```sh
 open -a "Screen Sharing" 'vnc://SERVER_IP:5900/'
@@ -386,14 +420,13 @@ verification](docs/staged-file-drops.md) for limits and remaining client tests.
 `--file-drop-mode native` retains direct drops into Finder through file promises.
 Drag a remote Finder item out of Screen Sharing into local Finder to copy in the
 other direction. Existing destinations are preserved with numbered names.
-Screen Sharing uses Apple
+With `--encryption`, Screen Sharing uses Apple
 Diffie–Hellman authentication: enter any username and the configured server
 password in its login dialog. The username is only a label, not a macOS account
 login. Standard VNC clients continue to use the VNC password method.
 The server supports Apple's AES record encryption and encrypted input events,
-so connect using the plain URL above. For experimental plaintext operation, add
-`--no-encryption` to the server's `--file-transfer` options and keep the same plain
-URL. This selects VNC password authentication and consumes the viewer's encryption
+so connect using the plain URL above. The default `--no-encryption` policy uses experimental plaintext operation
+with the same plain URL. This selects VNC password authentication and consumes the viewer's encryption
 request without sending keys. Tahoe's native viewer then keeps streaming in
 plaintext and enables both file-drop directions. This relies on undocumented
 behavior; it still needs a Finder test with Screen Sharing 3.0 on macOS 13.
@@ -471,11 +504,7 @@ The self-signed certificate provides a stable signing identity for macOS permiss
 
 ### Apple Screen Sharing keeps asking for a password
 
-The generated password is printed on server startup:
-
-```text
-VNC password: XXXXXXXX
-```
+Use the value of `VNC_PASSWORD` supplied to the server process. It is not printed in logs or saved in a config file.
 
 For scripted testing, use AppleScript to type it instead of Keychain.
 

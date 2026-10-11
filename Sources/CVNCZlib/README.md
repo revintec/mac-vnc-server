@@ -4,8 +4,8 @@ This SwiftPM C target contains zlib-ng **2.3.3** in its native `zng_*` namespace
 alongside a separate adapter for macOS system zlib. Only `include/CVNCZlib.h` is
 exposed to Swift. The adapters deliberately compile in different translation
 units: zlib-ng and zlib have incompatible public stream types and must not share
-headers or replace each other's symbols. Other server users of system zlib
-(ZRLE, clipboard and file-transfer archives) continue to link to macOS libz.
+headers or replace each other's symbols. Zlib and ZRLE share these adapters;
+clipboard and file-transfer archives continue to link to macOS libz.
 
 `vendor/` contains unmodified upstream C sources, private headers, and the
 license, with public native headers copied from the upstream `.h.in` templates.
@@ -33,8 +33,8 @@ builds the compressed length and payload in one array.
 
 Use `--zlib-backend system` for comparison/fallback, and `--zlib-level 0...9`
 to hold the selected level fixed. `--zlib-level auto` restores adaptation.
-These options affect RFB Zlib encoding 6 only; they do not change which encoding
-is negotiated. Use `--encoding zlib` to request it explicitly. Level 0 still
+These options affect RFB Zlib (6) and ZRLE (16); they do not change which encoding
+is negotiated. Use `--encoding zlib` or `--encoding zrle` to request one explicitly. Level 0 still
 uses the same continuous zlib stream and can greatly increase network traffic.
 
 Validation: `swift test --scratch-path .build/zlib-optimization -c release`.
@@ -55,3 +55,10 @@ native interoperability probe. No global toolchain settings need to change.
 
 Upstream: https://github.com/zlib-ng/zlib-ng/releases/tag/2.3.3
 License: [zlib license](vendor/LICENSE.md).
+
+`zrle.c` is an original MIT-licensed RFC 6143 tile encoder. It uses fixed scratch
+arrays, one palette/run census and one output pass, choosing the smallest valid
+raw, solid, packed-palette, plain-RLE or palette-RLE form. It does not contain
+GPL code from TigerVNC or LibVNCServer. The Swift wrapper feeds these tiles into
+the same persistent, transactional zlib-ng/system stream used by encoding 6.
+See [measurements and correctness checks](../../docs/scrolling-upgrade-2026-10-12.md).

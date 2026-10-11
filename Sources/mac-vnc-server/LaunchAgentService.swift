@@ -17,7 +17,7 @@ enum LaunchAgentServiceError: LocalizedError {
         case .executableUnavailable:
             return "could not determine the mac-vnc-server executable path"
         case .invalidArguments:
-            return "--service cannot be passed to the registered service command"
+            return "service arguments must not contain --service or --password; supply the password through VNC_PASSWORD"
         case .serviceNotInstalled:
             return "the mac-vnc-server service is not loaded; register it first with 'mac-vnc-server --service'"
         case .launchctlUnavailable(let message):
@@ -39,12 +39,19 @@ enum LaunchAgentService {
         let output: String
     }
 
-    static func install(arguments: [String]) throws {
-        guard !arguments.contains("--service") else {
+    static func install(arguments: [String], requiresPasswordEnvironment: Bool = true) throws {
+        guard !arguments.contains("--service"), !arguments.contains("--password") else {
             throw LaunchAgentServiceError.invalidArguments
         }
 
         let userID = try currentUserID()
+        if requiresPasswordEnvironment {
+            // LaunchAgents inherit launchd's environment, not this terminal's.
+            // Read only; never serialize the password in the service plist.
+            guard let result = try? runLaunchctl(["getenv", "VNC_PASSWORD"]), !result.output.isEmpty else {
+                throw CLIError.invalidArgument("VNC_PASSWORD is missing from the user launchd environment; run launchctl setenv VNC_PASSWORD \"$VNC_PASSWORD\" before --service")
+            }
+        }
         let executableURL = try currentExecutableURL()
         let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         try install(
@@ -71,7 +78,7 @@ enum LaunchAgentService {
         arguments: [String],
         homeDirectory: URL
     ) throws -> Data {
-        guard !arguments.contains("--service") else {
+        guard !arguments.contains("--service"), !arguments.contains("--password") else {
             throw LaunchAgentServiceError.invalidArguments
         }
 

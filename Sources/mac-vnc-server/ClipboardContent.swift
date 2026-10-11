@@ -9,7 +9,14 @@ struct ClipboardContent: Equatable, Sendable {
     }
 
     static let textType = "public.utf8-plain-text"
-    static let imageTypes: Set<String> = ["public.png", "public.tiff", "public.jpeg"]
+    // Keep the original representation, including animation and metadata. The
+    // bridge transports bytes; it does not need a decoder for each format.
+    // Explicit UTIs also work when an older macOS does not register a format.
+    static let imageTypes: Set<String> = [
+        "public.png", "public.tiff", "public.jpeg",
+        "com.compuserve.gif", "com.microsoft.bmp", "org.webmproject.webp",
+        "public.heic", "public.heif", "public.avif", "public.jpeg-2000"
+    ]
     static let supportedTypes = imageTypes.union([textType])
     static let empty = ClipboardContent(items: [])
     let items: [[Flavor]]

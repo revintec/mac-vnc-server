@@ -1,6 +1,16 @@
 #ifndef CVNC_ZLIB_H
 #define CVNC_ZLIB_H
 #include <stdint.h>
+#include <stddef.h>
+
+typedef struct {
+    uint16_t max_r, max_g, max_b;
+    uint8_t shift_r, shift_g, shift_b, bytes, big_endian, omit_low_byte;
+} VNCZRLEFormat;
+// Source begins at the requested rectangle; stride includes source row padding.
+// Output capacity must hold raw CPixels plus one byte per 64x64 tile.
+size_t vnc_zrle_tiles(const uint8_t *bgra, size_t stride, int width, int height,
+                     VNCZRLEFormat format, uint8_t *out, size_t capacity);
 
 // No zlib headers cross this boundary: system zlib and zlib-ng keep distinct
 // types and symbols. The stream lives at a stable C heap address until freed.

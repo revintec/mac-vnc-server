@@ -28,6 +28,10 @@ final class ZlibEncoder {
             stream = try parent.stream.copy()
         }
 
+        func encode(bytes: [UInt8]) throws -> [UInt8] {
+            try parent.compress(bytes, stream: stream)
+        }
+
         func encode(rect: Rect, framebuffer: Framebuffer, pixelFormat: PixelFormat) throws -> [UInt8] {
             try parent.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, stream: stream)
         }
@@ -125,21 +129,29 @@ final class ZlibEncoder {
         try encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, stream: stream)
     }
 
+    func encode(bytes: [UInt8]) throws -> [UInt8] {
+        try compress(bytes, stream: stream)
+    }
+
     private func encode(
         rect: Rect, framebuffer: Framebuffer, pixelFormat: PixelFormat, stream: DeflateStream
     ) throws -> [UInt8] {
         try RawEncoding.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, into: &rawBuffer)
-        guard rawBuffer.count <= Int(UInt32.max) else {
+        return try compress(rawBuffer, stream: stream)
+    }
+
+    private func compress(_ bytes: [UInt8], stream: DeflateStream) throws -> [UInt8] {
+        guard bytes.count <= Int(UInt32.max) else {
             throw RFBError.protocolError("zlib rectangle exceeds the input size limit")
         }
         // Build the length-prefixed payload directly, avoiding a second complete
         // compressed-array copy solely to prepend the RFB length.
         var output: [UInt8] = [0, 0, 0, 0]
-        output.reserveCapacity(max(1024, rawBuffer.count / 3) + stream.pendingOutput.count + 4)
+        output.reserveCapacity(max(1024, bytes.count / 3) + stream.pendingOutput.count + 4)
         output.append(contentsOf: stream.pendingOutput)
         stream.pendingOutput.removeAll(keepingCapacity: true)
 
-        try rawBuffer.withUnsafeBufferPointer { input in
+        try bytes.withUnsafeBufferPointer { input in
             var consumed = 0
             while true {
                 var inputCount = UInt32(input.count - consumed)

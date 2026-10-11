@@ -1,6 +1,6 @@
 # Apple Screen Sharing clipboard
 
-Enable with the existing `--clipboard-sync` option. Reconnect after switching
+Enabled by default; `--no-clipboard-sync` disables it and `--clipboard-sync` enables it again. Reconnect after switching
 binaries: the Apple capabilities are negotiated at connection startup. On the
 viewer, select Edit → Use Shared Clipboard. This is a client-owned preference
 (`autoClipboard` / `shouldSharePasteboard`). The native client retains its value
@@ -19,15 +19,41 @@ the clipboard profile and `--no-encryption`, or Apple type 30 with
 `--file-transfer` when encryption is allowed.
 None is advertised only when authentication has explicitly been disabled.
 
-The profile supports UTF-8 text, newlines, empty pasteboards, PNG, TIFF and JPEG
-representations, multiple image items, unsupported-flavor skipping, and deferred
-promises. Image bytes are preserved without transcoding. Compressed and expanded
+The profile supports UTF-8 text, newlines, empty pasteboards, PNG, TIFF, JPEG,
+GIF, BMP, WebP, HEIC/HEIF, AVIF and JPEG 2000 representations, multiple image
+items, unsupported-flavor skipping, and deferred promises. Image bytes are
+preserved without transcoding, including animation, metadata and any supplied
+alternative representations. A source app must put the original animated
+representation on the clipboard to preserve animation; copying only a PNG/TIFF
+preview cannot reconstruct it. The destination app must support the supplied
+format. No image decoder or format conversion is required on the server.
+Compressed and expanded
 Apple archives are each limited to 100 MiB; classic text remains limited to 16 MiB.
 Malformed sizes, counts and compressed streams are rejected. Rich text, Apple
 account authentication, virtual displays and private framebuffer
 codecs remain unsupported. The separate `--file-transfer` profile enables Finder
 drag negotiation plus Apple's authentication and encrypted records;
 see [Apple file transfers](apple-file-transfer.md).
+
+Supported image pasteboard types:
+
+| Format | UTI |
+| --- | --- |
+| PNG | `public.png` |
+| TIFF | `public.tiff` |
+| JPEG | `public.jpeg` |
+| GIF | `com.compuserve.gif` |
+| BMP | `com.microsoft.bmp` |
+| WebP | `org.webmproject.webp` |
+| HEIC | `public.heic` |
+| HEIF | `public.heif` |
+| AVIF | `public.avif` |
+| JPEG 2000 | `public.jpeg-2000` |
+
+This explicit list applies equally to local pasteboard reads and incoming Apple
+archives, including promised data. It does not depend on which image decoders
+or type registrations are installed on a particular macOS version. File URLs,
+arbitrary application data and other unsupported flavors remain excluded.
 
 ## Wire exchange
 
@@ -60,7 +86,7 @@ see [Apple file transfers](apple-file-transfer.md).
 - Archives contain a sequence of items, not an outer item count. Each item
   contains a u32 flavor count. Each flavor has a counted UTI, reserved u32,
   u32 tag count, counted key/value tags, and counted data. All counts are BE u32.
-  Supported UTIs are `public.utf8-plain-text`, `public.png`, `public.tiff` and `public.jpeg`. An item with zero flavors
+  Supported UTIs are `public.utf8-plain-text` and the image types listed above. An item with zero flavors
   clears the pasteboard; a text flavor with zero data promises future contents.
 - A header with both archive sizes zero also clears the pasteboard. It contains
   no zlib stream. Zero compressed bytes with a nonzero expanded size remain an
@@ -105,7 +131,7 @@ records clipboard text or authentication credentials.
 
 ## Investigating a client screenshot being replaced
 
-Incoming PNG/TIFF/JPEG promises now request their full contents using MiscStatus
+Incoming supported image promises request their full contents using MiscStatus
 command 3. Fetches arriving while those bytes are pending are deferred, so they
 cannot reply with the old server clipboard. Clipboard application and fetch replies
 share the writer queue. An explicit clear supersedes the pending image. A newer
@@ -183,6 +209,18 @@ viewers across multiple keepalive probes, fragmented messages, input release,
 and reuse of expired client slots.
 A real silent network drop has not yet been tested. Input tests verify shared key/button
 ownership, Apple/classic modifier aliases, and click-sequence separation.
+
+Additional-format checks cover promise/full archive round trips, named-pasteboard
+reads/writes, echo suppression, and classic-client filtering for GIF, BMP, WebP,
+HEIC/HEIF, AVIF and JPEG 2000. Those format-matrix payloads are deliberately
+opaque: they verify byte transport without relying on installed decoders. A
+separate ImageIO-generated, two-frame GIF survives a pasteboard/archive round
+trip byte-for-byte alongside a PNG fallback and caption; both frames, their
+delays, and the loop count are checked. The socket-level promise/fetch test runs
+in both directions with PNG and that animated GIF. On 2026-10-11, all 29 tests
+in the image and Apple clipboard suites passed. These checks do not establish
+which formats each source app publishes or each target app accepts, and are
+not a new cross-machine Screen Sharing 3.0/macOS 13 test.
 
 On 2026-10-05, Screen Sharing **6.1 on macOS 26.6.2** connected to a loopback
 probe using the production RFB session implementation, a synthetic framebuffer,

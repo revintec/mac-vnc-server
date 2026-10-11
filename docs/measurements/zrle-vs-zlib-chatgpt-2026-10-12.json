@@ -1,0 +1,1002 @@
+{
+  "metadata": {
+    "date": "2026-10-12",
+    "workload": "User-visible ChatGPT application desktop; no synthetic scrolling window",
+    "production_binary_sha256": "ef7c5a0a8eb11bbe91bde60b25983442fc204d9f5c38f5811c1543ba3b4c2488",
+    "source_changed_since_instrumentation": [],
+    "plain_url": "vnc://127.0.0.1:5911/",
+    "fps_limit": 60,
+    "resolution": [
+      1728,
+      1118
+    ],
+    "compression_backend": "zlib-ng 2.3.3",
+    "compression_level": 2,
+    "client": "Hidden Tahoe ScreenSharing.framework view at Actual Size; process-local Control selected after connection",
+    "network": "loopback, default server plaintext policy",
+    "cursor": "client rendered",
+    "app_main_pid": 23283,
+    "scrolling_input": "User manually scrolls; app-control tool cannot automate this app",
+    "latency_metric": "ScreenCaptureKit frame published to completed server socket write; excludes preceding capture/readback, network transit, client decode and physical presentation",
+    "machine": "Apple M1 Pro (Virtual)",
+    "os": "26.6.2",
+    "scrolling_completed": true,
+    "run_order": [
+      "zlib",
+      "zrle",
+      "zrle",
+      "zlib"
+    ],
+    "measured_seconds_per_run": 12,
+    "runs_per_codec": 2,
+    "input": "User manually scrolled the visible ChatGPT conversation in response to start/stop cues",
+    "network_stalls_reported": 0,
+    "stale_frame_retries_reported": 0,
+    "copyrect_used": false,
+    "client_failures_during_sample": 0,
+    "capture_resolution_constant": true,
+    "raw_artifacts": "/Users/revin/code/mac-vnc-server/.build/chatgpt-scroll-2026-10-12"
+  },
+  "aggregate": {
+    "zlib": {
+      "sample_duration_s": 24.004817875,
+      "updates": 1234,
+      "updates_per_s": 51.40634711022568,
+      "pixels": 501084160,
+      "changed_Mpixels_per_s": 20.874316256398593,
+      "rfb_bytes": 94259757,
+      "rfb_MB_per_s": 3.9267016101033425,
+      "bytes_per_changed_pixel": 0.18811162779521906,
+      "mean_bytes_per_update": 76385.54051863858,
+      "ready_to_send_ms": {
+        "n": 1234,
+        "p50": 3.8097495,
+        "p95": 9.857167,
+        "mean": 3.9247104351701783
+      },
+      "response_thread_cpu_ms_per_update": {
+        "n": 1234,
+        "p50": 3.6480205000000003,
+        "p95": 4.904709,
+        "mean": 3.0442036831442465
+      },
+      "send_interval_ms": {
+        "n": 1232,
+        "p50": 17.2504585,
+        "p95": 36.990542,
+        "mean": 19.43503913068182
+      },
+      "server_cpu_percent": 21.423584917186826,
+      "server_cpu_ms_per_update": 4.167498007833604,
+      "server_cpu_ms_per_Mpixel": 10.263131330406987,
+      "client_cpu_percent": 51.22997157919491,
+      "client_cpu_ms_per_update": 9.965689931118314,
+      "client_cpu_ms_per_Mpixel": 24.542107607233085,
+      "damage_bins": [
+        {
+          "pixels_min": 1,
+          "pixels_max_exclusive": 32768,
+          "updates": 460,
+          "mean_pixels": 9029.008695652174,
+          "bytes_per_pixel": 0.204515927406928,
+          "ready_to_send_ms": {
+            "n": 460,
+            "p50": 1.3086045,
+            "p95": 4.72625,
+            "mean": 1.7998394826086956
+          },
+          "response_cpu_ms": {
+            "n": 460,
+            "p50": 1.2357285,
+            "p95": 1.633708,
+            "mean": 1.2701551195652174
+          }
+        },
+        {
+          "pixels_min": 32768,
+          "pixels_max_exclusive": 262144,
+          "updates": 7,
+          "mean_pixels": 74313.14285714286,
+          "bytes_per_pixel": 0.12419068343996063,
+          "ready_to_send_ms": {
+            "n": 7,
+            "p50": 1.57775,
+            "p95": 7.189833,
+            "mean": 2.4852501428571427
+          },
+          "response_cpu_ms": {
+            "n": 7,
+            "p50": 1.478167,
+            "p95": 2.257333,
+            "mean": 1.586351
+          }
+        },
+        {
+          "pixels_min": 262144,
+          "pixels_max_exclusive": 524288,
+          "updates": 23,
+          "mean_pixels": 484752.6956521739,
+          "bytes_per_pixel": 0.25606611421404296,
+          "ready_to_send_ms": {
+            "n": 23,
+            "p50": 4.6475,
+            "p95": 8.020292,
+            "mean": 5.32744752173913
+          },
+          "response_cpu_ms": {
+            "n": 23,
+            "p50": 4.308125,
+            "p95": 5.318,
+            "mean": 4.545644826086956
+          }
+        },
+        {
+          "pixels_min": 524288,
+          "pixels_max_exclusive": 1048576,
+          "updates": 744,
+          "mean_pixels": 652232.9462365592,
+          "bytes_per_pixel": 0.1864784308212067,
+          "ready_to_send_ms": {
+            "n": 744,
+            "p50": 4.238875,
+            "p95": 10.883583,
+            "mean": 5.208653858870968
+          },
+          "response_cpu_ms": {
+            "n": 744,
+            "p50": 4.036396,
+            "p95": 5.087583,
+            "mean": 4.108362502688172
+          }
+        }
+      ]
+    },
+    "zrle": {
+      "sample_duration_s": 24.006737834,
+      "updates": 1237,
+      "updates_per_s": 51.527200761449365,
+      "pixels": 529915904,
+      "changed_Mpixels_per_s": 22.07363231373721,
+      "rfb_bytes": 78485998,
+      "rfb_MB_per_s": 3.2693320742996876,
+      "bytes_per_changed_pixel": 0.14811028959040262,
+      "mean_bytes_per_update": 63448.6645109135,
+      "ready_to_send_ms": {
+        "n": 1237,
+        "p50": 4.467792,
+        "p95": 14.592583,
+        "mean": 5.030826823767178
+      },
+      "response_thread_cpu_ms_per_update": {
+        "n": 1237,
+        "p50": 4.239833,
+        "p95": 5.713667,
+        "mean": 3.5897150711398544
+      },
+      "send_interval_ms": {
+        "n": 1235,
+        "p50": 17.249875,
+        "p95": 39.638416,
+        "mean": 19.407733130364374
+      },
+      "server_cpu_percent": 24.20659860931385,
+      "server_cpu_ms_per_update": 4.697829156561573,
+      "server_cpu_ms_per_Mpixel": 10.966296015653583,
+      "client_cpu_percent": 53.28519263405724,
+      "client_cpu_ms_per_update": 10.341177445432496,
+      "client_cpu_ms_per_Mpixel": 24.139748219370293,
+      "damage_bins": [
+        {
+          "pixels_min": 1,
+          "pixels_max_exclusive": 32768,
+          "updates": 409,
+          "mean_pixels": 9634.112469437652,
+          "bytes_per_pixel": 0.08241294178794178,
+          "ready_to_send_ms": {
+            "n": 409,
+            "p50": 1.351625,
+            "p95": 12.094584,
+            "mean": 2.6618964841075794
+          },
+          "response_cpu_ms": {
+            "n": 409,
+            "p50": 1.277834,
+            "p95": 1.712458,
+            "mean": 1.3076107359413203
+          }
+        },
+        {
+          "pixels_min": 32768,
+          "pixels_max_exclusive": 262144,
+          "updates": 7,
+          "mean_pixels": 92452.57142857143,
+          "bytes_per_pixel": 0.1057685176028481,
+          "ready_to_send_ms": {
+            "n": 7,
+            "p50": 2.971167,
+            "p95": 10.713166,
+            "mean": 5.605863
+          },
+          "response_cpu_ms": {
+            "n": 7,
+            "p50": 1.957209,
+            "p95": 2.94425,
+            "mean": 2.051226428571429
+          }
+        },
+        {
+          "pixels_min": 262144,
+          "pixels_max_exclusive": 524288,
+          "updates": 39,
+          "mean_pixels": 480492.3076923077,
+          "bytes_per_pixel": 0.16691843835382514,
+          "ready_to_send_ms": {
+            "n": 39,
+            "p50": 4.325625,
+            "p95": 13.42,
+            "mean": 6.049146384615384
+          },
+          "response_cpu_ms": {
+            "n": 39,
+            "p50": 4.102708,
+            "p95": 4.901791,
+            "mean": 4.210257461538462
+          }
+        },
+        {
+          "pixels_min": 524288,
+          "pixels_max_exclusive": 1048576,
+          "updates": 782,
+          "mean_pixels": 647812.2557544757,
+          "bytes_per_pixel": 0.14797965761542986,
+          "ready_to_send_ms": {
+            "n": 782,
+            "p50": 4.8299375,
+            "p95": 15.823834,
+            "mean": 6.213886661125319
+          },
+          "response_cpu_ms": {
+            "n": 782,
+            "p50": 4.6644375,
+            "p95": 6.050083,
+            "mean": 4.7661203657289
+          }
+        }
+      ]
+    }
+  },
+  "runs": [
+    {
+      "updates_per_s": 48.072605462716425,
+      "capture_per_s": 49.40564131610198,
+      "rfb_MB_per_s": 2.5361072929305366,
+      "changed_Mpixels_per_s": 13.148980343500456,
+      "mean_bytes_per_update": 52755.769497400346,
+      "send_interval_ms": {
+        "n": 576,
+        "p50": 17.5095205,
+        "p95": 45.789125,
+        "max": 78.6235
+      },
+      "capture_ready_to_send_ms": {
+        "n": 577,
+        "p50": 1.546083,
+        "p95": 5.31625,
+        "max": 22.314166
+      },
+      "copy_ms": {
+        "n": 593,
+        "p50": 0.811541,
+        "p95": 3.644,
+        "max": 13.283958
+      },
+      "pacing_wait_ms": {
+        "n": 1159,
+        "p50": 0.001042,
+        "p95": 16.279875,
+        "max": 18.360542
+      },
+      "sample": {
+        "scenario": "zlib",
+        "start_uptime_ns": 1825954985154583,
+        "end_uptime_ns": 1825966987832500,
+        "duration_s": 12.002677917,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "71240": {
+            "cpu_percent": 16.862854597916975,
+            "before": {
+              "user_ns": 1106822333.3333333,
+              "system_ns": 207434541.66666666,
+              "rss_bytes": 120406016
+            },
+            "after": {
+              "user_ns": 2914883291.6666665,
+              "system_ns": 423367708.3333333,
+              "rss_bytes": 102170624
+            }
+          },
+          "71241": {
+            "cpu_percent": 36.01746894785618,
+            "before": {
+              "user_ns": 1031413250.0,
+              "system_ns": 847689208.3333334,
+              "rss_bytes": 234782720
+            },
+            "after": {
+              "user_ns": 3365116750.0,
+              "system_ns": 2837046500.0,
+              "rss_bytes": 275300352
+            }
+          },
+          "23283": {
+            "cpu_percent": 6.267533977572998,
+            "before": {
+              "user_ns": 962859468083.3334,
+              "system_ns": 497016774125.0,
+              "rss_bytes": 368443392
+            },
+            "after": {
+              "user_ns": 963465192875.0,
+              "system_ns": 497163321250.0,
+              "rss_bytes": 336887808
+            }
+          },
+          "23305": {
+            "cpu_percent": 12.3298620127383,
+            "before": {
+              "user_ns": 4921146554166.667,
+              "system_ns": 1964616676791.6667,
+              "rss_bytes": 119881728
+            },
+            "after": {
+              "user_ns": 4922158486750.0,
+              "system_ns": 1965084657833.3333,
+              "rss_bytes": 108150784
+            }
+          },
+          "23308": {
+            "cpu_percent": 0.08704272834430234,
+            "before": {
+              "user_ns": 51256440666.666664,
+              "system_ns": 41245884291.666664,
+              "rss_bytes": 86114304
+            },
+            "after": {
+              "user_ns": 51263121291.666664,
+              "system_ns": 41249651125.0,
+              "rss_bytes": 85917696
+            }
+          },
+          "23315": {
+            "cpu_percent": 0.005695256825693668,
+            "before": {
+              "user_ns": 5570911250.0,
+              "system_ns": 5109173333.333333,
+              "rss_bytes": 56098816
+            },
+            "after": {
+              "user_ns": 5571425250.0,
+              "system_ns": 5109342916.666667,
+              "rss_bytes": 55803904
+            }
+          },
+          "23358": {
+            "cpu_percent": 36.20702872907274,
+            "before": {
+              "user_ns": 6949397864250.0,
+              "system_ns": 1204220753041.6667,
+              "rss_bytes": 1084014592
+            },
+            "after": {
+              "user_ns": 6953479275333.333,
+              "system_ns": 1204485155000.0,
+              "rss_bytes": 1057439744
+            }
+          },
+          "23618": {
+            "cpu_percent": 0.0004408738369256678,
+            "before": {
+              "user_ns": 3056960333.3333335,
+              "system_ns": 4259870541.6666665,
+              "rss_bytes": 61456384
+            },
+            "after": {
+              "user_ns": 3056998041.6666665,
+              "system_ns": 4259885750.0,
+              "rss_bytes": 61423616
+            }
+          },
+          "23874": {
+            "cpu_percent": 0.0025230480683362676,
+            "before": {
+              "user_ns": 3479441791.6666665,
+              "system_ns": 2647392458.3333335,
+              "rss_bytes": 51675136
+            },
+            "after": {
+              "user_ns": 3479672083.3333335,
+              "system_ns": 2647465000.0,
+              "rss_bytes": 51609600
+            }
+          }
+        },
+        "roles": {
+          "server": 71240,
+          "client": 71241,
+          "workload_processes": [
+            23283,
+            23305,
+            23308,
+            23315,
+            23358,
+            23618,
+            23874
+          ]
+        }
+      },
+      "case": "zlib",
+      "sample_index": 1,
+      "mode": "scroll",
+      "server_cpu_percent": 16.862854597916975,
+      "server_cpu_ms_per_update": 3.5077887781629116,
+      "client_cpu_percent": 36.01746894785618,
+      "client_cpu_ms_per_update": 7.492306398035816,
+      "app_process_cpu_percent": 54.90012662645929
+    },
+    {
+      "updates_per_s": 52.16031596563674,
+      "capture_per_s": 52.743578284741304,
+      "rfb_MB_per_s": 3.5760950145823083,
+      "changed_Mpixels_per_s": 23.99759020940044,
+      "mean_bytes_per_update": 68559.68849840255,
+      "send_interval_ms": {
+        "n": 625,
+        "p50": 17.343625,
+        "p95": 37.745291,
+        "max": 55.228625
+      },
+      "capture_ready_to_send_ms": {
+        "n": 626,
+        "p50": 4.462666499999999,
+        "p95": 15.009041,
+        "max": 21.337125
+      },
+      "copy_ms": {
+        "n": 633,
+        "p50": 0.880375,
+        "p95": 3.455875,
+        "max": 12.239833
+      },
+      "pacing_wait_ms": {
+        "n": 1181,
+        "p50": 0.001042,
+        "p95": 15.148208,
+        "max": 17.93425
+      },
+      "sample": {
+        "scenario": "zrle",
+        "start_uptime_ns": 1825973982459208,
+        "end_uptime_ns": 1825985983920250,
+        "duration_s": 12.001461042,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "71262": {
+            "cpu_percent": 24.81484051187129,
+            "before": {
+              "user_ns": 1487895416.6666667,
+              "system_ns": 186764375.0,
+              "rss_bytes": 110362624
+            },
+            "after": {
+              "user_ns": 4223024000.0,
+              "system_ns": 429779208.3333333,
+              "rss_bytes": 98140160
+            }
+          },
+          "71263": {
+            "cpu_percent": 52.72195730606002,
+            "before": {
+              "user_ns": 1448488666.6666667,
+              "system_ns": 1042069666.6666666,
+              "rss_bytes": 227983360
+            },
+            "after": {
+              "user_ns": 5026416583.333333,
+              "system_ns": 3791546916.6666665,
+              "rss_bytes": 266715136
+            }
+          },
+          "23283": {
+            "cpu_percent": 14.048311791092734,
+            "before": {
+              "user_ns": 963926700916.6666,
+              "system_ns": 497272172291.6667,
+              "rss_bytes": 348274688
+            },
+            "after": {
+              "user_ns": 965289397125.0,
+              "system_ns": 497595478750.0,
+              "rss_bytes": 368836608
+            }
+          },
+          "23305": {
+            "cpu_percent": 14.744064580755968,
+            "before": {
+              "user_ns": 4922767490625.0,
+              "system_ns": 1965368510458.3333,
+              "rss_bytes": 109969408
+            },
+            "after": {
+              "user_ns": 4923970937875.0,
+              "system_ns": 1965934566375.0,
+              "rss_bytes": 110247936
+            }
+          },
+          "23308": {
+            "cpu_percent": 0.10245870584955528,
+            "before": {
+              "user_ns": 51263380416.666664,
+              "system_ns": 41249716750.0,
+              "rss_bytes": 85721088
+            },
+            "after": {
+              "user_ns": 51270861333.333336,
+              "system_ns": 41254532375.0,
+              "rss_bytes": 85901312
+            }
+          },
+          "23315": {
+            "cpu_percent": 0.014716958158842755,
+            "before": {
+              "user_ns": 5571501958.333333,
+              "system_ns": 5109360875.0,
+              "rss_bytes": 55771136
+            },
+            "after": {
+              "user_ns": 5572451291.666667,
+              "system_ns": 5110177791.666667,
+              "rss_bytes": 56082432
+            }
+          },
+          "23358": {
+            "cpu_percent": 47.130082580825864,
+            "before": {
+              "user_ns": 6955285801750.0,
+              "system_ns": 1204609619750.0,
+              "rss_bytes": 1044119552
+            },
+            "after": {
+              "user_ns": 6960539995166.667,
+              "system_ns": 1205011724833.3333,
+              "rss_bytes": 1124270080
+            }
+          },
+          "23618": {
+            "cpu_percent": 0.00546738988170027,
+            "before": {
+              "user_ns": 3057019666.6666665,
+              "system_ns": 4259900375.0,
+              "rss_bytes": 61390848
+            },
+            "after": {
+              "user_ns": 3057567916.6666665,
+              "system_ns": 4260008291.6666665,
+              "rss_bytes": 61374464
+            }
+          },
+          "23874": {
+            "cpu_percent": 0.006779382919735015,
+            "before": {
+              "user_ns": 3479734166.6666665,
+              "system_ns": 2647480208.3333335,
+              "rss_bytes": 51609600
+            },
+            "after": {
+              "user_ns": 3480321750.0,
+              "system_ns": 2647706250.0,
+              "rss_bytes": 51658752
+            }
+          }
+        },
+        "roles": {
+          "server": 71262,
+          "client": 71263,
+          "workload_processes": [
+            23283,
+            23305,
+            23308,
+            23315,
+            23358,
+            23618,
+            23874
+          ]
+        }
+      },
+      "case": "zrle",
+      "sample_index": 1,
+      "mode": "scroll",
+      "server_cpu_percent": 24.81484051187129,
+      "server_cpu_ms_per_update": 4.757417598509051,
+      "client_cpu_percent": 52.72195730606002,
+      "client_cpu_ms_per_update": 10.107675985090522,
+      "app_process_cpu_percent": 76.05188138948441
+    },
+    {
+      "updates_per_s": 50.894286786220064,
+      "capture_per_s": 51.64395713167993,
+      "rfb_MB_per_s": 2.9626666353666526,
+      "changed_Mpixels_per_s": 20.15028592770158,
+      "mean_bytes_per_update": 58212.16530278233,
+      "send_interval_ms": {
+        "n": 610,
+        "p50": 17.1819795,
+        "p95": 41.822458,
+        "max": 154.109625
+      },
+      "capture_ready_to_send_ms": {
+        "n": 611,
+        "p50": 4.48375,
+        "p95": 14.487083,
+        "max": 20.102
+      },
+      "copy_ms": {
+        "n": 620,
+        "p50": 0.8742084999999999,
+        "p95": 5.070584,
+        "max": 19.114958
+      },
+      "pacing_wait_ms": {
+        "n": 1102,
+        "p50": 1.8974375,
+        "p95": 15.8245,
+        "max": 17.745667
+      },
+      "sample": {
+        "scenario": "zrle",
+        "start_uptime_ns": 1825993062719583,
+        "end_uptime_ns": 1826005067996375,
+        "duration_s": 12.005276792,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "71270": {
+            "cpu_percent": 23.598550029999174,
+            "before": {
+              "user_ns": 1808144458.3333333,
+              "system_ns": 208178958.33333334,
+              "rss_bytes": 118358016
+            },
+            "after": {
+              "user_ns": 4376533958.333333,
+              "system_ns": 472860708.3333333,
+              "rss_bytes": 118571008
+            }
+          },
+          "71271": {
+            "cpu_percent": 53.84824894367444,
+            "before": {
+              "user_ns": 1996654291.6666667,
+              "system_ns": 1520305041.6666667,
+              "rss_bytes": 254197760
+            },
+            "after": {
+              "user_ns": 5506185500.0,
+              "system_ns": 4475405166.666667,
+              "rss_bytes": 257261568
+            }
+          },
+          "23283": {
+            "cpu_percent": 18.008376961709622,
+            "before": {
+              "user_ns": 966069388125.0,
+              "system_ns": 497776488208.3333,
+              "rss_bytes": 371294208
+            },
+            "after": {
+              "user_ns": 967848465875.0,
+              "system_ns": 498159365958.3333,
+              "rss_bytes": 391888896
+            }
+          },
+          "23305": {
+            "cpu_percent": 17.802659089246962,
+            "before": {
+              "user_ns": 4924773462250.0,
+              "system_ns": 1966309872375.0,
+              "rss_bytes": 111673344
+            },
+            "after": {
+              "user_ns": 4926198729666.667,
+              "system_ns": 1967021863458.3333,
+              "rss_bytes": 115638272
+            }
+          },
+          "23308": {
+            "cpu_percent": 0.07674160143315856,
+            "before": {
+              "user_ns": 51277257666.666664,
+              "system_ns": 41257414958.333336,
+              "rss_bytes": 86196224
+            },
+            "after": {
+              "user_ns": 51283790000.0,
+              "system_ns": 41260095666.666664,
+              "rss_bytes": 86392832
+            }
+          },
+          "23315": {
+            "cpu_percent": 0.004104098071793704,
+            "before": {
+              "user_ns": 5572722083.333333,
+              "system_ns": 5110913833.333333,
+              "rss_bytes": 56082432
+            },
+            "after": {
+              "user_ns": 5573094291.666667,
+              "system_ns": 5111034333.333333,
+              "rss_bytes": 56082432
+            }
+          },
+          "23358": {
+            "cpu_percent": 91.26463670792806,
+            "before": {
+              "user_ns": 6965275010916.667,
+              "system_ns": 1205288522375.0,
+              "rss_bytes": 1157939200
+            },
+            "after": {
+              "user_ns": 6975625793791.667,
+              "system_ns": 1205894311750.0,
+              "rss_bytes": 1374158848
+            }
+          },
+          "23618": {
+            "cpu_percent": 0.005060274831854123,
+            "before": {
+              "user_ns": 3057662583.3333335,
+              "system_ns": 4260024916.6666665,
+              "rss_bytes": 61374464
+            },
+            "after": {
+              "user_ns": 3058245125.0,
+              "system_ns": 4260049875.0,
+              "rss_bytes": 61374464
+            }
+          },
+          "23874": {
+            "cpu_percent": 0.002889701526066943,
+            "before": {
+              "user_ns": 3480464125.0,
+              "system_ns": 2647752166.6666665,
+              "rss_bytes": 51658752
+            },
+            "after": {
+              "user_ns": 3480762833.3333335,
+              "system_ns": 2647800375.0,
+              "rss_bytes": 51642368
+            }
+          }
+        },
+        "roles": {
+          "server": 71270,
+          "client": 71271,
+          "workload_processes": [
+            23283,
+            23305,
+            23308,
+            23315,
+            23358,
+            23618,
+            23874
+          ]
+        }
+      },
+      "case": "zrle",
+      "sample_index": 2,
+      "mode": "scroll",
+      "server_cpu_percent": 23.598550029999174,
+      "server_cpu_ms_per_update": 4.636777823240589,
+      "client_cpu_percent": 53.84824894367444,
+      "client_cpu_ms_per_update": 10.58041134751773,
+      "app_process_cpu_percent": 127.16446843474752
+    },
+    {
+      "updates_per_s": 54.740238182448294,
+      "capture_per_s": 55.24014903342955,
+      "rfb_MB_per_s": 5.317358256388364,
+      "changed_Mpixels_per_s": 28.599998433712646,
+      "mean_bytes_per_update": 97138.01826484018,
+      "send_interval_ms": {
+        "n": 656,
+        "p50": 17.054563,
+        "p95": 23.785292,
+        "max": 169.95375
+      },
+      "capture_ready_to_send_ms": {
+        "n": 657,
+        "p50": 4.16375,
+        "p95": 10.800167,
+        "max": 20.553833
+      },
+      "copy_ms": {
+        "n": 663,
+        "p50": 0.897625,
+        "p95": 5.409917,
+        "max": 13.64075
+      },
+      "pacing_wait_ms": {
+        "n": 1139,
+        "p50": 1.473166,
+        "p95": 14.674,
+        "max": 19.231667
+      },
+      "sample": {
+        "scenario": "zlib",
+        "start_uptime_ns": 1826012181403625,
+        "end_uptime_ns": 1826024183543583,
+        "duration_s": 12.002139958,
+        "mach_timebase": [
+          125,
+          3
+        ],
+        "processes": {
+          "71290": {
+            "cpu_percent": 25.98451965716251,
+            "before": {
+              "user_ns": 1707560458.3333333,
+              "system_ns": 200918875.0,
+              "rss_bytes": 113393664
+            },
+            "after": {
+              "user_ns": 4544337208.333333,
+              "system_ns": 482840541.6666667,
+              "rss_bytes": 121339904
+            }
+          },
+          "71291": {
+            "cpu_percent": 66.44315606416406,
+            "before": {
+              "user_ns": 2048168708.3333333,
+              "system_ns": 1758164875.0,
+              "rss_bytes": 259342336
+            },
+            "after": {
+              "user_ns": 6317949041.666667,
+              "system_ns": 5462985125.0,
+              "rss_bytes": 254803968
+            }
+          },
+          "23283": {
+            "cpu_percent": 17.150731790635838,
+            "before": {
+              "user_ns": 968676209500.0,
+              "system_ns": 498355976375.0,
+              "rss_bytes": 394428416
+            },
+            "after": {
+              "user_ns": 970366282916.6666,
+              "system_ns": 498724357791.6667,
+              "rss_bytes": 395657216
+            }
+          },
+          "23305": {
+            "cpu_percent": 20.109495127089637,
+            "before": {
+              "user_ns": 4927021243333.333,
+              "system_ns": 1967415584041.6667,
+              "rss_bytes": 115605504
+            },
+            "after": {
+              "user_ns": 4928653953416.667,
+              "system_ns": 1968196443708.3333,
+              "rss_bytes": 117669888
+            }
+          },
+          "23308": {
+            "cpu_percent": 0.1014457980766679,
+            "before": {
+              "user_ns": 51292357750.0,
+              "system_ns": 41263158791.666664,
+              "rss_bytes": 86441984
+            },
+            "after": {
+              "user_ns": 51301011833.333336,
+              "system_ns": 41266680375.0,
+              "rss_bytes": 86605824
+            }
+          },
+          "23315": {
+            "cpu_percent": 0.0044988504985234825,
+            "before": {
+              "user_ns": 5573203875.0,
+              "system_ns": 5111070250.0,
+              "rss_bytes": 56082432
+            },
+            "after": {
+              "user_ns": 5573612166.666667,
+              "system_ns": 5111201916.666667,
+              "rss_bytes": 56082432
+            }
+          },
+          "23358": {
+            "cpu_percent": 80.7525827387123,
+            "before": {
+              "user_ns": 6979183441458.333,
+              "system_ns": 1206130196541.6667,
+              "rss_bytes": 1417756672
+            },
+            "after": {
+              "user_ns": 6988322733833.333,
+              "system_ns": 1206682942166.6667,
+              "rss_bytes": 1383251968
+            }
+          },
+          "23618": {
+            "cpu_percent": 0.00032598353407736524,
+            "before": {
+              "user_ns": 3058279000.0,
+              "system_ns": 4260059208.3333335,
+              "rss_bytes": 61374464
+            },
+            "after": {
+              "user_ns": 3058311625.0,
+              "system_ns": 4260065708.3333335,
+              "rss_bytes": 61308928
+            }
+          },
+          "23874": {
+            "cpu_percent": 0.0017062929392854171,
+            "before": {
+              "user_ns": 3480879250.0,
+              "system_ns": 2647825041.6666665,
+              "rss_bytes": 51642368
+            },
+            "after": {
+              "user_ns": 3481036166.6666665,
+              "system_ns": 2647872916.6666665,
+              "rss_bytes": 51642368
+            }
+          }
+        },
+        "roles": {
+          "server": 71290,
+          "client": 71291,
+          "workload_processes": [
+            23283,
+            23305,
+            23308,
+            23315,
+            23358,
+            23618,
+            23874
+          ]
+        }
+      },
+      "case": "zlib",
+      "sample_index": 2,
+      "mode": "scroll",
+      "server_cpu_percent": 25.98451965716251,
+      "server_cpu_ms_per_update": 4.746877346524607,
+      "client_cpu_percent": 66.44315606416406,
+      "client_cpu_ms_per_update": 12.137900431253172,
+      "app_process_cpu_percent": 118.12078658148634
+    }
+  ],
+  "limitations": [
+    "Manual scrolling did not reproduce identical pixel sequences. Aggregate ZRLE damage was 5.75% higher; damage size normalization and overlapping large-update bins improve comparability but do not control content complexity.",
+    "The client is a hidden Tahoe ScreenSharing.framework view, not the remote Screen Sharing 3.0 app on macOS 13 or RealVNC on iOS. Whole client process CPU includes more than decompression and does not include physical on-screen presentation.",
+    "Capture-ready to write-complete excludes capture/readback before publication, network transit, client decode and presentation. Loopback traffic does not simulate bandwidth limits or RTT.",
+    "Four 12-second samples provide workload-specific observations, not statistical proof across clients or content. p95 values were pooled from frame observations rather than averaged from run percentiles.",
+    "The larger-update comparison controls changed area approximately, not exact pixels, text density, rectangle arrangement or host scheduling.",
+    "Test shutdown produced expected client socket closure/reset messages and a pre-existing MainActor shutdown warning; sampling completed before shutdown in all cases. No server source changes were made for this task outside the isolated instrumented build."
+  ]
+}

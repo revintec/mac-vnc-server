@@ -1,5 +1,12 @@
 # Streaming performance
 
+The [ZRLE and scrolling update](scrolling-upgrade-2026-10-12.md) covers the latest
+encoder, pacing, capture delivery and CopyRect changes. The
+[earlier client/server benchmark](pipeline-profile-current-2026-10-11.md)
+reports repeated CPU, throughput, stage timings and latency measurements for
+plaintext zlib-ng, encrypted zlib-ng and plaintext system zlib. See also
+[encoding compatibility and CopyRect](encoding-compatibility.md).
+
 Screen Sharing's negotiated format is usually 32-bit little-endian BGRX with
 8-bit red, green and blue components, but a declared depth of 32. The original
 fast path compared the whole format against the server's depth-24 default. That
@@ -41,7 +48,7 @@ from the original cursor's antialiasing.
 
 ## Encryption
 
-Without `--file-transfer`, desktop pixels, input and clipboard traffic already
+With `--no-file-transfer`, desktop pixels, input and clipboard traffic already
 use plaintext RFB. Password challenge/response authentication is retained.
 `--no-encryption` makes plaintext session traffic an explicit policy. Combined
 with `--file-transfer`, it enables an experimental server-side compatibility path
@@ -65,7 +72,7 @@ Authentication still uses a cryptographic challenge/response; "no encryption"
 refers to session traffic, not eliminating authentication cryptography.
 This does not change or satisfy the client's encryption preference. It deliberately
 suppresses its key exchange, relying on undocumented client behavior, and is
-enabled only by the explicit server option. The default continues to negotiate
+now enabled by default (`--no-encryption`). Use `--encryption` to negotiate
 encryption normally.
 
 The copied Screen Sharing 3.0 app registers `encryptionLevel=2` by default.
@@ -97,9 +104,21 @@ scroll region. All rectangles for one captured frame are sent in one update.
 The faster BGRX path reduces the cost of these large updates. The sender consumes
 the latest capture rather than accumulating a queue of every intermediate frame.
 
-CopyRect could reuse pixels already in a generic VNC viewer's framebuffer, but
-the user's Screen Sharing 3.0 trace does not advertise encoding 1. Sending it
-without negotiation would break that client. The server does not send CopyRect.
+CopyRect now reuses pixel-verified vertical scroll regions for clients advertising
+encoding 1, using their last delivered framebuffer and safe overlapping-copy
+ordering. Full refreshes and unverified regions retain normal pixel encoding.
+Screen Sharing 3.0 and the tested Tahoe framework do not advertise encoding 1.
+
+Capture notifications wake the writer; monotonic deadlines skip missed slots
+and empty capture checks do not consume FPS slots. A copy worker keeps one
+in-flight and one pending capture buffer, skipping obsolete pending work and
+invalidating its dirty hints. Empty-dirty captures avoid copying, and scaling
+is cached until the capture, layout, scale or cursor changes.
+
+Ordinary generic-client requests are consumed after sending, with unchanged
+incremental requests held pending. Negotiated ContinuousUpdates supports push
+streaming, and Fence limits automatic updates to three unacknowledged frames
+when supported. Fence measures processing progress, not physical presentation.
 Frame rate and smoothness still depend on screen content, network throughput,
 client decoding, resolution and capture rate.
 
