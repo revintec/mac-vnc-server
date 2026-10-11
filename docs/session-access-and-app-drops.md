@@ -4,6 +4,14 @@ Investigation: 2026-10-11, macOS 26.6.2 (25G83), repository baseline
 `03af263`. This document describes findings and proposed work. It does not add
 an off-console session backend or a new drag implementation.
 
+Update, 2026-10-12: [existing-session access](off-console-session-access.md) now
+uses session-directed input and capture recovery across console transitions.
+The runtime test established that a logged-in user's existing desktop can
+render and accept input off-console without creating a custom virtual display.
+The investigation below is the earlier architectural assessment; its missing
+existing-session routing has since been addressed. Creating/login-authenticating
+new GUI sessions remains separate work.
+
 ## Session access: distinguish the required behavior
 
 These are different features, with different macOS requirements:

@@ -28,9 +28,11 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     private var desiredCaptureFPS: Int
     private var captureRateTask: Task<Void, Never>?
     private var captureRateStopped = false
-    private var wakeObserver: NSObjectProtocol?
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var recoveryScheduled = false
     private var recoveryNeeded = false
+    private var recoveryRequestSerial: UInt64 = 0
+    private var recoveryReason = ""
     private var displayWakeScheduled = false
     private var stopping = false
     private var recoveryTask: Task<Void, Never>?
@@ -76,18 +78,27 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         outputs = started.outputs
         delegates = started.delegates
         eventSink.attach(owner: self)
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.screensDidWakeNotification,
-            object: nil,
-            queue: nil
-        ) { [weak self] _ in
-            self?.scheduleRecovery(reason: "screens did wake")
+        // Fast User Switching can replace display IDs without stopping every
+        // SCStream. Re-enumerate the displays in this user's session on both
+        // transitions, including when the old stream silently stops delivering.
+        for (notification, reason) in [
+            (NSWorkspace.screensDidWakeNotification, "screens did wake"),
+            (NSWorkspace.sessionDidResignActiveNotification, "user session moved off console"),
+            (NSWorkspace.sessionDidBecomeActiveNotification, "user session returned to console")
+        ] {
+            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+                forName: notification,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                self?.scheduleRecovery(reason: reason)
+            })
         }
     }
 
     deinit {
-        if let wakeObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        for observer in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
     }
 
@@ -387,8 +398,14 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
     private func scheduleRecovery(reason: String) {
         recoveryLock.lock()
+        guard !stopping else {
+            recoveryLock.unlock()
+            return
+        }
         recoveryNeeded = true
-        guard !stopping, !recoveryScheduled else {
+        recoveryRequestSerial &+= 1
+        recoveryReason = reason
+        guard !recoveryScheduled else {
             recoveryLock.unlock()
             return
         }
@@ -398,16 +415,25 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                 return
             }
 
-            do {
-                try await Task.sleep(for: .seconds(1))
-                try await restartCapture(reason: reason)
-            } catch is CancellationError {
-                // The capture owner is shutting down.
-            } catch {
-                logger.error("ScreenCaptureKit recovery failed: \(error.localizedDescription)")
+            while true {
+                // Coalesce the stream errors and workspace notification from
+                // one transition. A further transition during a rebuild must
+                // cause another pass instead of being cleared by that rebuild.
+                do { try await Task.sleep(for: .seconds(1)) } catch { }
+                let request = recoveryLock.withLock { (recoveryRequestSerial, recoveryReason) }
+                var recovered = false
+                do {
+                    try await restartCapture(reason: request.1)
+                    recovered = true
+                } catch is CancellationError {
+                    // The capture owner is shutting down.
+                } catch {
+                    logger.error("ScreenCaptureKit recovery failed: \(error.localizedDescription)")
+                }
+                if finishRecoveryScheduling(requestSerial: request.0, recovered: recovered) {
+                    return
+                }
             }
-
-            finishRecoveryScheduling()
         }
         recoveryLock.unlock()
     }
@@ -441,7 +467,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                     throw CancellationError()
                 }
                 install(started)
-                clearRecoveryNeeded()
 
                 logger.info("ScreenCaptureKit: capture recovered")
                 return
@@ -488,17 +513,16 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         scheduleCaptureRateUpdate()
     }
 
-    private func finishRecoveryScheduling() {
+    private func finishRecoveryScheduling(requestSerial: UInt64, recovered: Bool) -> Bool {
         recoveryLock.lock()
+        defer { recoveryLock.unlock() }
+        guard stopping || recoveryRequestSerial == requestSerial else {
+            return false
+        }
+        recoveryNeeded = !recovered
         recoveryScheduled = false
         recoveryTask = nil
-        recoveryLock.unlock()
-    }
-
-    private func clearRecoveryNeeded() {
-        recoveryLock.lock()
-        recoveryNeeded = false
-        recoveryLock.unlock()
+        return true
     }
 
     private static func stopStreams(_ streams: [SCStream], logger: ServerLogger) async {

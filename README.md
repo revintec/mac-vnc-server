@@ -348,7 +348,7 @@ Apple Screen Sharing negotiates RFB 3.3 and requires VNC auth, so authentication
 
 Screen capture uses `ScreenCaptureKit` with one stream per selected display. Captured frames are stored in BGRA format and composed into a virtual framebuffer. The virtual framebuffer supports multiple displays and maps VNC coordinates back to macOS global coordinates for mouse input.
 
-If macOS sleeps the screens while the server is running, the capture streams are rebuilt after `screensDidWakeNotification`, when an active `SCStream` reports `didStopWithError`, or when input arrives after a failed recovery. Recovery refreshes the shareable content and retries up to three times without closing the existing VNC session, so input handling remains connected.
+Capture streams are rebuilt after screen wake, when the user session moves off or back onto the console, when an active `SCStream` reports `didStopWithError`, or when input arrives after a failed recovery. Fast User Switching can replace display IDs even when a stream reports no error. Recovery refreshes the shareable content and retries up to three times without closing the existing VNC session. A transition during recovery queues another rebuild so it cannot leave capture attached to obsolete displays.
 
 When a client or network cannot consume updates quickly enough, the server keeps only the newest captured frame and drops stale frames before sending their RFB update header. Persistent Zlib/ZRLE state is transactional, so a dropped frame cannot desynchronize the stream. Client sockets use non-blocking writes with a three-second no-progress timeout; a connection that makes no write progress is closed instead of blocking the capture pipeline indefinitely. Adaptive sessions lower the output target from 60 to 45 to 30 FPS under sustained pressure and recover after sustained headroom; shared capture streams use the highest rate requested by their active clients.
 
@@ -385,11 +385,11 @@ All viewers share the logged-in Mac's desktop, keyboard, and system cursor. Poin
 
 With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text or images copied by one Apple viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical content echoes do not produce another clipboard change. This is a shared desktop, not separate macOS login sessions. Concurrent screen encoding and network traffic grow with the number of viewers.
 
-The server does not currently provide an off-console user desktop while the physical console remains locked or at loginwindow. Keeping its per-user service running through a lock does not provide independent session access. See [session access investigation](docs/session-access-and-app-drops.md#session-access-distinguish-the-required-behavior) for the native architecture, implementation choices, and required verification.
+For an already logged-in user, the server stays attached to that user's desktop when Fast User Switching moves the physical console to loginwindow. Input targets the user's WindowServer session and capture follows its replacement displays. Start the server in that user's GUI session (the per-user service does this), then connect using the ordinary VNC URL. This does not provide the console loginwindow, log another account in, or create a GUI session before login. See [off-console session access](docs/off-console-session-access.md) for validation and remaining limitations.
 
 ### Input
 
-Keyboard and mouse events are injected with `CGEvent`.
+Keyboard and mouse events are injected with `CGEvent` at `cgSessionEventTap`, matching Apple's ScreensharingAgent. Mouse movement, scrolling, modifiers, Unicode input, and disconnect releases all use the same destination. This keeps remote input in the server user's session when the physical console switches to loginwindow.
 
 The server processes input on the read loop and streams framebuffer updates on a separate writer queue. This prevents keyboard/mouse events from getting stuck behind frame compression or socket writes.
 

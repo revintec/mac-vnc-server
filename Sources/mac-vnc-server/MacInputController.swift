@@ -15,7 +15,7 @@ final class MacInputController: InputController {
     private var mouseClicks = MouseClickTracker()
     private let eventTime: () -> TimeInterval
     private let doubleClickInterval: () -> TimeInterval
-    private let postMouseEvent: (CGEvent) -> Void
+    private let postEvent: (CGEventTapLocation, CGEvent) -> Void
     private var lastScrollTime: TimeInterval?
     private var lastScrollDirection: Int32?
     private var scrollMultiplier = 1.0
@@ -31,13 +31,20 @@ final class MacInputController: InputController {
         logger: ServerLogger? = nil,
         eventTime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         doubleClickInterval: @escaping () -> TimeInterval = { NSEvent.doubleClickInterval },
-        postMouseEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+        postEvent: @escaping (CGEventTapLocation, CGEvent) -> Void = { $1.post(tap: $0) }
     ) {
         self.logger = logger
         self.eventTime = eventTime
         self.doubleClickInterval = doubleClickInterval
-        self.postMouseEvent = postMouseEvent
+        self.postEvent = postEvent
         keyboardEventSource = CGEventSource(stateID: .combinedSessionState)
+    }
+
+    private func postToSession(_ event: CGEvent?) {
+        guard let event else { return }
+        // Like ScreensharingAgent, target this process's WindowServer session.
+        // The HID tap follows the physical console after Fast User Switching.
+        postEvent(.cgSessionEventTap, event)
     }
 
     func pointer(buttonMask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) {
@@ -63,7 +70,7 @@ final class MacInputController: InputController {
                 mouseButton: motion.button
             ) {
                 event.flags = modifierFlags
-                postMouseEvent(event)
+                postToSession(event)
             }
         }
         lastButtonMask = buttonMask
@@ -260,7 +267,7 @@ final class MacInputController: InputController {
         let event = makeKeyboardEvent(keyCode: 0, down: true)
         event?.flags = modifierFlags
         event?.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
-        event?.post(tap: .cghidEventTap)
+        postToSession(event)
     }
 
     private func modifier(
@@ -339,13 +346,13 @@ final class MacInputController: InputController {
         event.type = .flagsChanged
         event.setIntegerValueField(.keyboardEventKeycode, value: Int64(keyCode))
         event.flags = flags
-        event.post(tap: .cghidEventTap)
+        postToSession(event)
     }
 
     private func postKeyCode(_ keyCode: CGKeyCode, down: Bool, flags: CGEventFlags) {
         let event = makeKeyboardEvent(keyCode: keyCode, down: down)
         event?.flags = keyboardFlags(for: keyCode, base: flags)
-        event?.post(tap: .cghidEventTap)
+        postToSession(event)
     }
 
     private func postKeyStroke(
@@ -428,7 +435,7 @@ final class MacInputController: InputController {
         if let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button) {
             event.setIntegerValueField(.mouseEventClickState, value: clickCount)
             event.flags = modifierFlags
-            postMouseEvent(event)
+            postToSession(event)
         }
         logger?.verbose("input mouse \(isDown ? "down" : "up") button=\(button.rawValue) clicks=\(clickCount)")
     }
@@ -478,7 +485,7 @@ final class MacInputController: InputController {
             return
         }
         event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        event.post(tap: .cghidEventTap)
+        postToSession(event)
     }
 
     private func isControlScalar(_ scalar: UnicodeScalar) -> Bool {

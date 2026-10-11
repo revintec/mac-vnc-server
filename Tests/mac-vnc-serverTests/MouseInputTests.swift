@@ -4,11 +4,34 @@ import Foundation
 import Testing
 @testable import mac_vnc_server
 
+@Test func allInputStaysInTheUserSessionIncludingDisconnectReleases() {
+    var taps: [CGEventTapLocation] = []
+    var events: [CGEvent] = []
+    let input = MacInputController(postEvent: { tap, event in
+        taps.append(tap)
+        events.append(event)
+    })
+    let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 100, height: 100)
+    input.pointer(buttonMask: 1, x: 20, y: 20, layout: layout)
+    input.key(down: true, keysym: 0xffe3, mapAltToCommand: false)
+    input.key(down: true, keysym: 0x61, mapAltToCommand: false)
+    input.key(down: true, keysym: 0x2603, mapAltToCommand: false)
+    input.pointer(buttonMask: 9, x: 25, y: 25, layout: layout)
+    input.releaseKeys()
+
+    for type: CGEventType in [.leftMouseDown, .leftMouseDragged, .leftMouseUp,
+                              .keyDown, .keyUp, .flagsChanged, .scrollWheel] {
+        #expect(events.contains { $0.type == type })
+    }
+    #expect(taps.allSatisfy { $0 == .cgSessionEventTap })
+    #expect(events.suffix(3).map(\.type) == [.leftMouseUp, .keyUp, .flagsChanged])
+}
+
 @Test func mouseEventsCarrySingleDoubleAndTripleClickCounts() throws {
     var now: TimeInterval = 10
     var events: [CGEvent] = []
     let input = MacInputController(eventTime: { now }, doubleClickInterval: { 0.5 },
-                                   postMouseEvent: { events.append($0) })
+                                   postEvent: { _, event in events.append(event) })
     let layout = VirtualDisplayLayout(displays: [], origin: CGPoint(x: -100, y: 50),
                                       scale: 2, width: 400, height: 300)
     for _ in 0..<3 {
@@ -48,7 +71,7 @@ import Testing
 @Test func duplicatePointerPacketsDoNotCreateExtraClicksAndDisconnectReleasesMouse() {
     var events: [CGEvent] = []
     let input = MacInputController(eventTime: { 10 }, doubleClickInterval: { 0.5 },
-                                   postMouseEvent: { events.append($0) })
+                                   postEvent: { _, event in events.append(event) })
     let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 100, height: 100)
     input.pointer(buttonMask: 1, x: 20, y: 20, layout: layout)
     input.pointer(buttonMask: 1, x: 20, y: 20, layout: layout)
@@ -65,7 +88,7 @@ import Testing
     #expect(AppleRFB.standardButtonMask(0x04) == 0x02) // Apple's middle button
     #expect(AppleRFB.standardButtonMask(0x19) == 0x19) // left and wheel unchanged
     var events: [CGEvent] = []
-    let input = MacInputController(postMouseEvent: { events.append($0) })
+    let input = MacInputController(postEvent: { _, event in events.append(event) })
     let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 100, height: 100)
     input.pointer(buttonMask: AppleRFB.standardButtonMask(2), x: 20, y: 20, layout: layout)
     #expect(events.first?.type == .rightMouseDown)

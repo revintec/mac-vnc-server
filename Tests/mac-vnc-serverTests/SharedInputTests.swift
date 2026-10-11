@@ -82,7 +82,7 @@ import Testing
     var now: TimeInterval = 10
     var events: [CGEvent] = []
     let shared = SharedInputController(input: MacInputController(
-        eventTime: { now }, doubleClickInterval: { 0.5 }, postMouseEvent: { events.append($0) }))
+        eventTime: { now }, doubleClickInterval: { 0.5 }, postEvent: { _, event in events.append(event) }))
     let first = shared.makeClient()
     let second = shared.makeClient()
     for client in [first, first, second] {
