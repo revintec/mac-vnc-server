@@ -1,0 +1,57 @@
+{
+  "date": "2026-10-11",
+  "baseline_commit": "344e2c2cc25e6d0b7c84f67b71855816dace6ef3",
+  "platform": "macOS Tahoe 26.6.2 (25G83), arm64",
+  "transport": "loopback TCP, plain vnc://127.0.0.1:PORT/ URLs",
+  "client": "native Tahoe ScreenSharing.framework with process-local Screen Sharing 3.0 encryption default 2; normal transfer progress window",
+  "fixture_bytes": 2000000,
+  "runloop": "NSEventTrackingRunLoopMode",
+  "results": [
+    {
+      "encryption": false,
+      "complete_before_conclude": true,
+      "verified_all_bytes": true,
+      "elapsed_ms": 420.4
+    },
+    {
+      "encryption": true,
+      "complete_before_conclude": true,
+      "verified_all_bytes": true,
+      "elapsed_ms": 319.8
+    }
+  ],
+  "tests": {
+    "full_suite": {
+      "passed": 179,
+      "duration_seconds": 46.332
+    },
+    "focused_file_transfer_and_store_tests": 26,
+    "native_timing_cases_passed": 2,
+    "native_timing_duration_seconds": 11.419
+  },
+  "ui_observation": "Disposable Received Files panel opened; ready row and drag icon observed; source gesture persisted retained=true. No completed target-app drop was verified.",
+  "limits": [
+    "Protocol test injects native drag-enter/conclude events with a private pasteboard and mock server input, not a physical Finder gesture.",
+    "No end-to-end Screen Sharing 3.0/macOS 13.1 handoff verification.",
+    "Loopback latency does not predict large-file or network timing."
+  ],
+  "source_sha256": {
+    "Sources/mac-vnc-server/TransferStore.swift": "480b6dda72e9a62758b91ba4a2f53534c576cdb9ee533275bc8c9ff26b79476a",
+    "Sources/mac-vnc-server/TransferInbox.swift": "eb62bbb8aeb95e641b27fd25a3b387e838748ca9107cb3ec7de721016ae66b85",
+    "Sources/mac-vnc-server/MacFileTransfer.swift": "ae308e2dc5bddfdcff60f7c2e2b861192c5e6e39a4c4f773a02831957d42daae",
+    "Sources/mac-vnc-server/RFBServer.swift": "2e114b0a74cbfe6c9a4fbc5a5463363898d4ccb368b28bc11fa84982113eae5e",
+    "Sources/mac-vnc-server/CLI.swift": "4830189deca6deb35106d4b7e0253f79203fbd8efba0dfbf2dbe4910518a3ffb",
+    "Sources/mac-vnc-server/Main.swift": "5c2716fc1840e672e5a90049142e1d8b5581edd28cf923c40e08ac3dfcdae6e6",
+    "Tests/mac-vnc-serverTests/TransferStoreTests.swift": "9d0425f0bbdf63b7e5f41397f7d90b5b13b938b351ceca5da3650131629349a0",
+    "Tests/mac-vnc-serverTests/MultiClientTests.swift": "02673ed663186a4705ff5f906859b32a576059b262ec4deab00eaa0bbcfcf706",
+    "scripts/probe-native-screen-sharing.m": "55accdb9da092373884a625b6e92def091e4dffa84abd28cb0fc7da3e7d66d64"
+  },
+  "release_build": {
+    "architecture": "arm64",
+    "passed": true,
+    "duration_seconds": 25.23,
+    "binary_sha256": "66a22e2932101103a249de6d49ae3a2e2bba1e68a80c699fb1d0615cbcc096ee"
+  },
+  "capture_startup_follow_up": "capture-startup-2026-10-11.json",
+  "scope": "Historical staging validation before the capture startup fix; source and release hashes below describe that earlier build."
+}

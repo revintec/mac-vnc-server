@@ -27,6 +27,7 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 - (id)connectionOptions;
 + (id)keyboardEventWithKeyCode:(NSUInteger)keyCode withState:(int)state withEvent:(id)event;
 - (void)sendEvent:(id)event;
++ (id)dragEventWithDragType:(int)type dragPasteboardName:(NSString *)name draggingFilePromisesFromServer:(BOOL)promises withEvent:(id)event;
 - (void)connectToURL:(NSString *)url withPreferredCredentials:(id)credentials options:(id)options;
 - (void)setShouldWarnUserForUnencryptedLegacyVNC:(BOOL)value;
 - (void)setAllowsFileTransferToRemote:(BOOL)value;
@@ -223,6 +224,41 @@ int main(int argc, char **argv) {
                 && pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0;
             printf("clientCursorReceived=%d\n", received);
             passed = passed && received;
+        }
+        if (getenv("MAC_VNC_EARLY_DRAG_ROOT")) {
+            NSString *root = [NSString stringWithUTF8String:getenv("MAC_VNC_EARLY_DRAG_ROOT")];
+            NSString *source = [root stringByAppendingPathComponent:@"source.txt"];
+            NSData *expected = [NSData dataWithContentsOfFile:source];
+            if (!expected || ![view isControlling]) return 5;
+            NSPasteboard *board = [NSPasteboard pasteboardWithUniqueName];
+            [board writeObjects:@[[NSURL fileURLWithPath:source]]];
+            // Match draggingEntered -> SSDragEvent(type 0). Do not send the
+            // type-1 conclude/mouse-up event until the bytes have arrived.
+            Class dragClass = NSClassFromString(@"SSDragEvent");
+            id enter = [dragClass dragEventWithDragType:0 dragPasteboardName:board.name draggingFilePromisesFromServer:NO withEvent:nil];
+            CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
+            [[view session] sendEvent:enter];
+            BOOL received = NO;
+            NSDate *transferDeadline = [NSDate dateWithTimeIntervalSinceNow:10];
+            while ([view isConnected] && transferDeadline.timeIntervalSinceNow > 0 && !received) {
+                // A real held drag runs the event-tracking runloop mode.
+                [[NSRunLoop currentRunLoop] runMode:NSEventTrackingRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+                NSDirectoryEnumerator *enumerator = [[NSFileManager defaultManager] enumeratorAtPath:[root stringByAppendingPathComponent:@"inbox"]];
+                for (NSString *path in enumerator) {
+                    if ([path hasSuffix:@"/files/source.txt"]) {
+                        NSData *actual = [NSData dataWithContentsOfFile:[[root stringByAppendingPathComponent:@"inbox"] stringByAppendingPathComponent:path]];
+                        if ([actual isEqualToData:expected]) { received = YES; break; }
+                    }
+                }
+            }
+            printf("earlyTransferBeforeConclude=%d bytes=%lu elapsedMs=%.1f runLoop=eventTracking plainURL=1\n",
+                   received, (unsigned long)expected.length, (CFAbsoluteTimeGetCurrent() - start) * 1000);
+            id conclude = [dragClass dragEventWithDragType:1 dragPasteboardName:board.name draggingFilePromisesFromServer:NO withEvent:nil];
+            [[view session] sendEvent:conclude];
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+            [board releaseGlobally];
+            fflush(stdout);
+            return received ? 0 : 5;
         }
         if (fileTransfer) {
             id session = [view session];

@@ -1,0 +1,153 @@
+{
+  "date": "2026-10-11",
+  "platform": "macOS Tahoe 26.6.2 (25G83), arm64",
+  "baseline_commit": "344e2c2cc25e6d0b7c84f67b71855816dace6ef3",
+  "finding": "ScreenCaptureKit discarded its async completion following replayd XPC error 4097. Permission checks were granted. The original executable path failed while a copied binary worked; stopping the older instance at the original path cleared the failure.",
+  "remaining_os_limitation": "Concurrent instances from the same executable path can leave capture service state that rejects later starts after one instance exits, even when streams stop cleanly. Keep comparison servers on separate executable copies.",
+  "changes": [
+    "Bounded callback bridge for enumeration/start/update/stop; discarded replies fail immediately; cancellation and late/duplicate replies are safe.",
+    "SIGINT/SIGTERM cancel listeners and wait for capture cleanup; failed automatic-display listeners cancel siblings.",
+    "Opt-in smoke test exercises actual application entry point, AppKit staging, ScreenCaptureKit and decoded Zlib frames."
+  ],
+  "tests": {
+    "passed": 185,
+    "suites": 10,
+    "duration_seconds": 45.931,
+    "capture_callback_cases": 6
+  },
+  "real_capture_without_same_path_peer": [
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "staged-automatic",
+      "uri": "vnc://127.0.0.1:49539/",
+      "startup_and_frame_ms": 755.4
+    },
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "native-automatic",
+      "uri": "vnc://127.0.0.1:49556/",
+      "startup_and_frame_ms": 576.2
+    },
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "staged-single-display",
+      "uri": "vnc://127.0.0.1:49566/",
+      "startup_and_frame_ms": 730.6
+    },
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "capture-only",
+      "uri": "vnc://127.0.0.1:49591/",
+      "startup_and_frame_ms": 657.7
+    }
+  ],
+  "real_capture_with_separate_copy_peer": [
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "staged-automatic",
+      "uri": "vnc://127.0.0.1:49916/",
+      "startup_and_frame_ms": 1313.8
+    },
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "native-automatic",
+      "uri": "vnc://127.0.0.1:49947/",
+      "startup_and_frame_ms": 877.0
+    },
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "staged-single-display",
+      "uri": "vnc://127.0.0.1:49966/",
+      "startup_and_frame_ms": 850.0
+    },
+    {
+      "width": 1728,
+      "height": 1118,
+      "rectangles": 1,
+      "decoded_bytes": 7727616,
+      "nonuniform_pixels": true,
+      "case": "capture-only",
+      "uri": "vnc://127.0.0.1:49983/",
+      "startup_and_frame_ms": 688.6
+    }
+  ],
+  "fault_injected_capture": {
+    "exit_code": 1,
+    "elapsed_ms": 338.7,
+    "leaked_continuation_warning": false,
+    "failure": "discarded startCapture callback"
+  },
+  "listener_failure": {
+    "exit_code": 1,
+    "elapsed_ms": 1215.1,
+    "capture_stopped": true,
+    "sibling_listener_closed": true
+  },
+  "explicit_display_1_and_SIGINT": {
+    "frame_received": true,
+    "capture_stopped": true,
+    "exit_code": 0
+  },
+  "release_build": {
+    "passed": true,
+    "architecture": "arm64",
+    "duration_seconds": 17.82,
+    "binary_sha256": "d5d101e67884cece932dcb44e7b8b69decd906a207150968f0947b9a2da9ed00"
+  },
+  "source_sha256": {
+    "Sources/mac-vnc-server/Main.swift": "024dc02063bc4ec60070d7fe3faafb785eb432d529b0c3a910f027865f4a630c",
+    "Sources/mac-vnc-server/CLI.swift": "d7eeb249dcf5a98378cbe621248adf74433ffde59b73758b5ccd6ce88f9cd795",
+    "Sources/mac-vnc-server/StreamingScreenCapture.swift": "7aecdb14d991b7ebaa7bb182a8db83673e75a6be33efcca3a93a7f489f229ddc",
+    "Sources/mac-vnc-server/CaptureOperation.swift": "ba5c1cd512be90d9bbefc4a7d77da795232763157626579efa870c7477f5d42e",
+    "Tests/mac-vnc-serverTests/CaptureOperationTests.swift": "4f8b2609d714f0067f411bba98d345b2342a11e0f264f988650d45084d76c168",
+    "scripts/smoke-capture-startup.py": "ffbdd5b8ca3f8ce1967a2d779d0a7a80b6f265cda48c294a622b0532fe4c20b2"
+  },
+  "limits": [
+    "Smoke clients use standard RFB 3.8, loopback and no authentication; they do not exercise a physical Finder gesture.",
+    "No screen pixels are saved by the smoke test.",
+    "The capture callback handling and shutdown changes do not fix the underlying Tahoe capture-service behavior for concurrent same-path processes."
+  ],
+  "comparison_server_after_restarts": {
+    "password_authentication_passed": true,
+    "frame_width": 1728,
+    "frame_height": 1118,
+    "decoded_bytes": 7727616,
+    "binary": "separate copy at .build/run-5904/mac-vnc-server-dev"
+  },
+  "subsequent_reveal_fix": {
+    "behavior": "Reveal in Finder opens the configured transfer folder when no rows are selected.",
+    "validation": "Built arm64 release; clicked Reveal in Finder in an empty Received Files panel and verified Finder opened the custom Empty Transfers folder.",
+    "build_duration_seconds": 20.31,
+    "source_sha256": "9122de27812b6bd602a6079144db6b68ee38408f6c6d2183ffb55b6065293fe8",
+    "binary_sha256": "5ba8890099ecb6a9d6c66658fffd23d61ec35793adccac78fd8f8e50f7dff447",
+    "full_suite_scope": "The 185-test run above preceded this six-line UI fallback; this follow-up was build-checked and verified through the native UI."
+  }
+}

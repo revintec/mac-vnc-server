@@ -31,6 +31,40 @@ struct MultiClientTests {
             allowEncryption: false)
     }
 
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"] != nil), arguments: [false, true])
+    func nativeScreenSharingTransfersBeforeMouseRelease(encrypted: Bool) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-vnc-early-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Incompressible enough to exercise multiple native FileCopy records.
+        let payload = Data((0..<2_000_000).map { UInt8(truncatingIfNeeded: ($0 &* 37) ^ ($0 >> 7)) })
+        try payload.write(to: root.appendingPathComponent("source.txt"))
+        let store = try TransferStore(options: .init(root: root.appendingPathComponent("inbox")))
+        let inbox = TransferInbox(store: store)
+        let server = try MultiClientServer(fileTransfer: true, width: 1728, height: 1118,
+            nativePattern: true, allowEncryption: encrypted, transferInbox: inbox)
+        defer { server.finish() }
+        let probe = Process()
+        probe.executableURL = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE"]))
+        probe.arguments = ["vnc://127.0.0.1:\(server.port)/", "1", "control"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["MAC_VNC_EARLY_DRAG_ROOT"] = root.path
+        probe.environment = environment
+        let output = Pipe(); probe.standardOutput = output; probe.standardError = output
+        let done = DispatchSemaphore(value: 0); probe.terminationHandler = { _ in done.signal() }
+        try probe.run()
+        guard done.wait(timeout: .now() + 25) == .success else {
+            probe.terminate(); Issue.record("Early transfer native probe timed out"); return
+        }
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        print(text)
+        #expect(probe.terminationStatus == 0, "\(text)")
+        #expect(text.contains("earlyTransferBeforeConclude=1"))
+        let batch = try #require(store.snapshot().first)
+        #expect(batch.isComplete)
+        #expect(try Data(contentsOf: #require(store.urls(batch.id).first)) == payload)
+    }
+
     private func runNativeProbe(fileTransfer: Bool, initialMode: String,
                                 clientCursor: Bool = false, allowEncryption: Bool = true) throws {
         let server = try MultiClientServer(fileTransfer: fileTransfer, width: 1728, height: 1118,
@@ -862,7 +896,7 @@ private final class MultiClientServer: @unchecked Sendable {
     init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5,
          authenticationTimeout: TimeInterval = 120, messageTimeout: TimeInterval = 5,
          fileTransfer: Bool = false, width: Int = 2, height: Int = 1, nativePattern: Bool = false,
-         clientCursor: Bool = false, allowEncryption: Bool = true) throws {
+         clientCursor: Bool = false, allowEncryption: Bool = true, transferInbox: TransferInbox? = nil) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)
@@ -885,7 +919,8 @@ private final class MultiClientServer: @unchecked Sendable {
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
             logger: ServerLogger(verbose: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil), maximumClients: maximumClients,
-            handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout, messageTimeout: messageTimeout)
+            handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout, messageTimeout: messageTimeout,
+            transferInbox: transferInbox)
         // The listener is owned by this worker once created.
         let worker = MultiClientListener(server: server, listener: listener, done: done)
         DispatchQueue.global().async { worker.run() }

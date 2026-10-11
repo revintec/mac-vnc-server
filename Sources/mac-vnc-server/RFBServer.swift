@@ -17,6 +17,8 @@ struct ServerConfig {
     var cursorMode: CursorMode = .auto
     var allowEncryption = true
     var zlibConfiguration = ZlibConfiguration()
+    var transferOptions = TransferStore.Options()
+    var nativeFileDrops = false
 }
 
 enum DisplaySelection: Equatable {
@@ -109,6 +111,7 @@ final class RFBServer: @unchecked Sendable {
     private let makeInput: @Sendable () -> InputController
     private let makeClipboard: @Sendable () -> ClipboardBridge
     private let logger: ServerLogger
+    private let transferInbox: TransferInbox?
     private let maximumClients: Int
     private let handshakeTimeout: TimeInterval
     private let authenticationTimeout: TimeInterval
@@ -127,13 +130,15 @@ final class RFBServer: @unchecked Sendable {
         maximumClients: Int = 32,
         handshakeTimeout: TimeInterval = 5,
         authenticationTimeout: TimeInterval = 120,
-        messageTimeout: TimeInterval = 5
+        messageTimeout: TimeInterval = 5,
+        transferInbox: TransferInbox? = nil
     ) {
         self.config = config
         self.capture = capture
         self.makeInput = makeInput
         self.makeClipboard = makeClipboard
         self.logger = logger
+        self.transferInbox = transferInbox
         self.maximumClients = maximumClients
         self.handshakeTimeout = handshakeTimeout
         self.authenticationTimeout = authenticationTimeout
@@ -161,6 +166,9 @@ final class RFBServer: @unchecked Sendable {
             logger.info(config.allowEncryption
                 ? "Apple file drag and drop: enabled; encryption negotiated with viewer"
                 : "Apple file drag and drop: experimental plaintext mode; encryption key exchange suppressed")
+            if let transferInbox {
+                logger.info("Incoming file drops: staged local files; storage=\(transferInbox.store.options.root.path)")
+            } else { logger.info("Incoming file drops: native file promises") }
             if config.password != nil {
                 logger.info(config.allowEncryption
                     ? "Screen Sharing login: any username and the configured server password (Apple authentication)"
@@ -195,7 +203,8 @@ final class RFBServer: @unchecked Sendable {
                     adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
                     handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout,
                     messageTimeout: messageTimeout, fileTransfer: config.fileTransfer,
-                    allowEncryption: config.allowEncryption, zlibConfiguration: config.zlibConfiguration
+                    allowEncryption: config.allowEncryption, zlibConfiguration: config.zlibConfiguration,
+                    transferInbox: transferInbox
                 )
                 workers.enter()
                 DispatchQueue.global(qos: .userInteractive).async { [self] in
@@ -406,6 +415,7 @@ final class RFBClientSession: @unchecked Sendable {
     private let clipboardSync: Bool
     private let fileTransferEnabled: Bool
     private let allowEncryption: Bool
+    private let transferInbox: TransferInbox?
     private var fileTransfer: MacFileTransfer?
     private let adaptiveStreaming: Bool
     private let adaptiveFrameRate: Bool
@@ -491,8 +501,10 @@ final class RFBClientSession: @unchecked Sendable {
         messageTimeout: TimeInterval = 5,
         fileTransfer: Bool = false,
         allowEncryption: Bool = true,
-        zlibConfiguration: ZlibConfiguration = .init()
+        zlibConfiguration: ZlibConfiguration = .init(),
+        transferInbox: TransferInbox? = nil
     ) throws {
+        self.transferInbox = transferInbox
         self.handshakeTimeout = handshakeTimeout
         self.authenticationTimeout = authenticationTimeout
         self.messageTimeout = messageTimeout
@@ -530,7 +542,7 @@ final class RFBClientSession: @unchecked Sendable {
             fps: Int((1.0 / minimumFrameInterval).rounded())
         )
         if fileTransferEnabled && usesAppleExtensions {
-            fileTransfer = MacFileTransfer(logger: logger, input: input) { [weak self] bytes in
+            fileTransfer = MacFileTransfer(logger: logger, input: input, inbox: transferInbox) { [weak self] bytes in
                 guard let self else { throw RFBError.socketError("file-transfer session closed") }
                 let completion = DispatchSemaphore(value: 0)
                 try self.enqueueWriterCommand(.fileData(bytes, completion))
@@ -1544,6 +1556,7 @@ final class RFBClientSession: @unchecked Sendable {
         guard allowInput else { return }
         requestCaptureRecoveryAfterInput()
         let standardMask = usesAppleExtensions ? AppleRFB.standardButtonMask(mask) : mask
+        if fileTransfer?.pointer(mask: standardMask, x: x, y: y, layout: layout) == true { return }
         input.pointer(buttonMask: standardMask, x: x, y: y, layout: layout)
     }
 

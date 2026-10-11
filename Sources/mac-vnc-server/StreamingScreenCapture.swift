@@ -25,10 +25,13 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     private var captureRateRequests: [ObjectIdentifier: Int] = [:]
     private var desiredCaptureFPS: Int
     private var captureRateTask: Task<Void, Never>?
+    private var captureRateStopped = false
     private var wakeObserver: NSObjectProtocol?
     private var recoveryScheduled = false
     private var recoveryNeeded = false
     private var displayWakeScheduled = false
+    private var stopping = false
+    private var recoveryTask: Task<Void, Never>?
 
     init(
         scale: Double,
@@ -83,6 +86,23 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
+    }
+
+    func stop() async {
+        let recovery = recoveryLock.withLock {
+            stopping = true
+            recoveryTask?.cancel()
+            return recoveryTask
+        }
+        let rateUpdate = captureRateLock.withLock {
+            captureRateStopped = true
+            captureRateTask?.cancel()
+            return captureRateTask
+        }
+        await recovery?.value
+        await rateUpdate?.value
+        await Self.stopStreams(currentStreams(), logger: logger)
+        logger.verbose("ScreenCaptureKit: capture stopped")
     }
 
     func capture() throws -> Framebuffer {
@@ -165,7 +185,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
     private func scheduleDisplayWakeup() {
         recoveryLock.lock()
-        guard !displayWakeScheduled else {
+        guard !stopping, !displayWakeScheduled else {
             recoveryLock.unlock()
             return
         }
@@ -205,7 +225,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
     private func scheduleCaptureRateUpdate() {
         captureRateLock.lock()
-        guard captureRateTask == nil else {
+        guard !captureRateStopped, captureRateTask == nil else {
             captureRateLock.unlock()
             return
         }
@@ -216,14 +236,18 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     }
 
     private func applyCaptureRateUpdates() async {
-        while true {
+        while !Task.isCancelled {
             let target = captureRateTarget()
             let (currentStreams, currentConfigurations) = streamConfigurationSnapshot()
 
             for (stream, configuration) in zip(currentStreams, currentConfigurations) {
                 configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(target))
                 do {
-                    try await stream.updateConfiguration(configuration)
+                    try await CaptureOperation.run("update configuration") { complete in
+                        stream.updateConfiguration(configuration) { error in
+                            complete(error.map { .failure($0) } ?? .success(()))
+                        }
+                    }
                 } catch {
                     logger.warning("ScreenCaptureKit frame-rate update to \(target) FPS failed: \(error.localizedDescription)")
                 }
@@ -258,8 +282,21 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     }
 
     static func displayCount() async throws -> Int {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let content = try await shareableContent(onScreenWindowsOnly: true)
         return content.displays.count
+    }
+
+    private static func shareableContent(onScreenWindowsOnly: Bool) async throws -> SCShareableContent {
+        // The framework's immutable snapshot is read only after its callback.
+        struct Content: @unchecked Sendable { let value: SCShareableContent }
+        let content: Content = try await CaptureOperation.run("enumerate displays", timeout: 60) { complete in
+            SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: onScreenWindowsOnly) { content, error in
+                if let error { complete(.failure(error)) }
+                else if let content { complete(.success(Content(value: content))) }
+                else { complete(.failure(RFBError.captureFailed("ScreenCaptureKit returned no shareable content"))) }
+            }
+        }
+        return content.value
     }
 
     private static func start(
@@ -270,7 +307,8 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         eventSink: StreamEventSink,
         logger: ServerLogger
     ) async throws -> StartedCapture {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        logger.verbose("ScreenCaptureKit: enumerating displays")
+        let content = try await shareableContent(onScreenWindowsOnly: false)
         let selectedDisplays = try selectDisplays(from: orderedDisplays(content.displays), displaySelection: displaySelection)
         let displays = selectedDisplays.map { display in
             VirtualDisplay(
@@ -321,7 +359,12 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                 configurations.append(config)
                 outputs.append(output)
                 delegates.append(delegate)
-                try await stream.startCapture()
+                logger.verbose("ScreenCaptureKit: starting display \(display.displayID) (\(width)x\(height))")
+                try await CaptureOperation.run("start display \(display.displayID)") { complete in
+                    stream.startCapture { error in
+                        complete(error.map { .failure($0) } ?? .success(()))
+                    }
+                }
             }
         } catch {
             await stopStreams(streams, logger: logger)
@@ -340,14 +383,12 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     private func scheduleRecovery(reason: String) {
         recoveryLock.lock()
         recoveryNeeded = true
-        guard !recoveryScheduled else {
+        guard !stopping, !recoveryScheduled else {
             recoveryLock.unlock()
             return
         }
         recoveryScheduled = true
-        recoveryLock.unlock()
-
-        Task { [weak self] in
+        recoveryTask = Task { [weak self] in
             guard let self else {
                 return
             }
@@ -363,9 +404,11 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
             finishRecoveryScheduling()
         }
+        recoveryLock.unlock()
     }
 
     private func restartCapture(reason: String) async throws {
+        try Task.checkCancellation()
         logger.info("ScreenCaptureKit: rebuilding capture after \(reason)")
 
         let oldStreams = currentStreams()
@@ -387,11 +430,17 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                     throw RFBError.captureFailed("ScreenCaptureKit did not produce frames during recovery")
                 }
 
+                if Task.isCancelled {
+                    await Self.stopStreams(started.streams, logger: logger)
+                    throw CancellationError()
+                }
                 install(started)
                 clearRecoveryNeeded()
 
                 logger.info("ScreenCaptureKit: capture recovered")
                 return
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 lastError = error
                 logger.warning("ScreenCaptureKit recovery attempt \(attempt)/3 failed: \(error.localizedDescription)")
@@ -436,6 +485,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     private func finishRecoveryScheduling() {
         recoveryLock.lock()
         recoveryScheduled = false
+        recoveryTask = nil
         recoveryLock.unlock()
     }
 
@@ -446,13 +496,22 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     }
 
     private static func stopStreams(_ streams: [SCStream], logger: ServerLogger) async {
-        for stream in streams {
-            do {
-                try await stream.stopCapture()
-            } catch {
-                logger.warning("ScreenCaptureKit stream stop failed: \(error.localizedDescription)")
+        // Cleanup must still call the framework when the owning task is cancelled.
+        struct Streams: @unchecked Sendable { let value: [SCStream] }
+        let captured = Streams(value: streams)
+        await Task.detached {
+            for stream in captured.value {
+                do {
+                    try await CaptureOperation.run("stop capture", timeout: 5) { complete in
+                        stream.stopCapture { error in
+                            complete(error.map { .failure($0) } ?? .success(()))
+                        }
+                    }
+                } catch {
+                    logger.warning("ScreenCaptureKit stream stop failed: \(error.localizedDescription)")
+                }
             }
-        }
+        }.value
     }
 
     private static func selectDisplays(from displays: [SCDisplay], displaySelection: DisplaySelection) throws -> [SCDisplay] {

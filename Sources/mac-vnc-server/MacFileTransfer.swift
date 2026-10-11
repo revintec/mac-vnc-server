@@ -65,6 +65,13 @@ final class NativeTransferProcess: NativeDragHelper, @unchecked Sendable {
         return try output.withReadTimeout(timeout, operation: "native file-transfer helper") { try output.readExact(count) }
     }
 
+    var processID: Int32 { process.processIdentifier }
+
+    func cancelAndWait() {
+        cancel()
+        process.waitUntilExit()
+    }
+
     func cancel() {
         lock.lock()
         guard !cancelled else { lock.unlock(); return }
@@ -96,6 +103,13 @@ final class MacFileTransfer: @unchecked Sendable {
     private let input: InputController
     private let pointerLock = NSLock()
     private let makeDragHelper: @Sendable () throws -> any NativeDragHelper
+    private let inbox: TransferInbox?
+    private var stagedBatches: [String: UUID] = [:]
+    private var stagedReceives: [UInt32: TransferStore.Receive] = [:]
+    private var receiveFailures: [UInt32: String] = [:]
+    private var cancelledBatches = Set<UUID>()
+    private var cancelledReceives = Set<UInt32>()
+    private var gesture: TransferGesture?
     private var stopped = false
     private var drag: (any NativeDragHelper)?
     private var dragToken: UUID?
@@ -104,12 +118,13 @@ final class MacFileTransfer: @unchecked Sendable {
     private var senders: [UInt32: NativeTransferProcess] = [:]
     private var receivers: [UInt32: NativeTransferProcess] = [:]
 
-    init(logger: ServerLogger, input: InputController = MacInputController(),
+    init(logger: ServerLogger, input: InputController = MacInputController(), inbox: TransferInbox? = nil,
          makeDragHelper: @escaping @Sendable () throws -> any NativeDragHelper = {
              try NativeTransferProcess(path: NativeTransferProcess.dragPath)
          },
          send: @escaping @Sendable ([UInt8]) throws -> Void) {
         self.logger = logger
+        self.inbox = inbox
         self.input = input
         self.makeDragHelper = makeDragHelper
         self.send = send
@@ -124,11 +139,16 @@ final class MacFileTransfer: @unchecked Sendable {
         helpers.append(contentsOf: receivers.values.map { $0 as any NativeDragHelper })
         if let drag { helpers.append(drag) }
         let token = dragToken
+        let gesture = self.gesture; self.gesture = nil
+        let batches = Array(stagedBatches.values); stagedBatches.removeAll()
+        cancelledReceives.formUnion(stagedReceives.keys)
         dragToken = nil
         senders.removeAll(); receivers.removeAll(); drag = nil
         sourceFiles.removeAll(); dropDirectories.removeAll()
         lock.unlock()
         helpers.forEach { $0.cancel() }
+        gesture?.cancel()
+        for id in batches { try? inbox?.store.finishWaiting(id, reason: "Connection ended or transfer cancelled") }
         releaseDrag(token: token)
     }
 
@@ -146,8 +166,10 @@ final class MacFileTransfer: @unchecked Sendable {
     /// Called only after RFB control and viewer capability checks.
     func startDrag(sessionID: UInt32, compressed: [UInt8], archiveSize: Int) throws {
         logger.verbose("Apple drag: session=\(sessionID) direction=\(compressed.isEmpty ? "server-to-client" : "client-to-server") archive_bytes=\(archiveSize)")
+        var incomingFiles: [URL] = []
         if !compressed.isEmpty {
             let files = try AppleFileTransfer.dragFiles(compressed: compressed, archiveSize: archiveSize)
+            incomingFiles = files
             guard !files.isEmpty else {
                 logger.verbose("Apple drag ignored: session=\(sessionID) no supported file URLs in archive")
                 return
@@ -166,14 +188,46 @@ final class MacFileTransfer: @unchecked Sendable {
         do {
             lock.lock()
             let old = drag
+            let oldGesture = gesture; gesture = nil
             drag = nil
             dragToken = token
             sourceFiles.removeAll()
-            dropDirectories.removeAll()
+            dropDirectories = Set(stagedBatches.keys)
             let active = !stopped
             lock.unlock()
             old?.cancel()
+            oldGesture?.cancel()
             guard active else { releaseDrag(token: token); return }
+            if let inbox, !incomingFiles.isEmpty {
+                let batch: TransferStore.Batch
+                do { batch = try inbox.store.begin(names: incomingFiles.map(\.lastPathComponent)) }
+                catch {
+                    // A storage failure must not tear down the remote desktop
+                    // or turn the still-held file drag into a click on an app.
+                    logger.warning("Apple staged transfer unavailable: \(error.localizedDescription)")
+                    inbox.reportError(error.localizedDescription)
+                    let blocked = TransferGesture(batch: UUID(), input: input) { [weak self] in
+                        self?.endStagedGesture(token: token)
+                    }
+                    lock.withLock { gesture = blocked }
+                    return
+                }
+                let directory = inbox.store.destination(batch.id)
+                let nextGesture = TransferGesture(batch: batch.id, input: input) { [weak self] in
+                    self?.endStagedGesture(token: token)
+                }
+                lock.withLock {
+                    stagedBatches[directory.path] = batch.id
+                    dropDirectories.insert(directory.path)
+                    gesture = nextGesture
+                }
+                inbox.register(nextGesture) { [weak self] in self?.cancelStagedBatch(batch.id) }
+                let path = Array(directory.path.utf8)
+                try send([0x1e, 0, 0, 0] + sessionID.beBytes + UInt32(path.count).beBytes + path)
+                logger.verbose("Apple staged transfer requested before mouse-up: session=\(sessionID) batch=\(batch.id)")
+                scheduleWaitingTimeout(batch.id)
+                return
+            }
             let helper = try makeDragHelper()
             lock.lock()
             guard !stopped else { lock.unlock(); helper.cancel(); releaseDrag(token: token); return }
@@ -217,13 +271,59 @@ final class MacFileTransfer: @unchecked Sendable {
 
     func cancelDrag() {
         lock.lock()
+        let gesture = self.gesture; self.gesture = nil
         let helper = drag
         drag = nil
         let token = dragToken
         dragToken = nil
         lock.unlock()
         helper?.cancel()
+        gesture?.cancel()
+        if let gesture { cancelStagedBatch(gesture.batch, reason: "Drag cancelled or left the remote view") }
         releaseDrag(token: token)
+    }
+
+    private func scheduleWaitingTimeout(_ id: UUID) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 120) { [weak self] in
+            guard let self, let store = inbox?.store,
+                  let batch = try? store.snapshot().first(where: { $0.id == id }), batch.isActive else { return }
+            if !batch.items.contains(where: { $0.state == .receiving }), Date().timeIntervalSince(batch.updated) >= 120 {
+                try? store.finishWaiting(id, reason: "Client did not start the remaining files")
+            } else { scheduleWaitingTimeout(id) }
+        }
+    }
+
+    /// Returns true when staging consumed the event (no click on the target).
+    func pointer(mask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) -> Bool {
+        lock.withLock { gesture }?.pointer(mask: mask, x: x, y: y, layout: layout) ?? false
+    }
+
+    private func endStagedGesture(token: UUID) {
+        // No postMouse here: a mouse-up already arrived, or AppKit ended the
+        // local drag. Releasing an old token must never affect a newer gesture.
+        Self.dragLock.withLock {
+            if Self.dragOwner?.client == identity && Self.dragOwner?.token == token { Self.dragOwner = nil }
+        }
+    }
+
+    private func cancelStagedBatch(_ id: UUID, reason: String = "Cancelled") {
+        let helpers = lock.withLock { () -> [(UInt32, NativeTransferProcess)] in
+            var result: [(UInt32, NativeTransferProcess)] = []
+            cancelledBatches.insert(id)
+            for (session, receive) in stagedReceives where receive.batch == id {
+                cancelledReceives.insert(session)
+                receiveFailures[session] = reason
+                if let helper = receivers.removeValue(forKey: session) { result.append((session, helper)) }
+            }
+            for (path, batch) in stagedBatches where batch == id { dropDirectories.remove(path) }
+            return result
+        }
+        lock.withLock { gesture?.batch == id ? gesture : nil }?.cancel()
+        for (session, helper) in helpers {
+            helper.cancel()
+            try? send(AppleFileTransfer.receiverResult(sessionID: session, status: UInt16.max, name: ""))
+        }
+        try? inbox?.store.finishWaiting(id, reason: reason)
     }
 
     private func postMouse(_ type: CGEventType, offset: CGFloat = 0) {
@@ -304,6 +404,14 @@ final class MacFileTransfer: @unchecked Sendable {
             let destination = URL(fileURLWithPath: start.path).standardizedFileURL
             let directory = destination
             let name = start.name
+            if lock.withLock({ () -> Bool in
+                guard let batch = stagedBatches[directory.path], cancelledBatches.contains(batch) else { return false }
+                cancelledReceives.insert(message.sessionID)
+                return true
+            }) {
+                try send(AppleFileTransfer.receiverResult(sessionID: message.sessionID, status: UInt16.max, name: name ?? ""))
+                return
+            }
             guard lock.withLock({ !stopped && dropDirectories.contains(directory.path) }) else {
                 throw RFBError.protocolError("file destination does not match a drop")
             }
@@ -315,13 +423,30 @@ final class MacFileTransfer: @unchecked Sendable {
             lock.lock()
             let sender = senders.removeValue(forKey: message.sessionID)
             let receiver = receivers.removeValue(forKey: message.sessionID)
+            if stagedReceives[message.sessionID] != nil { cancelledReceives.insert(message.sessionID) }
             lock.unlock()
             sender?.cancel(); receiver?.cancel()
         case 100...104:
+            if lock.withLock({ cancelledReceives.contains(message.sessionID) }) { return }
             guard let helper = lock.withLock({ receivers[message.sessionID] }) else {
                 throw RFBError.protocolError("file data without an active receive session")
             }
             try message.validateFileData()
+            if let receive = lock.withLock({ stagedReceives[message.sessionID] }), let inbox {
+                let count: Int64
+                switch message.command {
+                case 101: count = 4096
+                case 102: count = Int64(message.payload.count - 4)
+                case 103: count = Int64(UInt32.be(message.payload[2], message.payload[3], message.payload[4], message.payload[5]))
+                default: count = 0
+                }
+                do { if count > 0 { try inbox.store.accept(receive, bytes: count, dataBytes: message.command == 101 ? 0 : count) } }
+                catch {
+                    logger.warning("Apple staged transfer stopped: \(error.localizedDescription)")
+                    cancelStagedBatch(receive.batch, reason: error.localizedDescription)
+                    return
+                }
+            }
             try helper.input.writeAll(message.receiverInput)
         case 200, 201:
             // Viewer receive status/progress. It has already consumed our data.
@@ -374,32 +499,53 @@ final class MacFileTransfer: @unchecked Sendable {
     func startReceiver(session: UInt32, directory: URL, name: String?) throws {
         // A private staging directory prevents incomplete transfers and name
         // collisions from replacing existing files at the selected destination.
-        let staging = directory.appendingPathComponent(".mac-vnc-transfer-\(UUID())", isDirectory: true)
-        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false,
-                                               attributes: [.posixPermissions: 0o700])
+        let batch = lock.withLock { stagedBatches[directory.path] }
+        let receive = try batch.flatMap { try inbox?.store.receive(batch: $0, name: name) }
+        let staging = receive?.staging ?? directory.appendingPathComponent(".mac-vnc-transfer-\(UUID())", isDirectory: true)
+        if receive == nil {
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false,
+                                                   attributes: [.posixPermissions: 0o700])
+        }
         let helper: NativeTransferProcess
         do { helper = try NativeTransferProcess(path: NativeTransferProcess.receiverPath) }
-        catch { try? FileManager.default.removeItem(at: staging); throw error }
+        catch {
+            if let receive { try? inbox?.store.fail(receive, reason: error.localizedDescription) }
+            else { try? FileManager.default.removeItem(at: staging) }
+            throw error
+        }
         lock.lock()
         guard !stopped, receivers[session] == nil, senders.count + receivers.count < 8 else {
-            lock.unlock(); helper.cancel(); try? FileManager.default.removeItem(at: staging)
+            lock.unlock(); helper.cancelAndWait()
+            if let receive { try? inbox?.store.fail(receive, reason: "Too many or duplicate transfers") }
+            else { try? FileManager.default.removeItem(at: staging) }
             throw RFBError.protocolError("too many or duplicate file-copy sessions")
         }
         receivers[session] = helper
+        if let receive { stagedReceives[session] = receive }
         lock.unlock()
         do {
+            if let receive { try inbox?.store.writerStarted(receive, pid: helper.processID) }
             try helper.input.writeAll(AppleFileTransfer.receiverStart(sessionID: session, directory: staging, name: name))
         } catch {
-            helper.cancel()
-            lock.withLock { _ = receivers.removeValue(forKey: session) }
-            try? FileManager.default.removeItem(at: staging)
+            helper.cancelAndWait()
+            lock.withLock { _ = receivers.removeValue(forKey: session); stagedReceives.removeValue(forKey: session) }
+            if let receive { try? inbox?.store.fail(receive, reason: error.localizedDescription) }
+            else { try? FileManager.default.removeItem(at: staging) }
             throw error
         }
         DispatchQueue.global(qos: .utility).async { [self, helper] in
+            var failure = "Cancelled or interrupted"
+            var succeeded = false
             defer {
-                helper.cancel()
-                lock.withLock { if receivers[session] === helper { receivers.removeValue(forKey: session) } }
-                try? FileManager.default.removeItem(at: staging)
+                helper.cancelAndWait()
+                lock.withLock {
+                    if let reason = receiveFailures.removeValue(forKey: session) { failure = reason }
+                    if receive != nil && !succeeded { cancelledReceives.insert(session) }
+                    if receivers[session] === helper { receivers.removeValue(forKey: session) }
+                    stagedReceives.removeValue(forKey: session)
+                }
+                if let receive { try? inbox?.store.fail(receive, reason: failure) }
+                else { try? FileManager.default.removeItem(at: staging) }
             }
             do {
                 while true {
@@ -413,6 +559,7 @@ final class MacFileTransfer: @unchecked Sendable {
                     let receivedName = length == 0 ? (name ?? "")
                         : try AppleFileTransfer.pathString(Array(record[4..<(4 + length)]))
                     guard status == 0 else {
+                        failure = "Client/native receiver reported status \(status)"
                         try send(AppleFileTransfer.receiverResult(sessionID: session, status: status, name: receivedName))
                         return
                     }
@@ -422,15 +569,21 @@ final class MacFileTransfer: @unchecked Sendable {
                     lock.lock()
                     guard !stopped, receivers[session] === helper else { lock.unlock(); return }
                     let finalName: String
-                    do { finalName = try publish(staging: staging, directory: directory, name: receivedName) }
+                    do {
+                        if let receive, let inbox {
+                            finalName = try inbox.store.complete(receive, name: receivedName).lastPathComponent
+                        } else { finalName = try publish(staging: staging, directory: directory, name: receivedName) }
+                    }
                     catch { lock.unlock(); throw error }
                     lock.unlock()
+                    succeeded = true
                     try send(AppleFileTransfer.receiverResult(sessionID: session, status: 0, name: finalName))
-                    logger.verbose("Apple file receive completed: session=\(session)")
+                    logger.verbose("Apple file receive completed: session=\(session)\(receive.map { " batch=\($0.batch)" } ?? "")")
                     return
                 }
             } catch {
                 guard lock.withLock({ !stopped && receivers[session] === helper }) else { return }
+                failure = error.localizedDescription
                 logger.warning("Apple file receive failed: \(error)")
                 try? send(AppleFileTransfer.receiverResult(sessionID: session, status: UInt16.max, name: name ?? ""))
             }
@@ -438,18 +591,9 @@ final class MacFileTransfer: @unchecked Sendable {
     }
 
     private func publish(staging: URL, directory: URL, name: String) throws -> String {
-        let source = staging.appendingPathComponent(name)
-        for suffix in 0..<1_000 {
-            let ext = (name as NSString).pathExtension
-            let numbered = "\((name as NSString).deletingPathExtension) \(suffix)" + (ext.isEmpty ? "" : "." + ext)
-            let candidate = suffix == 0 ? name : numbered
-            let target = directory.appendingPathComponent(candidate)
-            // RENAME_EXCL is atomic and never replaces an existing destination.
-            if renamex_np(source.path, target.path, UInt32(RENAME_EXCL)) == 0 { return candidate }
-            guard errno == EEXIST else { throw RFBError.socketError("could not finish received file: \(String(cString: strerror(errno)))") }
-        }
-        throw RFBError.protocolError("too many files with the same name at the drop destination")
+        try TransferStore.publish(source: staging.appendingPathComponent(name), directory: directory, name: name).lastPathComponent
     }
+
 }
 
 extension UInt32 {

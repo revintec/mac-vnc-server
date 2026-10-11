@@ -26,12 +26,13 @@ enum CLICommand {
     case wakeup
     case update
     case version
+    case transfers(TransferStore.Options)
 
-    func run() async throws {
+    func run(transferInbox: TransferInbox? = nil) async throws {
         switch self {
         case .run(let config):
             let resolvedConfig = try resolvePassword(in: config)
-            try await runServers(config: resolvedConfig)
+            try await runServers(config: resolvedConfig, transferInbox: transferInbox)
         case .service(let config, let arguments):
             _ = try resolvePassword(in: config)
             try LaunchAgentService.install(arguments: arguments)
@@ -46,6 +47,8 @@ enum CLICommand {
             try DisplayWakeup.run()
         case .update:
             try await BinaryUpdater.run()
+        case .transfers:
+            break // The main-thread AppKit loop owns the receiving panel.
         case .version:
             print("mac-vnc-server \(AppVersion.current)")
         }
@@ -61,47 +64,47 @@ enum CLICommand {
         return config.withResolvedPassword(password)
     }
 
-    private func runServers(config: ServerConfig) async throws {
+    private func runServers(config: ServerConfig, transferInbox: TransferInbox?) async throws {
         let inputs = SharedInputController(input: MacInputController(logger: ServerLogger(verbose: config.verbose)))
         let configs = try await expandedConfigs(from: config)
-        if configs.count == 1, let config = configs.first {
-            try await Self.runServer(config: config, inputs: inputs)
-            return
-        }
-
         let sharedLogger = ServerLogger(verbose: config.verbose)
         let sharedCapture = try await StreamingScreenCapture(
             scale: config.scale,
             fps: config.fps,
-            displaySelection: .all,
+            displaySelection: configs.count == 1 ? configs[0].displaySelection : .all,
             logger: sharedLogger,
             cursorMode: config.cursorMode
         )
 
-        for config in configs {
-            let capture: SelectedDisplayFramebufferSource
-            switch config.displaySelection {
-            case .all:
-                capture = SelectedDisplayFramebufferSource(source: sharedCapture, displayIndex: nil)
-            case .display(let displayIndex):
-                capture = SelectedDisplayFramebufferSource(source: sharedCapture, displayIndex: displayIndex)
-            case .automatic:
-                throw CLIError.invalidArgument("automatic display selection could not be expanded")
-            }
-
-            Task.detached {
-                do {
-                    try await Self.runServer(config: config, inputs: inputs, capture: capture)
-                } catch {
-                    fputs("mac-vnc-server \(config.bindAddress):\(config.port): \(CLI.errorMessage(for: error))\n", stderr)
-                    Foundation.exit(1)
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for config in configs {
+                    let capture: any FramebufferSource & Sendable
+                    if configs.count == 1 {
+                        capture = sharedCapture
+                    } else {
+                        switch config.displaySelection {
+                        case .all:
+                            capture = SelectedDisplayFramebufferSource(source: sharedCapture, displayIndex: nil)
+                        case .display(let index):
+                            capture = SelectedDisplayFramebufferSource(source: sharedCapture, displayIndex: index)
+                        case .automatic:
+                            throw CLIError.invalidArgument("automatic display selection could not be expanded")
+                        }
+                    }
+                    group.addTask {
+                        try await Self.runServer(config: config, inputs: inputs, capture: capture, transferInbox: transferInbox)
+                    }
                 }
+                // Propagate a failed listener immediately so sibling listeners
+                // are cancelled and the shared capture is stopped as well.
+                for try await _ in group {}
             }
+        } catch {
+            await sharedCapture.stop()
+            throw error
         }
-
-        while true {
-            try await Task.sleep(for: .seconds(3600))
-        }
+        await sharedCapture.stop()
     }
 
     private func expandedConfigs(from config: ServerConfig) async throws -> [ServerConfig] {
@@ -124,28 +127,20 @@ enum CLICommand {
         return configs
     }
 
-    private static func runServer(config: ServerConfig, inputs: SharedInputController, capture: FramebufferSource? = nil) async throws {
+    private static func runServer(config: ServerConfig, inputs: SharedInputController, capture: FramebufferSource, transferInbox: TransferInbox?) async throws {
         let logger = ServerLogger(verbose: config.verbose)
-        let captureSource: FramebufferSource
-        if let capture {
-            captureSource = capture
-        } else {
-            captureSource = try await StreamingScreenCapture(
-                scale: config.scale,
-                fps: config.fps,
-                displaySelection: config.displaySelection,
-                logger: logger,
-                cursorMode: config.cursorMode
-            )
-        }
         let server = RFBServer(
             config: config,
-            capture: captureSource,
+            capture: capture,
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard() },
-            logger: logger
+            logger: logger, transferInbox: transferInbox
         )
-        try server.run()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try server.run()
+            try Task.checkCancellation()
+        } onCancel: { server.stop() }
     }
 }
 
@@ -173,6 +168,8 @@ enum CLI {
         }
 
         switch subcommand {
+        case "transfers":
+            return .transfers(try parseRun(Array(arguments.dropFirst())).config.transferOptions)
         case "run":
             return command(for: try parseRun(Array(arguments.dropFirst())))
         case "permissions":
@@ -217,6 +214,8 @@ enum CLI {
         var allowEncryption = true
         var adaptiveStreaming = true
         var adaptiveFrameRate = true
+        var transferOptions = TransferStore.Options()
+        var nativeFileDrops = false
         var registerService = false
         var serviceFlagIndices = Set<Int>()
         var index = 0
@@ -317,6 +316,25 @@ enum CLI {
                 serviceFlagIndices.insert(index)
             case "--file-transfer":
                 fileTransfer = true
+            case "--file-drop-mode":
+                index += 1
+                guard index < arguments.count, ["staged", "native"].contains(arguments[index]) else {
+                    throw CLIError.invalidArgument("--file-drop-mode must be staged or native")
+                }
+                nativeFileDrops = arguments[index] == "native"
+            case "--transfer-directory":
+                index += 1
+                guard index < arguments.count, arguments[index].hasPrefix("/") else {
+                    throw CLIError.invalidArgument("--transfer-directory requires an absolute path")
+                }
+                transferOptions.root = URL(fileURLWithPath: arguments[index], isDirectory: true)
+            case "--transfer-limit-gib", "--transfer-free-gib":
+                index += 1
+                guard index < arguments.count, let value = Int64(arguments[index]), (1...1_048_576).contains(value) else {
+                    throw CLIError.invalidArgument("\(arg) requires a positive integer GiB value")
+                }
+                if arg == "--transfer-limit-gib" { transferOptions.maximumBytes = value * 1_024 * 1_024 * 1_024 }
+                else { transferOptions.minimumFreeBytes = value * 1_024 * 1_024 * 1_024 }
             case "--no-encryption":
                 allowEncryption = false
             case "--clipboard-sync":
@@ -355,7 +373,8 @@ enum CLI {
             fileTransfer: fileTransfer,
             cursorMode: cursorMode,
             allowEncryption: allowEncryption,
-            zlibConfiguration: zlibConfiguration
+            zlibConfiguration: zlibConfiguration,
+            transferOptions: transferOptions, nativeFileDrops: nativeFileDrops
         )
         return ParsedRun(
             config: config,
@@ -394,6 +413,7 @@ enum CLI {
       mac-vnc-server wakeup
       mac-vnc-server update
       mac-vnc-server version
+      mac-vnc-server transfers [--transfer-directory /absolute/path]
 
     Default bind address is 127.0.0.1 and default port is 5900. The first run generates an 8-character password in ~/.mac-vnc-server/config.json and prints it to stdout.
     Without --display, port 5900 serves all displays and 5901, 5902, ... serve each display.
@@ -406,7 +426,12 @@ enum CLI {
     With --file-transfer, --no-encryption enables experimental plaintext operation on a plain VNC URL.
     It suppresses the viewer's encryption key exchange; encrypted traffic is refused.
     Use --clipboard-sync for text and images with Apple Screen Sharing (text with classic VNC).
-    Use --file-transfer for Finder file/folder drag and drop with vnc://HOST:PORT/.
+    Use --file-transfer for file/folder drag and drop with vnc://HOST:PORT/.
+    Incoming files are staged in ~/Library/Application Support/mac-vnc-server/Transfers.
+    Keep holding to continue with local files when ready, or drag completed rows from Received Files.
+    Use --file-drop-mode native to retain the original Finder/promise destination workflow.
+    Storage: --transfer-directory /absolute/path, --transfer-limit-gib 10, --transfer-free-gib 1.
+    The transfers command reopens received files without starting a server.
     Otherwise file transfer uses Apple authentication: any username and the configured server password.
     Use --no-adaptive to disable adaptive FPS, compression, and scale changes.
     Use --service to install and start a per-user LaunchAgent that runs in the UI session.
@@ -453,7 +478,8 @@ private extension ServerConfig {
             fileTransfer: fileTransfer,
             cursorMode: cursorMode,
             allowEncryption: allowEncryption,
-            zlibConfiguration: zlibConfiguration
+            zlibConfiguration: zlibConfiguration,
+            transferOptions: transferOptions, nativeFileDrops: nativeFileDrops
         )
     }
 
@@ -474,7 +500,8 @@ private extension ServerConfig {
             fileTransfer: fileTransfer,
             cursorMode: cursorMode,
             allowEncryption: allowEncryption,
-            zlibConfiguration: zlibConfiguration
+            zlibConfiguration: zlibConfiguration,
+            transferOptions: transferOptions, nativeFileDrops: nativeFileDrops
         )
     }
 }

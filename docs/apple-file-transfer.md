@@ -14,9 +14,17 @@ Screen Sharing connection, and open this URL on the client:
 open -a "Screen Sharing" 'vnc://SERVER_IP:5900/'
 ```
 
-Replace the address and port. In control mode, drag local Finder items into
-remote Finder/the remote desktop, or remote Finder items out into local Finder.
-Shared Clipboard is a separate feature and is not required for file transfer.
+Replace the address and port. In control mode, drag local Finder items into the
+remote view. The default staged path requests bytes immediately, publishes
+completed local files, and attempts to continue the held gesture using AppKit.
+If the gesture ends first, drag completed rows from the Received Files panel.
+See [staged file drops](staged-file-drops.md) for storage, retention, configuration,
+verified early-transfer timing, and the outstanding macOS 13 end-to-end test.
+`--file-drop-mode native` retains the original helper's file-promise workflow
+for direct Finder destinations. Remote Finder items can still be dragged out
+into local Finder. Shared Clipboard is separate and is not required.
+[Application drop research](session-access-and-app-drops.md#drops-into-applications-other-than-finder)
+explains target-app differences and the reverse direction's constraints.
 Files are copied; the originals are retained. With a configured password and
 encryption allowed (the default), Apple viewers use security type 30 (Diffie–Hellman), which initializes the wrapping key
 needed by Apple's record encryption. Enter any username and the existing server

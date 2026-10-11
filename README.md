@@ -245,7 +245,11 @@ Options:
 | `--clipboard-sync` | off | Share text and PNG/TIFF/JPEG images with Apple Screen Sharing; text with classic VNC. |
 | `--cursor auto\|embedded` | `auto` | Send system cursor shapes to RichCursor viewers for local pointer motion. Fall back to embedded rendering when unavailable, for other viewers, and in Apple Observe mode. |
 | `--no-encryption` | off | Require plaintext session traffic while retaining password authentication. With `--file-transfer`, experimentally suppress the native viewer's encryption key exchange on a plain URL. Encrypted traffic is refused. |
-| `--file-transfer` | off | Enable Apple file/folder drag and drop and Apple authentication/encryption negotiation; see below. |
+| `--file-transfer` | off | Enable Apple file/folder drag and drop with persistent incoming staging and Apple authentication/encryption negotiation. |
+| `--file-drop-mode` | `staged` | `staged` offers real local files and a receiving panel; `native` keeps the original Finder/file-promise workflow. |
+| `--transfer-directory` | `~/Library/Application Support/mac-vnc-server/Transfers` | Persistent storage for received copies. Supply an absolute path. |
+| `--transfer-limit-gib` | 10 | Limit retained files plus active transfer storage reservations. |
+| `--transfer-free-gib` | 1 | Minimum free disk space to preserve while receiving. |
 | `--no-adaptive` | off | Disable adaptive FPS, compression, and automatic scale changes. |
 
 ### Password configuration
@@ -340,6 +344,8 @@ All viewers share the logged-in Mac's desktop, keyboard, and system cursor. Poin
 
 With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text or images copied by one Apple viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical content echoes do not produce another clipboard change. This is a shared desktop, not separate macOS login sessions. Concurrent screen encoding and network traffic grow with the number of viewers.
 
+The server does not currently provide an off-console user desktop while the physical console remains locked or at loginwindow. Keeping its per-user service running through a lock does not provide independent session access. See [session access investigation](docs/session-access-and-app-drops.md#session-access-distinguish-the-required-behavior) for the native architecture, implementation choices, and required verification.
+
 ### Input
 
 Keyboard and mouse events are injected with `CGEvent`.
@@ -369,10 +375,18 @@ the client with:
 open -a "Screen Sharing" 'vnc://SERVER_IP:5900/'
 ```
 
-Use control mode, then drag a file or folder from local Finder into remote Finder
-or onto the remote desktop. Drag a remote Finder item out of the Screen Sharing
-window into local Finder to copy in the other direction. Existing destinations
-are preserved by choosing a numbered name. Screen Sharing uses Apple
+Use control mode, then drag files or folders from local Finder into the remote
+view. The server requests the files immediately and shows a Received Files
+panel. Keep holding to let it attempt a drag with completed local files; if you
+release first, drag the completed row from the panel into the target app.
+Copies are stored under `~/Library/Application Support/mac-vnc-server/Transfers`;
+used files remain until explicitly removed. Use the VNC Files menu-bar item or
+`mac-vnc-server transfers` to reopen them. See [staging, retention, and timing
+verification](docs/staged-file-drops.md) for limits and remaining client tests.
+`--file-drop-mode native` retains direct drops into Finder through file promises.
+Drag a remote Finder item out of Screen Sharing into local Finder to copy in the
+other direction. Existing destinations are preserved with numbered names.
+Screen Sharing uses Apple
 Diffie–Hellman authentication: enter any username and the configured server
 password in its login dialog. The username is only a label, not a macOS account
 login. Standard VNC clients continue to use the VNC password method.
@@ -392,8 +406,9 @@ untrusted networks. The `--no-password` profile cannot negotiate Apple encryptio
 Display negotiation prefers Apple's modern layout format (1105) with console
 state and explicit scale, retaining format 1101 for older viewers.
 
-The backend uses the system's private `SSDragHelper`,
-`SSFileCopySender` and `SSFileCopyReceiver` executables as the logged-in user.
+The backend uses the system's private `SSFileCopySender` and
+`SSFileCopyReceiver` executables as the logged-in user. Reverse-direction and
+native-mode drags also use `SSDragHelper`; incoming staged drags use AppKit.
 Tests cover native file/folder helpers, drag initialization and authorization,
 completion staging, collision handling and cancellation. An unshown Tahoe native
 Screen Sharing view also verifies that a real connection registers Finder drops
@@ -463,6 +478,34 @@ VNC password: XXXXXXXX
 ```
 
 For scripted testing, use AppleScript to type it instead of Keychain.
+
+### Startup stops after the cursor message
+
+A `SWIFT TASK CONTINUATION MISUSE` warning at startup can come from
+ScreenCaptureKit discarding its callback when its connection to the macOS
+capture service (`replayd`) fails. On Tahoe, this was reproduced with an older
+instance still running from the same executable path. Restarting that instance
+cleared the failure; Screen Recording permission was already granted.
+
+The server now reports which capture operation failed instead of waiting
+forever. Display enumeration allows 60 seconds for permission handling; stream
+start/configuration allows 15 seconds, and stream stop allows 5 seconds.
+Discarded callbacks fail immediately. Ctrl-C and SIGTERM close the listeners
+and stop the capture streams before exiting. After rebuilding, restart older
+instances that still use that executable. For simultaneous comparison servers,
+use separate executable copies: Tahoe's capture-service conflict can persist
+with concurrent instances of the same path even when streams stop cleanly.
+`diagnose` reports permission status.
+
+To check the actual capture startup, including staged file drops and automatic
+display ports, from a session with Screen Recording permission:
+
+```sh
+python3 scripts/smoke-capture-startup.py .build/release/mac-vnc-server-dev
+```
+
+This uses isolated loopback ports, receives real Zlib frames, and checks clean
+shutdown without posting input or saving desktop images.
 
 ### Screen updates work, but input lags
 
