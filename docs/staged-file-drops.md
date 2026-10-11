@@ -170,7 +170,47 @@ Useful server verbose lines:
 - `Apple staged transfer requested before mouse-up`: archive accepted and bytes requested.
 - `Apple file receive completed`: one item atomically published.
 - `Apple staged drag ready: ... continued=true/false elapsed_ms=...`: whether the
-  main-thread source started while the original gesture was still held.
+  main-thread source was armed while the original gesture was still held.
+- `Apple staged drag tracking: ... input=appkit`: local AppKit tracking started.
+- `Apple staged drag ended: ... operation=1`: AppKit completed a copy drop.
+  Operation `0` means cancellation or a target that did not accept the drop.
+
+### Mouse-release handoff
+
+The drag source receives movement, release, and cancellation directly through
+its owning AppKit application's event queue. It also keeps the shared input
+bridge's held-button state synchronized: CoreDrag observes this state and can
+finish a drag early if macOS thinks the button is already up. A source window
+created during a remote gesture cannot rely on ordinary HID events being routed
+back to it. Waiting for its `mouseDown` prevented the handoff from starting on
+the reported system; relying only on HID mouse-up could leave an accepting
+target without a drop.
+
+The RFB reader consumes the staged gesture's packets and sends a matching local
+AppKit event as well as updating the shared input bridge. It clears the gesture
+on release, so a late source-end callback cannot release a newer click. Cancel
+queues Escape to the source and releases its synthetic button. Finished files
+stay in the inbox. Completion cannot start a drag after an early release.
+
+The regression probe now exercises the actual server process and its newly
+created source window, using a separate receiving application. Its visible
+Begin/Release controls invoke Tahoe's native ScreenSharing sender over a plain
+loopback VNC URL; they avoid creating a second OS drag in the same desktop
+session as the server's drag. With a completed file and the button held, the
+receiver stayed orange for more than 20 seconds. Only after explicit release
+did it receive the matching file contents (`original_held=0`); the server
+reported operation `1`. A separate cancellation run reported `target exited`
+and server operation `0`, without `performDragOperation`.
+
+Build/run instructions are in `scripts/probe-staged-drag-release.m`. Use a
+separate server executable copy and an isolated transfer directory. The local
+AppKit-only probe used for the previous change missed the new-window routing
+failure and has been replaced. A physical cross-machine gesture from Screen
+Sharing 3.0 on macOS 13 into ChatGPT or Finder remains a separate verification.
+Unit tests cover the source event stream, one-time cancellation, held-button
+state, early release, and cleanup racing a newer click. The release build and
+all 187 tests passed. Native sender/receiver timestamps are saved in the
+[validation record](measurements/staged-drag-release-2026-10-11.json).
 
 Capture startup was subsequently tested with real ScreenCaptureKit frames. A
 Tahoe capture-service failure could discard a callback and suspend startup; the

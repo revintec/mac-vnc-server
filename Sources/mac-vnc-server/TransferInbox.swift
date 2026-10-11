@@ -7,7 +7,7 @@ final class TransferGesture: @unchecked Sendable {
     let batch: UUID
     private let lock = NSLock()
     private var held = true
-    private var started = false
+    private var sendDragEvent: (@Sendable (TransferDragEvent) -> Void)?
     private let input: InputController
     private var point: CGPoint
     private let ended: @Sendable () -> Void
@@ -16,40 +16,42 @@ final class TransferGesture: @unchecked Sendable {
         point = CGEvent(source: nil)?.location ?? .zero
     }
     func pointer(mask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) -> Bool {
-        let result = lock.withLock { () -> (Bool, Bool) in
-            guard held || started else { return (false, false) }
+        let released = lock.withLock { () -> Bool? in
+            guard held else { return nil }
             point = layout.globalPoint(framebufferX: Int(x), framebufferY: Int(y))
-            let released = held && mask & 1 == 0
-            if released { held = false }
-            // Movement while receiving must not click/drag the underlying app.
-            if !started { input.pointer(buttonMask: 0, x: x, y: y, layout: layout) }
-            return (!started, released)
+            // CoreDrag also observes WindowServer's held-button state. Keep it
+            // in sync while delivering the drag's events to its own AppKit source.
+            input.pointer(buttonMask: sendDragEvent == nil ? 0 : mask, x: x, y: y, layout: layout)
+            let released = mask & 1 == 0
+            sendDragEvent?(released ? .drop(point) : .move(point))
+            if released { held = false; sendDragEvent = nil }
+            return released
         }
-        if result.1 { ended() }
-        return result.0
+        if released == true { ended() }
+        return released != nil
     }
-    @MainActor func startIfHeld(_ start: (CGPoint, () -> Void) throws -> Void) rethrows -> Bool {
+    @MainActor func startIfHeld(_ start: (CGPoint, () -> Void) throws -> @Sendable (TransferDragEvent) -> Void) rethrows -> Bool {
         try lock.withLock {
-            guard held, !started else { return false }
-            started = true
+            guard held, sendDragEvent == nil else { return false }
             let layout = VirtualDisplayLayout(displays: [], origin: point, scale: 1, width: 1, height: 1)
-            do { try start(point) {
+            sendDragEvent = try start(point) {
                 input.pointer(buttonMask: 0, x: 0, y: 0, layout: layout)
                 input.pointer(buttonMask: 1, x: 0, y: 0, layout: layout)
-            } } catch { started = false; throw error }
+            }
             return true
         }
     }
     func cancel() {
         let notify = lock.withLock { () -> Bool in
-            let wasHeld = held
+            guard held else { return false }
             held = false
-            if started {
+            sendDragEvent?(.cancel)
+            if sendDragEvent != nil {
                 let layout = VirtualDisplayLayout(displays: [], origin: point, scale: 1, width: 1, height: 1)
                 input.pointer(buttonMask: 0, x: 0, y: 0, layout: layout)
-                started = false
             }
-            return wasHeld
+            sendDragEvent = nil
+            return true
         }
         if notify { ended() }
     }
@@ -165,14 +167,14 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
                 guard !urls.isEmpty else { continue }
                 let started = try gesture.startIfHeld { [self] point, press in
                     try store.retain(batch.id)
-                    startDrag(gesture: gesture, urls: urls, point: point, press: press)
+                    return startDrag(gesture: gesture, urls: urls, point: point, press: press)
                 }
                 logger.verbose("Apple staged drag ready: batch=\(batch.id) continued=\(started) elapsed_ms=\(Int(Date().timeIntervalSince(batch.created) * 1000))")
                 if !started { status.stringValue = "Transfer complete. Drag the completed row into an app." }
             }
         } catch { status.stringValue = error.localizedDescription }
     }
-    private func startDrag(gesture: TransferGesture, urls: [URL], point: CGPoint, press: () -> Void) {
+    private func startDrag(gesture: TransferGesture, urls: [URL], point: CGPoint, press: () -> Void) -> @Sendable (TransferDragEvent) -> Void {
         let screenHeight = NSScreen.screens.first?.frame.height ?? 0
         let location = NSPoint(x: point.x, y: screenHeight - point.y)
         let source = TransferDragSource(frame: NSRect(x: 0, y: 0, width: 40, height: 40))
@@ -181,7 +183,8 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         surface.isReleasedWhenClosed = false; surface.isOpaque = false; surface.backgroundColor = .clear
         surface.level = .popUpMenu; surface.contentView = source; surface.orderFrontRegardless()
         dragWindows[gesture.batch] = surface
-        source.finished = { [weak self] in
+        source.finished = { [weak self, logger] operation in
+            logger.verbose("Apple staged drag ended: batch=\(gesture.batch) operation=\(operation.rawValue)")
             DispatchQueue.main.async { [weak self] in
                 gesture.cancel()
                 self?.dragWindows.removeValue(forKey: gesture.batch)?.close()
@@ -189,7 +192,11 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         }
         press()
         source.start(urls: urls)
+        logger.verbose("Apple staged drag tracking: batch=\(gesture.batch) input=appkit")
         status.stringValue = "Files ready. Continue moving to the target, then release to drop."
+        return { [weak source] event in
+            DispatchQueue.main.async { source?.receive(event) }
+        }
     }
     func numberOfRows(in tableView: NSTableView) -> Int { batches.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -277,27 +284,4 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
             catch { status.stringValue = error.localizedDescription }
         }
     }
-}
-
-@MainActor
-private final class TransferDragSource: NSView, NSDraggingSource {
-    var finished: (() -> Void)?
-    func start(urls: [URL]) {
-        guard let window,
-              let event = NSEvent.mouseEvent(with: .leftMouseDragged, location: NSPoint(x: 20, y: 20), modifierFlags: [],
-                  timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                  context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { finished?(); return }
-        let items = urls.enumerated().map { index, url in
-            let item = NSDraggingItem(pasteboardWriter: url as NSURL)
-            item.setDraggingFrame(NSRect(x: 4 + index * 3, y: 4 + index * 3, width: 32, height: 32),
-                                  contents: NSWorkspace.shared.icon(forFile: url.path))
-            return item
-        }
-        beginDraggingSession(with: items, event: event, source: self).animatesToStartingPositionsOnCancelOrFail = false
-        // CoreDrag owns tracking now; this tiny source must not cover the target.
-        window.ignoresMouseEvents = true
-    }
-    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { finished?() }
-    func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
 }

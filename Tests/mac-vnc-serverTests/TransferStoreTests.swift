@@ -117,23 +117,56 @@ struct TransferStoreTests {
         let input = StagingTestInput()
         let released = TransferGesture(batch: UUID(), input: input, ended: {})
         #expect(released.pointer(mask: 0, x: 1, y: 2, layout: .empty))
-        #expect(!released.startIfHeld { _, press in press(); Issue.record("Late drag started") })
+        #expect(!released.startIfHeld { _, press in press(); Issue.record("Late drag started"); return { _ in } })
         let cancelled = TransferGesture(batch: UUID(), input: input, ended: {})
         cancelled.cancel()
-        #expect(!cancelled.startIfHeld { _, press in press(); Issue.record("Cancelled drag started") })
+        #expect(!cancelled.startIfHeld { _, press in press(); Issue.record("Cancelled drag started"); return { _ in } })
         #expect(!input.masks.contains(1))
         #expect(!released.pointer(mask: 1, x: 1, y: 2, layout: .empty), "Ordinary input must resume after the original up")
+        input.masks.removeAll()
         let held = TransferGesture(batch: UUID(), input: input, ended: {})
+        let events = DragTestEvents()
         #expect(held.pointer(mask: 1, x: 3, y: 4, layout: .empty))
-        #expect(input.masks.last == 0)
-        let didStart = held.startIfHeld { point, press in #expect(point == CGPoint(x: 3, y: 4)); press() }
+        let didStart = held.startIfHeld { point, press in
+            press()
+            #expect(point == CGPoint(x: 3, y: 4))
+            return { events.append($0) }
+        }
         #expect(didStart)
-        #expect(input.masks.last == 1)
-        #expect(!held.startIfHeld { _, _ in Issue.record("Drag started twice") })
-        #expect(!held.pointer(mask: 0, x: 4, y: 5, layout: .empty))
+        #expect(!held.startIfHeld { _, press in press(); Issue.record("Drag started twice"); return { _ in } })
+        #expect(held.pointer(mask: 1, x: 5, y: 6, layout: .empty))
+        #expect(held.pointer(mask: 0, x: 6, y: 7, layout: .empty))
         held.cancel()
-        #expect(input.masks.last == 0)
+        #expect(events.values == [.move(CGPoint(x: 5, y: 6)), .drop(CGPoint(x: 6, y: 7))])
+        #expect(input.masks == [0, 0, 1, 1, 0], "Staging suppresses input; an active drag owns one down/up pair")
     }
+
+    @Test @MainActor func dragReleaseAndLateCleanupDoNotReleaseANewerClick() {
+        let input = StagingTestInput()
+        let events = DragTestEvents()
+        let gesture = TransferGesture(batch: UUID(), input: input, ended: {})
+        #expect(gesture.startIfHeld { _, press in press(); return { events.append($0) } })
+        #expect(gesture.pointer(mask: 0, x: 4, y: 5, layout: .empty))
+        #expect(events.values == [.drop(CGPoint(x: 4, y: 5))])
+        input.pointer(buttonMask: 1, x: 6, y: 7, layout: .empty)
+        gesture.cancel()
+        #expect(input.masks == [0, 1, 0, 1])
+        #expect(!gesture.pointer(mask: 1, x: 6, y: 7, layout: .empty))
+        #expect(events.values.count == 1)
+    }
+
+    @Test @MainActor func cancellationEndsAppKitAndReleasesItsButtonOnce() {
+        let input = StagingTestInput()
+        let events = DragTestEvents()
+        let gesture = TransferGesture(batch: UUID(), input: input, ended: {})
+        #expect(gesture.startIfHeld { _, press in press(); return { events.append($0) } })
+        gesture.cancel()
+        gesture.cancel()
+        #expect(events.values == [.cancel])
+        #expect(input.masks == [0, 1, 0])
+        #expect(!gesture.startIfHeld { _, press in press(); Issue.record("Cancelled drag restarted"); return { _ in } })
+    }
+
 }
 
 private final class StagingTestInput: InputController {
@@ -200,7 +233,7 @@ extension FileTransferTests {
         try receiver.handle(start(11))
         try receiver.handle(.init(command: 102, sessionID: 11, payload: [0, 0, 0, 1, 0x41]))
         let gesture = try #require(state.gesture)
-        let started = await MainActor.run { gesture.startIfHeld { _, press in press() } }
+        let started = await MainActor.run { gesture.startIfHeld { _, press in press(); return { _ in } } }
         #expect(!started)
     }
 
@@ -256,7 +289,7 @@ extension FileTransferTests {
         #expect(urls.count == 1)
         #expect(try Data(contentsOf: #require(urls.first)) == data)
         let gesture = try #require(state.gesture)
-        let started = await MainActor.run { gesture.startIfHeld { _, press in press() } }
+        let started = await MainActor.run { gesture.startIfHeld { _, press in press(); return { _ in } } }
         #expect(started == !releaseEarly)
         #expect(state.pressed == !releaseEarly)
         receiver.stop()
@@ -283,4 +316,11 @@ private func waitForSignal(_ semaphore: DispatchSemaphore, seconds: Double) asyn
     await withCheckedContinuation { continuation in
         DispatchQueue.global().async { continuation.resume(returning: semaphore.wait(timeout: .now() + seconds) == .success) }
     }
+}
+
+private final class DragTestEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [TransferDragEvent] = []
+    var values: [TransferDragEvent] { lock.withLock { events } }
+    func append(_ event: TransferDragEvent) { lock.withLock { events.append(event) } }
 }

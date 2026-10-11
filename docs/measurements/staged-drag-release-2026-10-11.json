@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-11",
+  "platform": "macOS Tahoe / native ScreenSharing framework",
+  "url": "vnc://127.0.0.1:5906/",
+  "server_encryption": "--no-encryption",
+  "source": "separate test server process using production TransferPanel and TransferDragSource",
+  "client": "UI Begin/Release controls invoke native ScreenSharing sender; no second OS drag",
+  "release_log": [
+    "813409753.370 connected=1 control=1 files=1",
+    "813409770.935 driver enter",
+    "813409771.345 target entered",
+    "813409793.412 driver mouse released",
+    "813409793.412 driver conclude",
+    "813409793.710 target prepare",
+    "813409793.712 target perform urls=1 content_matches=1 original_held=0"
+  ],
+  "cancel_log": [
+    "813409812.218 connected=1 control=1 files=1",
+    "813409842.447 driver enter",
+    "813409843.197 target entered",
+    "813409867.773 driver mouse released",
+    "813409867.773 driver cancel",
+    "813409868.048 target exited"
+  ],
+  "expected_release": "No delivery while originalHeld; matching file contents after originalHeld=0; operation=1",
+  "expected_cancel": "target exited; no performDragOperation; operation=0",
+  "tests": "187 tests passed; release build passed",
+  "limitation": "Physical Screen Sharing 3.0/macOS 13 gesture into ChatGPT and Finder still needs cross-machine confirmation."
+}
