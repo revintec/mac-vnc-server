@@ -15,6 +15,13 @@ The default setup targets Apple Screen Sharing over the `utun4` interface:
 
 Use `--bind 127.0.0.1` for loopback, `--bind en0` for another interface, or an explicit IPv4 address. An unavailable interface is an error; the server never falls back to listening on all interfaces.
 
+The default `--session user` continues to serve your desktop when the physical
+monitor shows loginwindow. The opt-in [`--session console` backend](docs/console-session-backend.md)
+uses separate privileged workers on another port. Loginwindow capture, pointer
+movement, clicks, and keyboard entry have been verified on the tested Tahoe host.
+The backend remains experimental while live login/unlock transitions are being
+validated. The user backend remains the default.
+
 ## Requirements
 
 - macOS 13 or newer
@@ -525,8 +532,10 @@ cleared the failure; Screen Recording permission was already granted.
 The server now reports which capture operation failed instead of waiting
 forever. Display enumeration allows 60 seconds for permission handling; stream
 start/configuration allows 15 seconds, and stream stop allows 5 seconds.
-Discarded callbacks fail immediately. Ctrl-C and SIGTERM close the listeners
-and stop the capture streams before exiting. After rebuilding, restart older
+Discarded callbacks fail immediately. Ctrl-C and SIGTERM request listener and
+capture cleanup. Repeat the signal to force exit; a five-second deadline also
+forces exit if cleanup stalls. Console workers owned by that process are
+terminated on forced exit. After rebuilding, restart older
 instances that still use that executable. For simultaneous comparison servers,
 use separate executable copies: Tahoe's capture-service conflict can persist
 with concurrent instances of the same path even when streams stop cleanly.

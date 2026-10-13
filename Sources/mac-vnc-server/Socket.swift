@@ -406,7 +406,7 @@ final class ListeningSocket {
     let fd: Int32
     let bindAddress: String
 
-    init(bindAddress: String, port: UInt16) throws {
+    init(bindAddress: String, port: UInt16, startListening: Bool = true) throws {
         self.bindAddress = try BindAddress.resolve(bindAddress)
         fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -442,15 +442,19 @@ final class ListeningSocket {
             close(fd)
             throw RFBError.socketError("failed to configure listening socket")
         }
-        guard listen(fd, 8) == 0 else {
-            let message = String(cString: strerror(errno))
-            close(fd)
-            throw RFBError.socketError("listen failed: \(message)")
-        }
+        if startListening { try self.startListening() }
     }
 
     deinit {
         close(fd)
+    }
+
+    /// Console startup binds before launching workers, then listens only after
+    /// capture is ready. An already-running endpoint therefore fails promptly.
+    func startListening() throws {
+        guard listen(fd, 8) == 0 else {
+            throw RFBError.socketError("listen failed: \(String(cString: strerror(errno)))")
+        }
     }
 
     func acceptClient(timeout: TimeInterval) throws -> ClientSocket? {

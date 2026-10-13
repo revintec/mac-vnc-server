@@ -21,7 +21,10 @@ struct ServerConfig {
     var transferOptions = TransferStore.Options()
     var nativeFileDrops = false
     var insecureAllowNoAuth = false
+    var sessionTarget: SessionTarget = .user
 }
+
+enum SessionTarget: String { case user, console }
 
 enum DisplaySelection: Equatable {
     case automatic

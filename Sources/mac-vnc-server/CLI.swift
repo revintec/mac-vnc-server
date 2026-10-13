@@ -27,12 +27,24 @@ enum CLICommand {
     case update
     case version
     case transfers(TransferStore.Options)
+    case consoleWorker(ConsoleWorkerOptions, attached: Bool)
+    case consoleCaptureBroker(Int32)
+    case consoleCaptureService(Int32, Int32)
 
     func run(transferInbox: TransferInbox? = nil) async throws {
         switch self {
         case .run(let config):
             let resolvedConfig = try resolvePassword(in: config)
-            try await runServers(config: resolvedConfig, transferInbox: transferInbox)
+            if config.sessionTarget == .console {
+                try await ConsoleSessionServer.run(config: resolvedConfig)
+            } else {
+                try await runServers(config: resolvedConfig, transferInbox: transferInbox)
+            }
+        case .consoleWorker(let options, let attached):
+            guard attached else { throw CLIError.commandFailed("console worker requires exec after session setup") }
+            try await ConsoleWorker.run(options)
+        case .consoleCaptureBroker, .consoleCaptureService:
+            throw CLIError.commandFailed("console capture helpers must start before AppKit")
         case .service(let config, let arguments):
             try LaunchAgentService.install(arguments: arguments, requiresPasswordEnvironment: config.passwordFromEnvironment)
         case .serviceRestart:
@@ -158,6 +170,27 @@ enum CLI {
     }
 
     static func parse(arguments: [String]) throws -> CLICommand {
+        if arguments.first == "--console-capture-broker" {
+            guard arguments.count == 2, let audit = Int32(arguments[1]), audit > 0 else {
+                throw CLIError.invalidArgument("invalid console capture broker arguments")
+            }
+            return .consoleCaptureBroker(audit)
+        }
+        if arguments.first == "--console-capture-service" {
+            guard arguments.count == 3, let audit = Int32(arguments[1]), audit > 0,
+                  let manager = Int32(arguments[2]), manager > 1 else {
+                throw CLIError.invalidArgument("invalid console capture service arguments")
+            }
+            return .consoleCaptureService(audit, manager)
+        }
+        if arguments.first == "--console-worker" || arguments.first == "--console-worker-attached" {
+            guard arguments.count == 2, let data = arguments[1].data(using: .utf8) else {
+                throw CLIError.invalidArgument("invalid console worker arguments")
+            }
+            let options = try JSONDecoder().decode(ConsoleWorkerOptions.self, from: data)
+            try options.validate()
+            return .consoleWorker(options, attached: arguments.first == "--console-worker-attached")
+        }
         guard let subcommand = arguments.first else {
             return command(for: try parseRun(arguments))
         }
@@ -223,12 +256,21 @@ enum CLI {
         var transferOptions = TransferStore.Options()
         var nativeFileDrops = false
         var registerService = false
+        var sessionTarget = SessionTarget.user
+        var explicitClipboard = false
+        var explicitFileTransfer = false
         var serviceFlagIndices = Set<Int>()
         var index = 0
 
         while index < arguments.count {
             let arg = arguments[index]
             switch arg {
+            case "--session":
+                index += 1
+                guard index < arguments.count, let target = SessionTarget(rawValue: arguments[index]) else {
+                    throw CLIError.invalidArgument("--session must be user or console")
+                }
+                sessionTarget = target
             case "--port", "-p":
                 index += 1
                 guard index < arguments.count, let parsed = UInt16(arguments[index]) else {
@@ -316,8 +358,10 @@ enum CLI {
                 serviceFlagIndices.insert(index)
             case "--file-transfer":
                 fileTransfer = true
+                explicitFileTransfer = true
             case "--no-file-transfer":
                 fileTransfer = false
+                explicitFileTransfer = false
             case "--file-drop-mode":
                 index += 1
                 guard index < arguments.count, ["staged", "native"].contains(arguments[index]) else {
@@ -343,8 +387,10 @@ enum CLI {
                 allowEncryption = true
             case "--clipboard-sync":
                 clipboardSync = true
+                explicitClipboard = true
             case "--no-clipboard-sync":
                 clipboardSync = false
+                explicitClipboard = false
             case "--no-adaptive":
                 adaptiveStreaming = false
                 adaptiveFrameRate = false
@@ -354,6 +400,20 @@ enum CLI {
                 throw CLIError.invalidArgument("unknown run argument '\(arg)'")
             }
             index += 1
+        }
+
+        if sessionTarget == .console {
+            guard !registerService else {
+                throw CLIError.invalidArgument("--session console runs separately with sudo; --service installs only a user LaunchAgent")
+            }
+            guard passwordFromEnvironment else {
+                throw CLIError.invalidArgument("--session console requires VNC_PASSWORD authentication")
+            }
+            guard !explicitClipboard, !explicitFileTransfer else {
+                throw CLIError.invalidArgument("--session console supports display and input; use the user endpoint for clipboard and file transfer")
+            }
+            clipboardSync = false
+            fileTransfer = false
         }
 
         if !passwordFromEnvironment, password == nil, !insecureAllowNoAuth {
@@ -384,7 +444,7 @@ enum CLI {
             allowEncryption: allowEncryption,
             zlibConfiguration: zlibConfiguration,
             transferOptions: transferOptions, nativeFileDrops: nativeFileDrops,
-            insecureAllowNoAuth: insecureAllowNoAuth
+            insecureAllowNoAuth: insecureAllowNoAuth, sessionTarget: sessionTarget
         )
         return ParsedRun(
             config: config,
@@ -409,6 +469,7 @@ enum CLI {
 
     Usage:
       mac-vnc-server run [--service] [--bind ADDRESS|INTERFACE] [--port 5900]
+                          [--session user|console]
                           [--fps auto|1...120] [--scale 1.0] [--encoding auto|zrle|zlib|raw]
                           [--display all|number] [--verbose] [--no-clipboard-sync] [--no-file-transfer] [--no-adaptive]
                           [--cursor auto|embedded] [--encryption|--no-encryption]
@@ -423,6 +484,10 @@ enum CLI {
 
     Default bind target is utun4 and default port is 5900. Interface names resolve to their first active IPv4 address at startup; an unavailable interface is an error. Use --bind 127.0.0.1 for loopback.
     Authenticated runs require VNC_PASSWORD in the environment. Passwords are never generated, printed, or stored by the server.
+    Session defaults to user, including access to that desktop while off console.
+    --session console follows the physical monitor/loginwindow using isolated workers; start it with sudo from a GUI terminal on a separate port.
+    Console mode uses one port (--display selects its displays), embedded cursor, and no clipboard or file transfer. The user endpoint keeps those features.
+    Console mode does not install a boot service and requires VNC_PASSWORD; use sudo --preserve-env=VNC_PASSWORD to pass it.
     Without --display, port 5900 serves all displays and 5901, 5902, ... serve each display.
     Use --display all to keep only the single combined-display server, or --display 1 for one display.
     Use --verbose to enable periodic framebuffer update logs.
@@ -490,7 +555,7 @@ private extension ServerConfig {
             allowEncryption: allowEncryption,
             zlibConfiguration: zlibConfiguration,
             transferOptions: transferOptions, nativeFileDrops: nativeFileDrops,
-            insecureAllowNoAuth: insecureAllowNoAuth
+            insecureAllowNoAuth: insecureAllowNoAuth, sessionTarget: sessionTarget
         )
     }
 
@@ -513,7 +578,7 @@ private extension ServerConfig {
             allowEncryption: allowEncryption,
             zlibConfiguration: zlibConfiguration,
             transferOptions: transferOptions, nativeFileDrops: nativeFileDrops,
-            insecureAllowNoAuth: insecureAllowNoAuth
+            insecureAllowNoAuth: insecureAllowNoAuth, sessionTarget: sessionTarget
         )
     }
 }

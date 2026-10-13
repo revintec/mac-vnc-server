@@ -15,6 +15,10 @@ let package = Package(
         )
     ],
     targets: [
+        .target(name: "CVNCSession", publicHeadersPath: "include",
+                linkerSettings: [.linkedFramework("CoreGraphics"), .linkedFramework("Foundation"),
+                                 .linkedFramework("IOSurface"), .linkedFramework("IOKit"),
+                                 .linkedFramework("Carbon")]),
         .target(
             name: "CVNCZlib",
             exclude: ["vendor/LICENSE.md", "README.md"],
@@ -29,7 +33,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "mac-vnc-server",
-            dependencies: ["CVNCZlib"],
+            dependencies: ["CVNCZlib", "CVNCSession"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Accelerate"),

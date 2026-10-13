@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import signal
 import socket
 import struct
 import subprocess
@@ -79,7 +80,7 @@ def collect_output(fd, chunks):
         chunks.append(block)
 
 
-def check(binary, name, extra):
+def check(binary, name, extra, stop_signal=signal.SIGTERM):
     # Reserve enough consecutive ports for ordinary multi-monitor setups.
     for _ in range(100):
         reserved = []
@@ -141,7 +142,7 @@ def check(binary, name, extra):
             log = b"".join(chunks).decode(errors="replace")
             raise RuntimeError(f"{name}: {error}\n{log}") from error
         finally:
-            process.terminate()
+            process.send_signal(stop_signal)
             try:
                 process.wait(timeout=20)
             except subprocess.TimeoutExpired:
@@ -157,6 +158,7 @@ def check(binary, name, extra):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", nargs="?", default=".build/release/mac-vnc-server-dev")
+    parser.add_argument("--interrupt", action="store_true", help="Stop each test server with SIGINT (Ctrl-C)")
     options = parser.parse_args()
     for name, extra in [
         ("staged-automatic", ["--file-transfer"]),
@@ -164,4 +166,5 @@ if __name__ == "__main__":
         ("staged-single-display", ["--file-transfer", "--display", "all"]),
         ("capture-only", ["--display", "all"]),
     ]:
-        print(json.dumps(check(Path(options.binary).resolve(), name, extra)), flush=True)
+        print(json.dumps(check(Path(options.binary).resolve(), name, extra,
+            signal.SIGINT if options.interrupt else signal.SIGTERM)), flush=True)
