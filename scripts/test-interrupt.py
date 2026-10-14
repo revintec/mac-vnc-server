@@ -22,6 +22,7 @@ import Foundation
         setvbuf(stdout, nil, _IOLBF, 0)
         let shutdown = ProcessShutdown.shared
         shutdown.installSignalHandlers()
+        shutdown.installSignalHandlers([SIGHUP])
         let mode = CommandLine.arguments[1]
         if mode.hasSuffix("stalled") {
             let child = Process()
@@ -121,6 +122,7 @@ def main():
                         str(fixture), "-o", str(binary)], check=True)
         check(binary, "graceful", [signal.SIGINT], 0, 2)
         check(binary, "graceful", [signal.SIGTERM], 0, 2)
+        check(binary, "graceful", [signal.SIGHUP], 0, 2)
         check(binary, "startup", [signal.SIGINT], 130, 2)
         check(binary, "stalled", [signal.SIGINT], 130, 7)
         check(binary, "stalled", [signal.SIGINT, signal.SIGINT], 130, 2)

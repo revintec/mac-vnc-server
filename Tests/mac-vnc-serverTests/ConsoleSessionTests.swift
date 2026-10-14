@@ -45,7 +45,7 @@ struct ConsoleSessionTests {
                 .resolvingPassword(environment: ["VNC_PASSWORD": "testpass"]) else {
             Issue.record("expected server commands"); return
         }
-        #expect(user.sessionTarget == .user && user.clipboardSync && user.fileTransfer)
+        #expect(user.sessionTarget == .listener && user.clipboardSync && user.fileTransfer)
         #expect(console.sessionTarget == .console && !console.clipboardSync && !console.fileTransfer)
         #expect(console.port == 5902 && !console.allowEncryption)
         #expect(resolved.sessionTarget == .console && resolved.password == "testpass")
@@ -54,10 +54,11 @@ struct ConsoleSessionTests {
         #expect(throws: (any Error).self) { try CLI.parse(arguments: ["--session", "console", "--file-transfer"]) }
         #expect(throws: (any Error).self) { try CLI.parse(arguments: ["--session", "console", "--no-password", "--insecure-allow-no-auth"]) }
         #expect(throws: (any Error).self) { try CLI.parse(arguments: ["--session", "other"]) }
+        #expect(throws: (any Error).self) { try CLI.parse(arguments: ["--console-capture-broker", "123"]) }
         guard case .service(let service, _) = try CLI.parse(arguments: ["--service"]) else {
             Issue.record("expected existing user service"); return
         }
-        #expect(service.sessionTarget == .user && service.fileTransfer && service.clipboardSync)
+        #expect(service.sessionTarget == .listener && service.fileTransfer && service.clipboardSync)
     }
 
     @Test func anonymousTransportPreservesFrameBytesAndGeometry() throws {

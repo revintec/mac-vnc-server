@@ -1,6 +1,6 @@
 # Console-session backend
 
-Status, 2026-10-13: experimental. **Loginwindow capture, pointer movement, clicks,
+Status, 2026-10-14: experimental. **Loginwindow capture, pointer movement, clicks,
 and keyboard input are verified on the Tahoe test host.** Capture includes a full
 1728×1118 frame decoded by an authenticated VNC client. A production-worker test
 opened and dismissed the input-source menu, then entered and erased a test
@@ -30,10 +30,11 @@ Rebuilding a binary does not replace an existing process or change which backend
 it serves. Startup logs include the supervisor PID, capture backend, and worker
 UID/audit ID.
 
-Ctrl-C and SIGTERM request cleanup. Another signal forces exit immediately, and
-a five-second watchdog forces exit if cleanup stalls. Signal handling is installed
-before startup and runs outside MainActor. Only owned worker processes are killed;
-the separate capture-service manager remains alive briefly to remove its job.
+Ctrl-C, SIGTERM, and (in console mode) SIGHUP request cleanup. Repeating a signal
+forces exit immediately, and a five-second watchdog forces exit if cleanup stalls.
+Signal handling runs outside MainActor. Only owned worker processes are killed.
+The main process makes a bounded attempt to remove its capture-service job; an
+interrupted or failed cleanup is retried on a later startup.
 
 Without `--session console`, the current user backend is unchanged. Console mode
 creates one listener: `--display all` automatically selects a console display,
@@ -131,35 +132,44 @@ Post Event/Accessibility authorization.
 
 ## Temporary root capture service
 
-Only a UID 0 loginwindow worker requires the auxiliary service. Its cleanup manager
-creates `/private/var/run/mac-vnc-console.XXXXXX/` with root-only permissions. The
-single `capture.plist` inside is mode 0600 and contains the executable path, audit
-ID, manager PID, unique job label, and Mach service names. It contains no credentials
-or captured pixels. No permanent LaunchDaemon or user-home configuration is installed.
+At loginwindow the endpoint uses three persistent processes: the root supervisor,
+the root capture/input worker, and Apple's root `replayd` service. The supervisor
+manages capture-service lifetime in process; there is no separate manager process
+or manager lifeline socket. `launchctl` commands are short-lived. For a logged-in
+console session, only the supervisor and user worker are needed alongside the
+user's existing macOS capture service.
 
-The manager bootstraps its uniquely named job in `user/0`. An exclusive lock rejects
-competing managers. While holding it, startup recovers this server's orphaned jobs,
-then a Mach-service lookup rejects any remaining root capture service before
-registration. The zero-byte root-owned mode-0600 lock file,
+Only a UID 0 loginwindow worker requires the auxiliary service. The supervisor
+creates `/private/var/run/mac-vnc-console.XXXXXX/` with root-only permissions. Its
+mode-0600 `capture.plist` contains the executable path, audit ID, supervisor PID,
+unique job label, and Mach service names. It contains no credentials or captured
+pixels. No permanent LaunchDaemon or user-home configuration is installed.
+
+The supervisor holds an exclusive lock, recovers its abandoned jobs, then checks
+for an existing root capture service. The per-user bootstrap lookup explicitly
+queries user 0 without changing the supervisor's bootstrap or graphics session.
+A live owner or unrelated service prevents registration. Short-lived launchctl
+commands inherit neither VNC_PASSWORD nor the supervisor's open sockets/lock.
+The zero-byte root-owned mode-0600 lock file,
 `/private/var/run/mac-vnc-console-capture.lock`, stays until reboot; keeping the
-same inode prevents simultaneous opens from taking different locks. It contains
-no state or credentials. The manager owns an anonymous
-socket lifeline to the supervisor. Supervisor exit, socket closure, a console
-identity change, or SIGINT/SIGTERM/SIGHUP makes it boot out only its own job and remove its directory. The
-lifeline is close-on-exec so launchctl cannot accidentally keep it alive. Each
-launchctl operation has a four-second deadline. Cleanup retries once on failure;
-if both attempts fail, the manager reports the exact job and retains its plist for
-administrator cleanup rather than silently discarding that information.
+same inode prevents simultaneous opens from taking different locks.
 
-SIGKILL cannot run the manager's cleanup. The supervisor checks manager liveness
-alongside worker health, invalidates the old desktop if the manager exits, and
-starts a replacement. A replacement manager or a later server start recovers the
-leftover job only after verifying its root-owned mode-0700 directory, mode-0600
-regular plist, exact generated label and job fields, and a manager PID that no
-longer exists. Symlinks, malformed metadata, live/reused PIDs, and unrelated jobs
-are left alone. Recovery removes only the verified unique job and its metadata.
-If bootout fails twice, startup reports the target and retains its plist for
-another attempt or administrator cleanup. No blanket replayd termination is used.
+Normal worker teardown, session changes, startup errors, and graceful shutdown
+attempt to boot out the uniquely named job and remove its metadata. Each launchctl
+operation has a four-second deadline, with one cleanup retry. The overall shutdown
+watchdog can end the process sooner. SIGKILL cannot run cleanup. In either case,
+the retained plist lets the next startup retry removal before registering a new
+service. This startup cleanup also runs when an ordinary user owns the console
+and no new root capture service is needed.
+
+Recovery verifies the root-owned mode-0700 directory, mode-0600 regular plist,
+exact generated label and job fields, and an owner PID that no longer exists.
+It can also retry cleanup left by this same supervisor after reacquiring the lock.
+The plist format remains compatible with the older standalone manager. Symlinks,
+malformed metadata, other live/reused PIDs, and unrelated jobs are left alone.
+Recovery removes only the verified unique job and its metadata. If bootout fails
+twice, startup reports the target and retains the plist for another attempt or
+administrator cleanup. No blanket replayd termination is used.
 
 ## Validation and remaining limits
 
@@ -183,9 +193,10 @@ Useful opt-in checks:
   loopback user-session startups, complete decoded frames, and SIGINT cleanup.
 - `sudo python3 scripts/test-console-root.py BINARY` requires loginwindow to be
   the physical console. It authenticates disposable loopback endpoints with a fixed
-  test-only environment credential, decodes full frames, and checks SIGINT and
-  supervisor SIGKILL cleanup, manager SIGKILL/SIGHUP recovery, and preservation of
-  live or unverified metadata and unrelated root services. It does not send input
+  test-only environment credential, decodes full frames, verifies the three-process
+  structure, and checks SIGINT/SIGTERM/SIGHUP cleanup, next-startup recovery after
+  supervisor SIGKILL, and preservation of live or unverified metadata and unrelated
+  root services. It does not send input
   or save screenshot data.
 - `scripts/probe-console-capture.m` compares display-stream and native snapshot
   availability in a verified session. It does not save pixels or send input.

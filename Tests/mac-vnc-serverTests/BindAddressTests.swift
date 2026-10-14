@@ -65,7 +65,7 @@ struct BindAddressTests {
             try CLI.parse(arguments: ["--bind", "127.invalid", "--no-password"])
         }
         guard case .run(let config) = try CLI.parse(arguments: [
-            "--bind", "192.0.2.1", "--no-password", "--insecure-allow-no-auth"
+            "--session", "user", "--bind", "192.0.2.1", "--no-password", "--insecure-allow-no-auth"
         ]) else { Issue.record("expected run command"); return }
         #expect(config.insecureAllowNoAuth)
     }

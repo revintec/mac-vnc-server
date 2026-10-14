@@ -16,7 +16,7 @@ this change. The existing server encryption policy is unchanged.
 3. If you release first, leave the remote view, cancel, disconnect, or switch to
    Observe, completion cannot start a new drag. Finished copies remain in the
    panel. Drag their completed row into the target app in a second gesture.
-4. The **VNC Files** menu-bar item reopens the panel. Select a row for Reveal in
+4. Choose **Received Files…** from the remote-VNC menu-bar icon to reopen the panel. Select a row for Reveal in
    Finder, Save a Copy, or Remove. Multiple completed rows can be dragged
    together. If a batch partly fails, explicitly enable “Use completed items
    from a failed transfer” to use its successful items after reception ends.

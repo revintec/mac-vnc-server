@@ -4,7 +4,7 @@ import Foundation
 /// Persistent copies belong to the server user, not to an RFB connection. A
 /// process holds each receiving batch's lease until all native writers stop.
 final class TransferStore: @unchecked Sendable {
-    struct Options: Sendable {
+    struct Options: Codable, Sendable {
         var root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/mac-vnc-server/Transfers", isDirectory: true)
         var maximumBytes: Int64 = 10 * 1_024 * 1_024 * 1_024

@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-final class ClientSocket {
+final class ClientSocket: @unchecked Sendable {
     let fd: Int32
     // Accessed only by the session reader, independently of the writer's timeout.
     private var readDeadline: (time: DispatchTime, operation: String)?
@@ -41,7 +41,8 @@ final class ClientSocket {
         self.fd = fd
 
         let flags = fcntl(fd, F_GETFL, 0)
-        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+        guard flags >= 0, fcntl(fd, F_SETFD, FD_CLOEXEC) == 0,
+              fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
             close(fd)
             throw RFBError.socketError("failed to configure client socket")
         }
@@ -411,6 +412,11 @@ final class ListeningSocket {
         fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw RFBError.socketError(String(cString: strerror(errno)))
+        }
+
+        guard fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 else {
+            close(fd)
+            throw RFBError.socketError("failed to protect listener descriptor")
         }
 
         var reuse: Int32 = 1

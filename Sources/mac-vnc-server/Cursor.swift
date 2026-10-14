@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-enum CursorMode: String {
+enum CursorMode: String, Codable, Sendable {
     case auto
     case embedded
 }

@@ -8,18 +8,14 @@ struct MacVNCServerApp {
     @MainActor static func main() {
         signal(SIGPIPE, SIG_IGN)
         let arguments = Array(CommandLine.arguments.dropFirst())
-        if ["--console-capture-broker", "--console-capture-service"].contains(arguments.first ?? "") {
-            // The broker owns synchronous launchd cleanup and signal handling.
-            // The service stage prepares credentials, then execs Apple's daemon.
-            // Both must run before AppKit or our normal shutdown controller.
+        if arguments.first == "--console-capture-service" {
+            // Prepare credentials, then exec Apple's daemon before AppKit or
+            // the normal shutdown controller initializes.
             do {
                 let result: Int32
                 switch try CLI.parse(arguments: arguments) {
-                case .consoleCaptureBroker(let audit):
-                    let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
-                    result = VNCConsoleRunCaptureBroker(VNCConsoleIdentity(uid: 0, audit_id: audit), executable)
-                case .consoleCaptureService(let audit, let manager):
-                    result = VNCConsoleExecCaptureService(VNCConsoleIdentity(uid: 0, audit_id: audit), manager)
+                case .consoleCaptureService(let audit, let owner):
+                    result = VNCConsoleExecCaptureService(VNCConsoleIdentity(uid: 0, audit_id: audit), owner)
                 default: throw CLIError.invalidArgument("invalid console capture helper")
                 }
                 if result != 0 { fputs("Console capture helper failed: \(String(cString: strerror(result))) (\(result))\n", stderr) }
@@ -40,27 +36,49 @@ struct MacVNCServerApp {
                 if attached { try options.verifyAttachment() }
                 else { try options.attachAndExec() }
             }
+            if case .sessionWorker(let options, let attached) = command {
+                setvbuf(stdout, nil, _IOLBF, 0)
+                if attached { try options.verifyAttachment() }
+                else { try options.attachAndExec() }
+                shutdown.installSignalHandlers([SIGHUP])
+            }
             var panel: TransferPanel?
             var inbox: TransferInbox?
             let storageOptions: TransferStore.Options?
             var verbose = false
+            var showsStatus = false
             let panelOnly: Bool
             switch command {
             case .run(let config):
                 verbose = config.verbose
-                if config.sessionTarget == .console { setvbuf(stdout, nil, _IOLBF, 0) }
+                showsStatus = config.sessionTarget == .user
+                if config.sessionTarget == .console || config.sessionTarget == .listener {
+                    setvbuf(stdout, nil, _IOLBF, 0)
+                    shutdown.installSignalHandlers([SIGHUP])
+                }
                 storageOptions = config.sessionTarget == .user && config.fileTransfer && !config.nativeFileDrops ? config.transferOptions : nil
                 panelOnly = false
-            case .transfers(let options): storageOptions = options; panelOnly = true
+            case .sessionWorker(let options, _):
+                verbose = options.config.verbose
+                showsStatus = options.identity.uid != 0
+                var storage = options.config.transferOptions
+                if !options.config.transferDirectoryIsExplicit { storage.root = TransferStore.Options().root }
+                storageOptions = showsStatus && options.config.fileTransfer && !options.config.nativeFileDrops ? storage : nil
+                panelOnly = false
+            case .transfers(let options): storageOptions = options; panelOnly = true; showsStatus = true
             default: storageOptions = nil; panelOnly = false
             }
-            if let storageOptions {
+            if showsStatus {
                 _ = NSApplication.shared
                 NSApp.setActivationPolicy(.accessory)
+            }
+            if let storageOptions {
                 let store = try TransferStore(options: storageOptions)
                 panel = TransferPanel(store: store, logger: ServerLogger(verbose: verbose))
                 inbox = panel?.makeInbox()
             }
+            let remoteStatus = showsStatus ? RemoteSessionStatus(showFiles: panel.map { panel in { panel.show() } },
+                                                               logger: ServerLogger(verbose: verbose)) : nil
             let transferInbox = inbox
             // Keep the AppKit loop alive while cancellation closes listeners and
             // stops capture. Exiting first can leave replayd state for this path.
@@ -74,9 +92,9 @@ struct MacVNCServerApp {
             }
             if let runner { shutdown.attach(runner) }
             withExtendedLifetime(shutdown) {
-                if let panel {
-                    if panelOnly { panel.show() }
-                    withExtendedLifetime(panel) { NSApp.run() }
+                if showsStatus {
+                    if panelOnly { panel?.show() }
+                    withExtendedLifetime((panel, remoteStatus)) { NSApp.run() }
                 } else { dispatchMain() }
             }
         } catch CLIError.helpRequested(let text) {

@@ -4,8 +4,8 @@ import Foundation
 
 /// Apple security type 30 establishes the wrapping key required by encoding
 /// 1103. Classic VNC authentication does not initialize that key in the viewer.
-/// The username is a display label; access uses this server's shared password,
-/// never a macOS account password or a system login.
+/// Account listeners verify both credential fields with OpenDirectory. The
+/// older explicit user/console endpoints retain their shared-password profile.
 enum AppleAuth {
     // RFC 3526 group 14 (2048-bit safe prime, generator 2).
     static let prime: [UInt8] = {
@@ -89,6 +89,21 @@ enum AppleAuth {
             }
             guard difference == 0 else { throw RFBError.authenticationFailed }
             return key
+        }
+
+        func authenticateAccount<T>(credentials: [UInt8], peerKey: [UInt8],
+                                    verify: (String, String) throws -> T) throws -> (T, [UInt8]) {
+            let key = try wrappingKey(peerKey: peerKey)
+            guard credentials.count == 128 else { throw RFBError.authenticationFailed }
+            var clear = try AppleEncryption.ecb(credentials, key: key, encrypt: false)
+            defer { clear.withUnsafeMutableBytes { _ = memset_s($0.baseAddress!, $0.count, 0, $0.count) } }
+            guard let nameEnd = clear[..<64].firstIndex(of: 0), nameEnd > 0,
+                  let passwordEnd = clear[64...].firstIndex(of: 0), passwordEnd > 64,
+                  let name = String(bytes: clear[..<nameEnd], encoding: .utf8),
+                  let password = String(bytes: clear[64..<passwordEnd], encoding: .utf8) else {
+                throw RFBError.authenticationFailed
+            }
+            return (try verify(name, password), key)
         }
     }
 

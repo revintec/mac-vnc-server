@@ -5,8 +5,8 @@
 The default setup targets Apple Screen Sharing over the `utun4` interface:
 
 - bind target: `utun4` (its first active IPv4 address at startup)
-- base port: `5900`
-- password: required through the `VNC_PASSWORD` environment variable
+- listening port: `5900`
+- authentication: macOS account username and password; `VNC_PASSWORD` is ignored
 - FPS target: adaptive `60 -> 45 -> 30`
 - scale: `1.0`
 - encoding: `auto`
@@ -15,12 +15,34 @@ The default setup targets Apple Screen Sharing over the `utun4` interface:
 
 Use `--bind 127.0.0.1` for loopback, `--bind en0` for another interface, or an explicit IPv4 address. An unavailable interface is an error; the server never falls back to listening on all interfaces.
 
-The default `--session user` continues to serve your desktop when the physical
-monitor shows loginwindow. The opt-in [`--session console` backend](docs/console-session-backend.md)
-uses separate privileged workers on another port. Loginwindow capture, pointer
-movement, clicks, and keyboard entry have been verified on the tested Tahoe host.
-The backend remains experimental while live login/unlock transitions are being
-validated. The user backend remains the default.
+The default account listener routes each authenticated client to an existing macOS
+GUI session. Start it as root to serve multiple accounts or loginwindow; a
+non-root listener serves only its own account. One worker per UID/audit session
+owns capture and every connected client socket. Encoded frames, input, clipboard,
+and file transfers flow directly between that worker and its clients, without a
+listener relay. User sessions retain their capture, zlib-ng, RichCursor, clipboard,
+and file-transfer features while off console.
+
+Startup checks listener privileges before binding. Non-root startup warns about
+the own-account restriction; root startup reports broader account access.
+
+The VNC menu-bar icon includes **Switch to Login Window**, which uses Fast User
+Switching to hide this desktop on the physical console while keeping its VNC
+session and apps running. It is available while this user owns the console.
+
+Use the actual `root` account password to select the current console owner:
+loginwindow when it owns the console, or the logged-in user's desktop otherwise.
+The root account must be enabled and the listener must already run as root.
+A user desktop reuses that user's worker, including its clipboard, file transfer,
+and input coordination. Account authentication does not create a new GUI session
+or elevate a non-root listener. Each connection stays on the session selected at
+login; reconnect as root to select a new console owner after a user switch.
+See [account routing and process lifetimes](docs/account-session-listener.md).
+
+Explicit `--session user` and [`--session console`](docs/console-session-backend.md)
+retain the older shared-password endpoints for compatibility. The native
+loginwindow capture implementation remains experimental on macOS versions other
+than the tested Tahoe host.
 
 ## Requirements
 
@@ -34,6 +56,7 @@ The package links macOS-native frameworks:
 - `ScreenCaptureKit` for screen capture
 - `CoreGraphics` / `ApplicationServices` for input injection and permissions
 - `AppKit` for clipboard integration
+- `OpenDirectory` for macOS account authentication and account-policy checks
 - `zlib` for compressed framebuffer encodings
 
 ## Build
@@ -112,12 +135,20 @@ If ScreenCaptureKit reports no displays after the Mac turns the screen off, wake
 
 ## Run
 
-Set `VNC_PASSWORD` in the launching environment, then run:
+Start an account listener for your own user:
 
 ```sh
-export VNC_PASSWORD='<your-password>'
 ./.build/release/mac-vnc-server-dev
 ```
+
+Or start a root listener for account routing and loginwindow access:
+
+```sh
+sudo ./.build/release/mac-vnc-server-dev --bind utun4 --port 5900
+```
+
+No password is supplied in the command or environment. Enter the selected macOS
+account's username and password in Screen Sharing.
 
 Equivalent explicit command:
 
@@ -125,7 +156,7 @@ Equivalent explicit command:
 ./.build/release/mac-vnc-server-dev run --bind utun4 --port 5900 --fps auto --scale 1 --encoding auto --no-encryption --clipboard-sync --file-transfer
 ```
 
-Set the user launchd environment as described under Password and storage, then register the server as a per-user macOS service:
+Register an account listener as a per-user macOS service (no password environment needed):
 
 ```sh
 ./.build/release/mac-vnc-server-dev --service
@@ -162,14 +193,9 @@ launchctl bootout "gui/$(id -u)/com.pablozaiden.mac-vnc-server"
 rm ~/Library/LaunchAgents/com.pablozaiden.mac-vnc-server.plist
 ```
 
-By default, the server exposes both the combined desktop and each display individually:
-
-```text
-5900  all displays, composed as one virtual framebuffer
-5901  display 1
-5902  display 2
-...   one additional port per display
-```
+The account listener opens exactly one port. By default each session worker serves
+all displays in its own session. Use `--display 1` to select that session's first
+display instead.
 
 For loopback testing, start the server with `--bind 127.0.0.1`, then connect with Apple Screen Sharing:
 
@@ -177,24 +203,13 @@ For loopback testing, start the server with `--bind 127.0.0.1`, then connect wit
 open 'vnc://127.0.0.1:5900'
 ```
 
-Authenticate with the password supplied through `VNC_PASSWORD`.
+Authenticate with the selected macOS account username and password.
 
 The advertised desktop name is the server's short system hostname (as shown by
 `hostname -s`), for example `oker-vm` from `oker-vm.ip`. The server reads this
 directly without resolving the Bonjour or reverse-DNS name. Screen Sharing uses
 it in its window title; standard VNC viewers receive the same name. Reconnect
 after a hostname change to receive it.
-
-For unattended local testing, fill the native Screen Sharing password dialog with AppleScript:
-
-```sh
-open 'vnc://127.0.0.1:5900'
-sleep 2
-osascript -e 'tell application "System Events" to keystroke "XXXXXXXX"' \
-          -e 'tell application "System Events" to key code 36'
-```
-
-Do not store test credentials in Keychain unless you explicitly want that behavior.
 
 ## Run on LAN
 
@@ -213,7 +228,7 @@ Or bind a specific LAN IP:
 The server refuses unauthenticated non-loopback binds by default. To disable auth for clients that support unauthenticated VNC, you must opt in explicitly:
 
 ```sh
-./.build/release/mac-vnc-server-dev --bind 0.0.0.0 --no-password --insecure-allow-no-auth
+./.build/release/mac-vnc-server-dev --session user --bind 0.0.0.0 --no-password --insecure-allow-no-auth
 ```
 
 Classic VNC password auth is weak and limited by the protocol. For untrusted networks, prefer an SSH tunnel:
@@ -243,20 +258,21 @@ Options:
 | Option | Default | Description |
 | --- | --- | --- |
 | `--bind <ipv4 or interface>` | `utun4` | Listen on an IPv4 address or the first active IPv4 address of an interface such as `utun4`, `en0`, or `lo0`. Resolved at startup; restart after an address change. |
-| `--port <port>` / `-p <port>` | `5900` | TCP port, or base port when `--display` is omitted. |
-| `VNC_PASSWORD` (environment) | required | Password for authenticated runs; never generated, printed, or written to disk. |
-| `--no-password` | off | Use unauthenticated VNC. Apple Screen Sharing does not accept this path. |
+| `--port <port>` / `-p <port>` | `5900` | The account listener TCP port. |
+| `--session listener\|user\|console` | `listener` | Account routing, or explicit legacy shared-password user/console endpoints. |
+| `VNC_PASSWORD` (environment) | ignored | Used only by explicit legacy `--session user` / `--session console`. |
+| `--no-password` | off | Legacy `--session user` only; never bypasses account listener authentication. |
 | `--insecure-allow-no-auth` | off | Required with `--no-password` on non-loopback binds. |
 | `--fps <auto\|1...120>` | `auto` | Adaptive `60 -> 45 -> 30` target, or a fixed framebuffer update rate when an explicit number is provided. |
 | `--scale <value>` | `1.0` | Base virtual framebuffer scale. Adaptive sessions may temporarily use `0.75` or `0.67` for compatible generic clients that advertise DesktopSize when encoding or network pressure persists. Apple Screen Sharing uses its own display/scaling negotiation and is excluded from these automatic scale changes. |
 | `--encoding <auto\|zrle\|zlib\|raw>` | `auto` | Framebuffer encoding preference. |
-| `--display <all\|number>` | automatic | Display mode. Omit it to serve all displays on the base port and each display on consecutive ports. Use `all` for only the combined desktop, or a 1-based display number for only that display. |
+| `--display <all\|number>` | `all` | All displays in the selected account session, or one 1-based display index. |
 | `--service` | off | Install and start a per-user macOS LaunchAgent in the logged-in Aqua UI session. |
 | `--service-restart` | — | Restart the registered per-user macOS LaunchAgent. |
 | `--verbose` | off | Enable periodic framebuffer-update logs on stdout. |
 | `--clipboard-sync` | on | Share text and images (PNG, TIFF, JPEG, GIF, BMP, WebP, HEIC/HEIF, AVIF, JPEG 2000) with Apple Screen Sharing; text with classic VNC. |
 | `--cursor auto\|embedded` | `auto` | Send system cursor shapes to RichCursor viewers for local pointer motion. Fall back to embedded rendering when unavailable, for other viewers, and in Apple Observe mode. |
-| `--no-encryption` | on | Require plaintext session traffic while retaining password authentication. With `--file-transfer`, experimentally suppress the native viewer's encryption key exchange on a plain URL. Encrypted traffic is refused. |
+| `--no-encryption` | on | Disable session-record encryption for framebuffer, clipboard and files. Type-30 account logins still decode Apple's AES-wrapped keyboard/mouse events using the authentication key. With `--file-transfer`, suppress the native viewer's record-key exchange on a plain URL. |
 | `--file-transfer` | on | Enable Apple file/folder drag and drop with persistent incoming staging and Apple authentication/encryption negotiation. |
 | `--encryption` | off | Negotiate Apple encryption when file transfer is enabled. |
 | `--no-clipboard-sync` | off | Disable clipboard sharing. |
@@ -269,30 +285,23 @@ Options:
 
 ### Password and storage
 
-Authenticated runs read a nonempty `VNC_PASSWORD` from their environment. A
-missing or empty variable is an error. `--password` has been removed. The
-server never generates a password, prints it, or saves it. `--no-password`
-remains an explicit opt-out for clients supporting unauthenticated VNC, with
-`--insecure-allow-no-auth` still required outside loopback.
+The default listener verifies macOS account credentials with OpenDirectory,
+including account policies. It does not read `VNC_PASSWORD`, generate passwords,
+write passwords to disk, or forward passwords to workers. Apple security type 30
+protects the credential exchange; session encryption remains off by default.
+This legacy authentication protocol does not authenticate the server to the client.
+Use an authenticated VPN/SSH transport when the network is not trusted.
 
-There is no runtime read/write code for `~/.mac-vnc-server`, and a legacy
-`config.json` is no longer used. Settings come from CLI arguments and the
-password from the environment.
+The listener needs a client supporting username/password authentication via ARD
+security type 30. Classic password-only clients cannot use this endpoint; they can
+still use an explicit legacy `--session user` server with `VNC_PASSWORD`.
+Only those legacy services need the variable in the user launchd environment.
+`--password` remains unsupported.
 
-For a LaunchAgent, set the variable in the **user launchd environment** before
-installing or restarting it; exporting in a terminal alone does not reach an
-already-running launchd:
-
-```sh
-export VNC_PASSWORD='<your-password>'
-launchctl setenv VNC_PASSWORD "$VNC_PASSWORD"
-./.build/release/mac-vnc-server-dev --service
-```
-
-The service installer checks that launchd has the variable. It never copies
-the password into the plist. This environment is session-scoped and must be
-supplied again after login/reboot. Reinstall an older service whose arguments
-still contain the removed `--password` option.
+There is no runtime read/write code for `~/.mac-vnc-server`. Settings come from
+CLI arguments. Each user worker resolves default transfer storage inside its own
+home after dropping privileges. An explicit `--transfer-directory` must be owned
+by the selected account; one shared directory cannot be used across accounts.
 
 Other persistent data lives outside the old directory:
 
@@ -307,14 +316,9 @@ Clipboard snapshots and session encryption keys remain in memory.
 
 ### Display modes
 
-Omitting `--display` starts multiple listeners. With the default base port, `5900` keeps the previous combined-desktop behavior and `5901`, `5902`, ... expose each monitor separately:
-
-```sh
-./.build/release/mac-vnc-server-dev --bind 127.0.0.1
-open 'vnc://127.0.0.1:5900'  # all displays
-open 'vnc://127.0.0.1:5901'  # display 1
-open 'vnc://127.0.0.1:5902'  # display 2
-```
+The account listener serves all session displays on its single port by default.
+Only the legacy `--session user` mode opens additional consecutive ports when
+`--display` is omitted.
 
 To keep a single listener with the combined desktop:
 
@@ -427,22 +431,19 @@ view. The server requests the files immediately and shows a Received Files
 panel. Keep holding to let it attempt a drag with completed local files; if you
 release first, drag the completed row from the panel into the target app.
 Copies are stored under `~/Library/Application Support/mac-vnc-server/Transfers`;
-used files remain until explicitly removed. Use the VNC Files menu-bar item or
+used files remain until explicitly removed. Choose **Received Files…** from the remote-VNC menu-bar icon, or use
 `mac-vnc-server transfers` to reopen them. See [staging, retention, and timing
 verification](docs/staged-file-drops.md) for limits and remaining client tests.
 `--file-drop-mode native` retains direct drops into Finder through file promises.
 Drag a remote Finder item out of Screen Sharing into local Finder to copy in the
 other direction. Existing destinations are preserved with numbered names.
-With `--encryption`, Screen Sharing uses Apple
-Diffie–Hellman authentication: enter any username and the configured server
-password in its login dialog. The username is only a label, not a macOS account
-login. Standard VNC clients continue to use the VNC password method.
-The server supports Apple's AES record encryption and encrypted input events,
-so connect using the plain URL above. The default `--no-encryption` policy uses experimental plaintext operation
-with the same plain URL. This selects VNC password authentication and consumes the viewer's encryption
-request without sending keys. Tahoe's native viewer then keeps streaming in
-plaintext and enables both file-drop directions. This relies on undocumented
-behavior; it still needs a Finder test with Screen Sharing 3.0 on macOS 13.
+The account listener always uses Apple Diffie–Hellman username/password
+authentication, whether session encryption is on or off. Enter the selected
+macOS account's actual credentials. With `--encryption`, the worker can negotiate
+Apple AES records and encrypted input events. Default `--no-encryption` suppresses
+the viewer's session-encryption key exchange on the same plain URL. This plaintext
+file-transfer behavior uses undocumented Apple extensions; native client
+interoperability must be checked for each macOS release.
 All native interoperability tests use plain URLs and the app's encryption default.
 See [plaintext validation and client limitations](docs/apple-file-transfer.md#plaintext-validation).
 Control permission is available from startup;
@@ -517,9 +518,7 @@ The self-signed certificate provides a stable signing identity for macOS permiss
 
 ### Apple Screen Sharing keeps asking for a password
 
-Use the value of `VNC_PASSWORD` supplied to the server process. It is not printed in logs or saved in a config file.
-
-For scripted testing, use AppleScript to type it instead of Keychain.
+Use the selected macOS account username and password. Confirm that its GUI session already exists. Root requires a root listener and an enabled root account; it selects the current console owner, whether loginwindow or a user desktop. Only explicit legacy endpoints use `VNC_PASSWORD`.
 
 ### Startup stops after the cursor message
 

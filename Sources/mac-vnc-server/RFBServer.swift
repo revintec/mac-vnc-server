@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-struct ServerConfig {
+struct ServerConfig: Codable, Sendable {
     let bindAddress: String
     let port: UInt16
     let password: String?
@@ -11,7 +11,7 @@ struct ServerConfig {
     let encodingPreference: EncodingPreference
     let displaySelection: DisplaySelection
     let verbose: Bool
-    let clipboardSync: Bool
+    var clipboardSync: Bool
     let adaptiveStreaming: Bool
     let adaptiveFrameRate: Bool
     var fileTransfer = true
@@ -22,17 +22,18 @@ struct ServerConfig {
     var nativeFileDrops = false
     var insecureAllowNoAuth = false
     var sessionTarget: SessionTarget = .user
+    var transferDirectoryIsExplicit = false
 }
 
-enum SessionTarget: String { case user, console }
+enum SessionTarget: String, Codable, Sendable { case listener, user, console }
 
-enum DisplaySelection: Equatable {
+enum DisplaySelection: Equatable, Codable, Sendable {
     case automatic
     case all
     case display(Int)
 }
 
-enum EncodingPreference: String {
+enum EncodingPreference: String, Codable, Sendable {
     case auto
     case zrle
     case zlib
@@ -201,46 +202,60 @@ final class RFBServer: @unchecked Sendable {
 
         while !lock.withLock({ stopped }) {
             guard let client = try listener.acceptClient(timeout: 0.25) else { continue }
-            let id = ObjectIdentifier(client)
-            let admitted = lock.withLock {
-                guard !stopped, clients.count < maximumClients else { return false }
-                clients[id] = client
-                return true
-            }
-            guard admitted else {
-                client.shutdown()
-                logger.warning("connection rejected: server stopping or client limit reached")
-                continue
-            }
-            do {
-                // A peer closing during socket setup must only fail its own session.
-                try client.configureTCP()
-                let session = try RFBClientSession(
-                    socket: client, password: config.password, fps: config.fps,
-                    encodingPreference: config.encodingPreference, capture: capture,
-                    input: makeInput(), clipboard: makeClipboard(),
-                    clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
-                    adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
-                    handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout,
-                    messageTimeout: messageTimeout, fileTransfer: config.fileTransfer,
-                    allowEncryption: config.allowEncryption, zlibConfiguration: config.zlibConfiguration,
-                    transferInbox: transferInbox
-                )
-                workers.enter()
-                DispatchQueue.global(qos: .userInteractive).async { [self] in
-                    defer {
-                        session.shutdown()
-                        lock.withLock { clients[id] = nil }
-                        workers.leave()
-                    }
-                    do { try session.run() }
-                    catch { logger.warning("client disconnected: \(error.localizedDescription)") }
+            _ = serve(client: client)
+        }
+    }
+
+    var activeClientCount: Int { lock.withLock { clients.count } }
+    func waitForClients() { workers.wait() }
+
+    /// Takes an already-connected socket. Account workers enter here after the
+    /// listener has authenticated and passed ownership through SCM_RIGHTS.
+    @discardableResult
+    func serve(client: ClientSocket, admission: SessionAdmission? = nil) -> Bool {
+        let id = ObjectIdentifier(client)
+        let admitted = lock.withLock {
+            guard !stopped, clients.count < maximumClients else { return false }
+            clients[id] = client
+            return true
+        }
+        guard admitted else {
+            if let admission { try? AccountHandshake.reject(socket: client, version: admission.version) }
+            client.shutdown()
+            logger.warning("connection rejected: server stopping or client limit reached")
+            return false
+        }
+        do {
+            // A peer closing during socket setup must only fail its own session.
+            try client.configureTCP()
+            let session = try RFBClientSession(
+                socket: client, password: config.password, fps: config.fps,
+                encodingPreference: config.encodingPreference, capture: capture,
+                input: makeInput(), clipboard: makeClipboard(),
+                clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
+                adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
+                handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout,
+                messageTimeout: messageTimeout, fileTransfer: config.fileTransfer,
+                allowEncryption: config.allowEncryption, zlibConfiguration: config.zlibConfiguration,
+                transferInbox: transferInbox
+            )
+            workers.enter()
+            DispatchQueue.global(qos: .userInteractive).async { [self] in
+                defer {
+                    session.shutdown()
+                    lock.withLock { clients[id] = nil }
+                    workers.leave()
                 }
-            } catch {
-                client.shutdown()
-                lock.withLock { clients[id] = nil }
-                logger.warning("could not start client: \(error.localizedDescription)")
+                do { try session.run(admission: admission) }
+                catch { logger.warning("client disconnected: \(error.localizedDescription)") }
             }
+            return true
+        } catch {
+            if let admission { try? AccountHandshake.reject(socket: client, version: admission.version) }
+            client.shutdown()
+            lock.withLock { clients[id] = nil }
+            logger.warning("could not start client: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -559,13 +574,19 @@ final class RFBClientSession: @unchecked Sendable {
         zlibEncoder = try ZlibEncoder(configuration: zlibConfiguration)
     }
 
-    func run() throws {
+    func run(admission: SessionAdmission? = nil) throws {
         let initialFrame = try capture.capture()
         currentLayout = initialFrame.layout
         previousFramebuffer = initialFrame
 
         try socket.withReadTimeout(handshakeTimeout, operation: "RFB handshake") {
-            try handshake(initialFrame: initialFrame)
+            if let admission {
+                appleWrappingKey = admission.wrappingKey
+                try socket.writeAll(UInt32(0).beBytes)
+                try initializeClient(versionText: admission.version, initialFrame: initialFrame)
+            } else {
+                try handshake(initialFrame: initialFrame)
+            }
         }
         let captureRateConsumer = ObjectIdentifier(self)
         self.captureRateConsumer = captureRateConsumer
@@ -783,6 +804,10 @@ final class RFBClientSession: @unchecked Sendable {
             }
         }
 
+        try initializeClient(versionText: versionText, initialFrame: initialFrame)
+    }
+
+    private func initializeClient(versionText: String, initialFrame: Framebuffer) throws {
         let clientInit = try socket.readExact(1)[0]
         logger.verbose("RFB handshake: ClientInit=\(clientInit)")
         // Always share the desktop, even when ClientInit requests an exclusive session.
@@ -846,7 +871,7 @@ final class RFBClientSession: @unchecked Sendable {
         bytes += PixelFormat.serverDefault.bytes
         let hostname = desktopHostname()
         let name = usesAppleExtensions
-            ? AppleRFB.desktopName(hostname, fileTransfer: fileTransferEnabled, allowEncryptedInput: allowEncryption)
+            ? AppleRFB.desktopName(hostname, fileTransfer: fileTransferEnabled, allowEncryptedInput: appleWrappingKey != nil)
             : Array(hostname.utf8)
         bytes += UInt32(name.count).beBytes
         bytes += Array(name)
@@ -1687,8 +1712,10 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private func handleAppleEncryptedInput() throws {
-        try requireSessionEncryptionAllowed()
         // This per-event ECB envelope is separate from the CBC record layer.
+        // Type-30 account logins enable it in Screen Sharing even when session
+        // records are disabled. Decode with the authenticated wrapping key;
+        // --no-encryption continues to prohibit framebuffer/stream ciphers.
         // Screen Sharing can send it before enabling incoming records, and
         // continues to use it when only server-to-viewer records are enabled.
         let bytes = try socket.readExact(17) // flags followed by one AES block
@@ -1698,7 +1725,7 @@ final class RFBClientSession: @unchecked Sendable {
         let event = try AppleEncryption.InputEvent(ciphertext: Array(bytes.dropFirst()), key: appleWrappingKey)
         if !appleEncryptedInputReceived {
             appleEncryptedInputReceived = true
-            logger.verbose("Apple EncryptedInputEvent: accepted [client_fd=\(socket.fd)]")
+            logger.verbose("Apple EncryptedInputEvent: accepted using authenticated key; session_encryption_allowed=\(allowEncryption) [client_fd=\(socket.fd)]")
         }
         // A single envelope can carry both events; the native server applies
         // the key first, then the pointer.
@@ -1825,7 +1852,7 @@ final class RFBClientSession: @unchecked Sendable {
                 // 1103 supplies keys. Consume the entire request so framing is
                 // preserved, but do not send keys or arm either record cipher.
                 // This undocumented fallback is only for explicit --no-encryption.
-                logger.verbose("Apple SetEncryption: \(request) ignored by --no-encryption; session remains plaintext [client_fd=\(socket.fd)]")
+                logger.verbose("Apple SetEncryption: \(request) ignored by --no-encryption; record encryption remains disabled [client_fd=\(socket.fd)]")
                 return
             }
             guard let appleWrappingKey else {
@@ -1855,7 +1882,7 @@ final class RFBClientSession: @unchecked Sendable {
 
     private func requireSessionEncryptionAllowed() throws {
         guard allowEncryption else {
-            throw RFBError.protocolError("viewer attempted encrypted traffic but --no-encryption is set")
+            throw RFBError.protocolError("viewer attempted encrypted session records but --no-encryption is set")
         }
     }
 

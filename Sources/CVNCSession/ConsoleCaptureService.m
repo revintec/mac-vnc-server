@@ -1,30 +1,46 @@
 #include "CVNCSession.h"
 #import <Foundation/Foundation.h>
 #include <errno.h>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <poll.h>
 #include <signal.h>
 #include <spawn.h>
 #include <servers/bootstrap.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-extern char **environ;
-static volatile sig_atomic_t brokerInterrupted;
-static void interruptBroker(int number) { brokerInterrupted = number; }
 static void closeDescriptor(int *fd) { if (*fd >= 0) close(*fd); }
+
+struct VNCConsoleCaptureService {
+    int lock;
+    int32_t audit;
+    char *directory;
+};
 
 static int launchctl(NSArray<NSString *> *arguments) {
     char **argv = calloc(arguments.count + 2, sizeof(char *));
     if (!argv) return ENOMEM;
     argv[0] = "/bin/launchctl";
     for (NSUInteger i = 0; i < arguments.count; i++) argv[i + 1] = (char *)arguments[i].UTF8String;
+    // These short-lived commands run in the supervisor now. Do not inherit its
+    // VNC credential, listener/client sockets, or the service ownership lock.
+    char *environment[] = {"PATH=/usr/bin:/bin:/usr/sbin:/sbin", NULL};
+    posix_spawnattr_t attributes;
+    posix_spawn_file_actions_t actions;
+    int result = posix_spawnattr_init(&attributes);
+    if (result) { free(argv); return result; }
+    result = posix_spawn_file_actions_init(&actions);
+    if (result) { posix_spawnattr_destroy(&attributes); free(argv); return result; }
+    result = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    if (!result) result = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    if (!result) result = posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDOUT_FILENO);
+    if (!result) result = posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDERR_FILENO);
     pid_t child = 0;
-    int result = posix_spawn(&child, argv[0], NULL, NULL, argv, environ);
+    if (!result) result = posix_spawn(&child, argv[0], &actions, &attributes, argv, environment);
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attributes);
     free(argv);
     if (result) return result;
     // Bound launchctl itself as well as native service startup/teardown.
@@ -40,25 +56,11 @@ static int launchctl(NSArray<NSString *> *arguments) {
     return ETIMEDOUT;
 }
 
-static int anonymousSocket(void) {
-    struct stat st;
-    struct sockaddr_un address = {0};
-    socklen_t size = sizeof(address);
-    if (fstat(STDIN_FILENO, &st) || !S_ISSOCK(st.st_mode) ||
-        getsockname(STDIN_FILENO, (struct sockaddr *)&address, &size) ||
-        address.sun_family != AF_UNIX || address.sun_path[0]) return EINVAL;
-    int flags = fcntl(STDIN_FILENO, F_GETFD);
-    // Only the manager owns this lifeline. launchctl must not inherit it.
-    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFD, flags | FD_CLOEXEC) < 0) return errno;
-    int yes = 1;
-    return setsockopt(STDIN_FILENO, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes)) ? errno : 0;
-}
-
-static NSDictionary *captureJob(NSString *label, NSString *executable, int32_t audit, pid_t manager) {
+static NSDictionary *captureJob(NSString *label, NSString *executable, int32_t audit, pid_t owner) {
     return @{
         @"Label": label,
         @"ProgramArguments": @[executable, @"--console-capture-service",
-            [NSString stringWithFormat:@"%d", audit], [NSString stringWithFormat:@"%d", manager]],
+            [NSString stringWithFormat:@"%d", audit], [NSString stringWithFormat:@"%d", owner]],
         @"RunAtLoad": @YES,
         @"LimitLoadToSessionType": @[@"Background"],
         @"ProcessType": @"Interactive",
@@ -84,7 +86,7 @@ static int32_t positiveInteger(id value) {
     return !errno && end && !*end && number <= INT32_MAX ? (int32_t)number : 0;
 }
 
-// Called only while holding the exclusive broker lock. A dead manager cannot
+// Called only while holding the exclusive service lock. A dead supervisor cannot
 // clean up after SIGKILL; its root-only plist is the record of which unique job
 // we own. Never infer ownership from a replayd PID or Mach service name alone.
 static int recoverOrphanedJobs(void) {
@@ -96,7 +98,6 @@ static int recoverOrphanedJobs(void) {
     NSArray *names = [NSFileManager.defaultManager contentsOfDirectoryAtPath:runtime error:&error];
     if (!names) return EIO;
     for (NSString *name in names) {
-        if (brokerInterrupted) return EINTR;
         if (![name hasPrefix:prefix] || name.length != prefix.length + 6 ||
             [[name substringFromIndex:prefix.length] rangeOfCharacterFromSet:suffixCharacters.invertedSet].location != NSNotFound) continue;
         NSString *root = [runtime stringByAppendingPathComponent:name];
@@ -124,13 +125,15 @@ static int recoverOrphanedJobs(void) {
         if (![arguments isKindOfClass:NSArray.class] || [arguments count] != 4 ||
             ![arguments[0] isKindOfClass:NSString.class] || ![arguments[0] isAbsolutePath]) continue;
         int32_t audit = positiveInteger(arguments[2]);
-        pid_t manager = positiveInteger(arguments[3]);
+        pid_t owner = positiveInteger(arguments[3]);
         NSString *label = [@"com.mac-vnc-server.console-capture." stringByAppendingString:name];
-        if (!audit || manager <= 1 || ![job isEqual:captureJob(label, arguments[0], audit, manager)]) continue;
-        // Existing/reused PIDs and permission failures are not proof of death.
-        if (kill(manager, 0) == 0 || errno != ESRCH) continue;
+        if (!audit || owner <= 1 || ![job isEqual:captureJob(label, arguments[0], audit, owner)]) continue;
+        // A previous failed cleanup in this process is also recoverable once
+        // we reacquire the exclusive lock. Other live/reused PIDs are preserved.
+        // The unchanged plist format also recovers older standalone managers.
+        if (owner != getpid() && (kill(owner, 0) == 0 || errno != ESRCH)) continue;
         NSString *target = [@"user/0/" stringByAppendingString:label];
-        fprintf(stderr, "Console capture broker recovering orphan: manager=%d job=%s\n", manager, target.UTF8String);
+        fprintf(stderr, "Console capture service recovering orphan: owner=%d job=%s\n", owner, target.UTF8String);
         int result = bootout(target);
         if (result) {
             fprintf(stderr, "warning: console capture orphan cleanup failed (%d): %s; retained %s/capture.plist\n",
@@ -142,13 +145,31 @@ static int recoverOrphanedJobs(void) {
             fprintf(stderr, "warning: console capture orphan metadata cleanup failed: %s (%d)\n",
                 root.fileSystemRepresentation, errno);
         }
-        fprintf(stderr, "Console capture broker recovered orphan: %s\n", target.UTF8String);
+        fprintf(stderr, "Console capture service recovered orphan: %s\n", target.UTF8String);
     }
     return 0;
 }
 
-int VNCConsoleExecCaptureService(VNCConsoleIdentity identity, int32_t manager_pid) {
-    if (identity.uid != 0 || manager_pid <= 1 || kill(manager_pid, 0)) return EPERM;
+static int acquireOwnershipLock(int *descriptor) {
+    *descriptor = open("/private/var/run/mac-vnc-console-capture.lock",
+        O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_EXLOCK | O_NONBLOCK, 0600);
+    if (*descriptor < 0) return errno;
+    struct stat info;
+    if (fstat(*descriptor, &info) || !S_ISREG(info.st_mode) || info.st_uid != 0 ||
+        info.st_nlink != 1 || (info.st_mode & 07777) != 0600) return EPERM;
+    return 0;
+}
+
+int VNCConsoleCaptureServiceRecover(void) {
+    if (getuid() != 0 || geteuid() != 0) return EPERM;
+    int lock __attribute__((cleanup(closeDescriptor))) = -1;
+    int result = acquireOwnershipLock(&lock);
+    if (result) return result;
+    @autoreleasepool { return recoverOrphanedJobs(); }
+}
+
+int VNCConsoleExecCaptureService(VNCConsoleIdentity identity, int32_t owner_pid) {
+    if (identity.uid != 0 || owner_pid <= 1 || kill(owner_pid, 0)) return EPERM;
     int result = VNCConsolePrepare(identity);
     if (result) return result;
     // Execute Apple's original signed service, with its own normal entitlement
@@ -157,99 +178,101 @@ int VNCConsoleExecCaptureService(VNCConsoleIdentity identity, int32_t manager_pi
     return errno;
 }
 
-int VNCConsoleRunCaptureBroker(VNCConsoleIdentity identity, const char *executable) {
+static int startService(VNCConsoleCaptureServiceRef service, VNCConsoleIdentity identity, const char *executable) {
     if (getuid() != 0 || geteuid() != 0 || identity.uid != 0 || identity.audit_id <= 0 ||
         !executable || executable[0] != '/') return EPERM;
-    int result = anonymousSocket();
-    if (result) return result;
-    struct sigaction action = {0};
-    action.sa_handler = interruptBroker;
-    sigemptyset(&action.sa_mask);
-    sigaction(SIGINT, &action, NULL); sigaction(SIGTERM, &action, NULL); sigaction(SIGHUP, &action, NULL);
-    signal(SIGPIPE, SIG_IGN);
     @autoreleasepool {
         VNCConsoleIdentity current = {0};
         if (VNCConsoleCurrent(&current) || current.uid != 0 || current.audit_id != identity.audit_id) return ESTALE;
         // launchd accepts different job labels that claim the same Mach service
-        // names. Serialize our managers before looking up the existing service.
+        // names. Serialize owners before looking up the existing service.
         // Keep this empty lock inode across runs: unlinking it on unlock would
         // let concurrent opens lock different inodes. /var/run resets on reboot.
-        int owner __attribute__((cleanup(closeDescriptor))) = open(
-            "/private/var/run/mac-vnc-console-capture.lock",
-            O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_EXLOCK | O_NONBLOCK, 0600);
-        if (owner < 0) {
-            int lockError = errno;
-            fprintf(stderr, "Console capture broker refused: root capture service is already owned or its lock is unavailable\n");
-            return lockError;
+        int result = acquireOwnershipLock(&service->lock);
+        if (result) {
+            fprintf(stderr, "Console capture service refused: root capture service is already owned or its lock is unavailable\n");
+            return result;
         }
-        struct stat lockInfo;
-        if (fstat(owner, &lockInfo) || !S_ISREG(lockInfo.st_mode) || lockInfo.st_uid != 0 ||
-            lockInfo.st_nlink != 1 || (lockInfo.st_mode & 0777) != 0600) return EPERM;
         result = recoverOrphanedJobs();
         if (result) return result;
-        if (brokerInterrupted) return EINTR;
-        // This manager is launched through `launchctl asuser 0`, so lookup uses
-        // the same root namespace as the job below, not the invoking user's.
+        // Query user/0 explicitly without changing this process's bootstrap or
+        // graphics session. Its inherited namespace belongs to the GUI caller.
+        typedef kern_return_t (*PerUserLookup)(mach_port_t, const char *, uid_t, mach_port_t *);
+        PerUserLookup lookupForUser = dlsym(RTLD_DEFAULT, "bootstrap_look_up_per_user");
+        if (!lookupForUser) return ENOTSUP;
         mach_port_t existing = MACH_PORT_NULL;
-        kern_return_t lookup = bootstrap_look_up(bootstrap_port, "com.apple.replayd", &existing);
+        kern_return_t lookup = lookupForUser(bootstrap_port, "com.apple.replayd", 0, &existing);
         if (lookup == BOOTSTRAP_SUCCESS) {
             mach_port_deallocate(mach_task_self(), existing);
-            fprintf(stderr, "Console capture broker refused: an existing root capture service is not replaced\n");
+            fprintf(stderr, "Console capture service refused: an existing root capture service is not replaced\n");
             return EADDRINUSE;
         }
         if (lookup != BOOTSTRAP_UNKNOWN_SERVICE) {
-            fprintf(stderr, "Console capture broker service lookup failed (%d)\n", lookup);
+            fprintf(stderr, "Console capture service lookup failed (%d)\n", lookup);
             return ENXIO;
         }
         // launchctl needs a plist, but it contains no credentials or pixels.
         // mkdtemp makes a root-only directory outside the user's home. The
-        // manager removes this directory and its uniquely named job on exit.
+        // supervisor removes this directory and its uniquely named job on exit.
         char directory[] = "/private/var/run/mac-vnc-console.XXXXXX";
         if (!mkdtemp(directory)) return errno;
+        service->directory = strdup(directory);
+        if (!service->directory) { rmdir(directory); return ENOMEM; }
         NSString *root = [NSString stringWithUTF8String:directory];
         NSString *label = [@"com.mac-vnc-server.console-capture." stringByAppendingString:root.lastPathComponent];
-        NSString *target = [@"user/0/" stringByAppendingString:label];
         NSString *path = [root stringByAppendingPathComponent:@"capture.plist"];
         NSDictionary *job = captureJob(label, [NSString stringWithUTF8String:executable], identity.audit_id, getpid());
         NSError *error = nil;
         NSData *plist = [NSPropertyListSerialization dataWithPropertyList:job
             format:NSPropertyListXMLFormat_v1_0 options:0 error:&error];
         if (!plist || ![plist writeToFile:path options:NSDataWritingAtomic error:&error]) {
-            fprintf(stderr, "Console capture broker plist failed: %s\n", error.localizedDescription.UTF8String);
-            [NSFileManager.defaultManager removeItemAtPath:root error:nil];
+            fprintf(stderr, "Console capture service plist failed: %s\n", error.localizedDescription.UTF8String);
             return EIO;
         }
-        chmod(path.fileSystemRepresentation, 0600);
+        if (chmod(path.fileSystemRepresentation, 0600)) return errno;
         result = launchctl(@[@"bootstrap", @"user/0", path]);
         if (result) {
-            fprintf(stderr, "Console capture broker bootstrap failed (%d); an existing root capture service is not replaced\n", result);
+            fprintf(stderr, "Console capture service bootstrap failed (%d)\n", result);
         } else {
-            fprintf(stderr, "Console capture broker ready: uid=0 audit=%d manager=%d\n", identity.audit_id, getpid());
-            const uint8_t ready = 1;
-            if (write(STDIN_FILENO, &ready, 1) != 1) result = EPIPE;
-            while (!result && !brokerInterrupted) {
-                if (VNCConsoleCurrent(&current) || current.uid != 0 || current.audit_id != identity.audit_id) break;
-                struct pollfd fd = {STDIN_FILENO, POLLIN | POLLHUP, 0};
-                int polled = poll(&fd, 1, 250);
-                if (polled < 0) { if (errno == EINTR) continue; result = errno; break; }
-                if (polled > 0) {
-                    uint8_t byte;
-                    ssize_t length = read(STDIN_FILENO, &byte, 1);
-                    if (length <= 0) break; // Supervisor exited or closed the lifeline.
-                }
-            }
+            fprintf(stderr, "Console capture service ready: uid=0 audit=%d owner=%d\n", identity.audit_id, getpid());
         }
-        // Also try bootout after a failed bootstrap: launchd may have accepted
-        // the job before its reply failed. The random label is owned only here.
-        int cleanup = bootout(target);
-        if (cleanup) {
-            fprintf(stderr, "warning: console capture broker cleanup failed (%d): %s; retained %s for administrator cleanup\n",
-                cleanup, target.UTF8String, path.fileSystemRepresentation);
-            if (!result) result = cleanup;
-        } else {
-            [NSFileManager.defaultManager removeItemAtPath:root error:nil];
-        }
-        fprintf(stderr, "Console capture broker stopped: audit=%d manager=%d\n", identity.audit_id, getpid());
         return result;
     }
+}
+
+VNCConsoleCaptureServiceRef VNCConsoleCaptureServiceCreate(VNCConsoleIdentity identity, const char *executable, int32_t *error) {
+    VNCConsoleCaptureServiceRef service = calloc(1, sizeof(*service));
+    if (!service) { if (error) *error = ENOMEM; return NULL; }
+    service->lock = -1;
+    service->audit = identity.audit_id;
+    int result = startService(service, identity, executable);
+    if (error) *error = result;
+    if (result) { VNCConsoleCaptureServiceDestroy(service); return NULL; }
+    return service;
+}
+
+void VNCConsoleCaptureServiceDestroy(VNCConsoleCaptureServiceRef service) {
+    if (!service) return;
+    @autoreleasepool {
+        if (service->directory) {
+            NSString *root = [NSString stringWithUTF8String:service->directory];
+            NSString *target = [@"user/0/com.mac-vnc-server.console-capture." stringByAppendingString:root.lastPathComponent];
+            NSString *path = [root stringByAppendingPathComponent:@"capture.plist"];
+            // Also try bootout after a failed bootstrap: launchd may have accepted
+            // the job before its reply failed. The random label is owned only here.
+            int cleanup = bootout(target);
+            if (cleanup) {
+                fprintf(stderr, "warning: console capture service cleanup failed (%d): %s; retained %s for retry on next startup\n",
+                    cleanup, target.UTF8String, path.fileSystemRepresentation);
+            } else {
+                if ((unlink(path.fileSystemRepresentation) && errno != ENOENT) || rmdir(root.fileSystemRepresentation)) {
+                    fprintf(stderr, "warning: console capture metadata cleanup failed: %s (%d)\n", root.fileSystemRepresentation, errno);
+                }
+            }
+            fprintf(stderr, "Console capture service released: audit=%d owner=%d\n", service->audit, getpid());
+        }
+    }
+    closeDescriptor(&service->lock);
+    free(service->directory);
+    free(service);
 }

@@ -6,6 +6,7 @@ import Foundation
 /// backend and logged-in console workers keep their session-scoped event tap.
 final class ConsoleRootInput {
     private let input: VNCConsoleInputRef
+    private let lock = NSLock()
     private var failure: Int32 = 0
 
     init(identity: ConsoleIdentity) throws {
@@ -19,15 +20,19 @@ final class ConsoleRootInput {
     deinit { VNCConsoleInputDestroy(input) }
 
     func post(_ event: CGEvent) {
-        // Called under ConsoleWorkerControls' lock. Preserve the first error
-        // and reject subsequent input until the supervisor replaces the worker.
-        guard failure == 0 else { return }
-        failure = VNCConsoleInputPost(input, event)
+        // Shared input serializes event delivery; this lock also synchronizes
+        // the worker's independent health check. Preserve the first error.
+        lock.withLock {
+            guard failure == 0 else { return }
+            failure = VNCConsoleInputPost(input, event)
+        }
     }
 
     func checkDelivery() throws {
-        guard failure == 0 else {
-            throw CLIError.commandFailed("loginwindow HID input stopped (code \(failure))")
+        try lock.withLock {
+            guard failure == 0 else {
+                throw CLIError.commandFailed("loginwindow HID input stopped (code \(failure))")
+            }
         }
     }
 }

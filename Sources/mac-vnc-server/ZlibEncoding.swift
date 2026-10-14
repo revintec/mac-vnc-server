@@ -2,7 +2,7 @@ import CVNCZlib
 import Foundation
 import zlib
 
-enum ZlibBackend: String, CaseIterable, Sendable {
+enum ZlibBackend: String, CaseIterable, Codable, Sendable {
     case zlibNG = "zlib-ng"
     case system
 
@@ -11,7 +11,7 @@ enum ZlibBackend: String, CaseIterable, Sendable {
     var version: String { String(cString: vnc_zlib_version(self == .zlibNG ? 1 : 0)) }
 }
 
-struct ZlibConfiguration: Sendable {
+struct ZlibConfiguration: Codable, Sendable {
     var backend: ZlibBackend = .zlibNG
     var level: Int32?
 

@@ -25,8 +25,8 @@ final class ProcessShutdown: @unchecked Sendable {
         self.exitProcess = exitProcess
     }
 
-    func installSignalHandlers() {
-        for number in [SIGINT, SIGTERM] {
+    func installSignalHandlers(_ numbers: [Int32] = [SIGINT, SIGTERM]) {
+        for number in numbers {
             signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: signalQueue)
             source.setEventHandler { @Sendable [weak self, weak source] in

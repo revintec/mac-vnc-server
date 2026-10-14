@@ -3,9 +3,9 @@
 
 Run through an administrator shell while the physical console is at loginwindow.
 Starts loopback-only VNC instances using a fixed test credential in VNC_PASSWORD,
-decodes full frames, then checks graceful shutdown, SIGKILL cleanup and dead
-manager recovery. Malformed metadata and unrelated services must survive. The
-existing user endpoint is untouched. No screenshot data is saved.
+decodes full frames, then checks best-effort shutdown and recovery after SIGKILL.
+Malformed metadata and unrelated services must survive. The existing user
+endpoint is untouched. No screenshot data is saved.
 """
 import argparse
 from contextlib import contextmanager
@@ -84,90 +84,96 @@ def alive(pid):
         return False
 
 
-def check_broker_conflict(binary, audit, expected="root capture service is already owned"):
-    """A second root broker must not replace the first broker's Mach services."""
-    parent, child = socket.socketpair()
-    with tempfile.TemporaryFile(mode="w+b") as log:
-        duplicate = subprocess.Popen(["/bin/launchctl", "asuser", "0", str(binary), "--console-capture-broker", audit],
-            stdin=child, stdout=log, stderr=log, env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
-        child.close()
-        try:
-            parent.settimeout(6)
-            ready = parent.recv(1)
-            assert ready == b"", "duplicate broker claimed root capture services"
-            assert duplicate.wait(timeout=10) != 0
-            text = os.pread(log.fileno(), 1024 * 1024, 0).decode(errors="replace")
-            assert expected in text, text
-            print("Existing root capture broker preserved; duplicate rejected", flush=True)
-        finally:
-            parent.close()
-            if duplicate.poll() is None:
-                duplicate.wait(timeout=12)
-
-
-def check(binary, stop_signal, manager_signal=None):
+def launch_server(binary, log):
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port = reserve.getsockname()[1]
-    baseline = set(Path("/private/var/run").glob("mac-vnc-console.*"))
+    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "VNC_PASSWORD": "console-probe-fixture"}
+    server = subprocess.Popen([str(binary), "--session", "console", "--bind", "127.0.0.1",
+        "--port", str(port), "--display", "all", "--verbose"], env=env, stdout=log, stderr=log)
+    return server, port
+
+
+def log_text(log):
+    return os.pread(log.fileno(), 16 * 1024 * 1024, 0).decode(errors="replace")
+
+
+def job_target(directory):
+    return "user/0/com.mac-vnc-server.console-capture." + directory.name
+
+
+def check_rejection(binary, expected="root capture service is already owned"):
+    """A second supervisor must preserve the existing root capture service."""
     with tempfile.TemporaryFile(mode="w+b") as log:
-        env = dict(os.environ, VNC_PASSWORD="console-probe-fixture")
-        server = subprocess.Popen([str(binary), "--session", "console", "--bind", "127.0.0.1",
-            "--port", str(port), "--display", "all", "--verbose"], env=env, stdout=log, stderr=log)
-        owned_dirs, owned_pids = set(), set()
-        text = ""
-        result = None
+        server, _ = launch_server(binary, log)
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                text = log_text(log)
+                if expected in text:
+                    break
+                assert server.poll() is None, text
+                time.sleep(.05)
+            else:
+                raise RuntimeError(f"expected service rejection was not reported\n{text}")
+            assert "Console capture service ready:" not in text, text
+            assert "Console worker started:" not in text, text
+        finally:
+            if server.poll() is None:
+                server.terminate()
+            try:
+                server.wait(timeout=7)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=3)
+        print("Existing root capture service preserved; second supervisor rejected", flush=True)
 
-        def collect():
-            nonlocal text
-            text = os.pread(log.fileno(), 16 * 1024 * 1024, 0).decode(errors="replace")
-            owned_dirs.update(set(Path("/private/var/run").glob("mac-vnc-console.*")) - baseline)
-            owned_pids.update(map(int, re.findall(r"Console capture broker ready: .*?manager=(\d+)", text)))
-            owned_pids.update(map(int, re.findall(r"Console worker started: .*?pid=(\d+)", text)))
 
+def check(binary, stop_signal, recover=()):
+    baseline = set(Path("/private/var/run").glob("mac-vnc-console.*"))
+    owned_dirs, workers, replayds = set(), set(), set()
+    result, text = None, ""
+    with tempfile.TemporaryFile(mode="w+b") as log:
+        server, port = launch_server(binary, log)
         try:
             deadline = time.monotonic() + 25
             while time.monotonic() < deadline:
-                text = os.pread(log.fileno(), 16 * 1024 * 1024, 0).decode(errors="replace")
+                text = log_text(log)
                 if server.poll() is not None:
                     raise RuntimeError(f"server exited {server.returncode}\n{text}")
-                if "mac-vnc-server listening on" in text:
+                if "mac-vnc-server listening on" in text and "Console worker ready: uid=0" in text:
                     break
                 time.sleep(.05)
             else:
                 raise RuntimeError(f"console startup timed out\n{text}")
-            assert "Console worker ready: uid=0" in text, text
+            for directory in recover:
+                assert not directory.exists(), f"orphan directory survived: {directory}"
+                assert f"Console capture service recovered orphan: {job_target(directory)}" in text, text
+                assert subprocess.run(["/bin/launchctl", "print", job_target(directory)],
+                    capture_output=True, timeout=5).returncode != 0
             owned_dirs = set(Path("/private/var/run").glob("mac-vnc-console.*")) - baseline
-            assert len(owned_dirs) == 1
-            collect()
+            assert len(owned_dirs) == 1, owned_dirs
+            owners = set(map(int, re.findall(r"Console capture service ready: .*?owner=(\d+)", text)))
+            assert owners == {server.pid}, "capture service is not owned by the supervisor"
+            workers.update(map(int, re.findall(r"Console worker started: .*?pid=(\d+)", text)))
+            assert len(workers) == 1, text
+            # Check actual process structure, not just the absence of a log line.
+            processes = subprocess.check_output(["/bin/ps", "-axo", "pid=,ppid=,comm="], text=True)
+            children = {int(line.split(None, 2)[0]) for line in processes.splitlines()
+                if len(line.split(None, 2)) == 3 and int(line.split(None, 2)[1]) == server.pid}
+            assert children == workers, f"unexpected supervisor children: {children} vs {workers}"
+            for directory in owned_dirs:
+                job = plistlib.loads((directory / "capture.plist").read_bytes())
+                assert job["ProgramArguments"][-1] == str(server.pid)
+                details = subprocess.check_output(["/bin/launchctl", "print", job_target(directory)], text=True)
+                replayds.add(int(re.search(r"^\s*pid = (\d+)$", details, re.M).group(1)))
             if stop_signal == signal.SIGINT:
-                audit = re.search(r"Console capture broker ready: uid=0 audit=(\d+)", text).group(1)
-                check_broker_conflict(binary, audit)
+                check_rejection(binary)
                 assert set(Path("/private/var/run").glob("mac-vnc-console.*")) - baseline == owned_dirs
             result = receive_frame(port)
-            if manager_signal is not None:
-                manager = int(re.search(r"Console capture broker ready: .*?manager=(\d+)", text).group(1))
-                old_dirs, old_pids = set(owned_dirs), set(owned_pids)
-                os.kill(manager, manager_signal)
-                deadline = time.monotonic() + 25
-                while time.monotonic() < deadline:
-                    collect()
-                    assert server.poll() is None, text
-                    if text.count("Console worker ready: uid=0") >= 2:
-                        break
-                    time.sleep(.05)
-                else:
-                    raise RuntimeError(f"manager exit did not recover\n{text}")
-                assert not any(p.exists() for p in old_dirs), text
-                assert not any(alive(p) for p in old_pids), text
-                if manager_signal == signal.SIGKILL:
-                    assert "console capture broker exited; restarting capture worker" in text, text
-                    assert "Console capture broker recovered orphan:" in text, text
-                else:
-                    assert "Console capture broker stopped:" in text, text
-                result = receive_frame(port)
         finally:
-            collect()
+            owned_dirs |= set(Path("/private/var/run").glob("mac-vnc-console.*")) - baseline
+            workers.update(map(int, re.findall(r"Console worker started: .*?pid=(\d+)", log_text(log))))
             if server.poll() is None:
                 server.send_signal(stop_signal)
             try:
@@ -177,22 +183,28 @@ def check(binary, stop_signal, manager_signal=None):
                 server.wait(timeout=5)
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
-                if not any(p.exists() for p in owned_dirs) and not any(alive(p) for p in owned_pids):
+                if not any(alive(p) for p in workers) and (stop_signal == signal.SIGKILL or
+                        (not any(p.exists() for p in owned_dirs) and not any(alive(p) for p in replayds))):
                     break
                 time.sleep(.1)
-            text = os.pread(log.fileno(), 16 * 1024 * 1024, 0).decode(errors="replace")
+            text = log_text(log)
             print(text, flush=True)
-            assert not any(p.exists() for p in owned_dirs), "broker temporary directory survived"
-            assert not any(alive(p) for p in owned_pids), "owned helper survived"
+            assert not any(alive(p) for p in workers), "capture worker survived"
+        assert server.returncode == (-signal.SIGKILL if stop_signal == signal.SIGKILL else 0), server.returncode
+        if stop_signal == signal.SIGKILL:
+            assert all((p / "capture.plist").exists() for p in owned_dirs), "missing recovery metadata"
+            assert all(alive(p) for p in replayds), "forced-exit fixture did not leave a service to recover"
+        else:
+            assert not any(p.exists() for p in owned_dirs), "service metadata survived graceful cleanup"
+            assert not any(alive(p) for p in replayds), "capture service survived graceful cleanup"
             for directory in owned_dirs:
-                target = "user/0/com.mac-vnc-server.console-capture." + directory.name
-                checked = subprocess.run(["/bin/launchctl", "print", target], capture_output=True)
-                assert checked.returncode != 0, "owned launchd job survived"
-        assert server.returncode == (0 if stop_signal == signal.SIGINT else -signal.SIGKILL), server.returncode
+                assert subprocess.run(["/bin/launchctl", "print", job_target(directory)],
+                    capture_output=True, timeout=5).returncode != 0, "owned launchd job survived"
         print({"signal": signal.Signals(stop_signal).name, "uri": f"vnc://127.0.0.1:{port}/",
-               "capture": result, "broker_cleanup": "passed",
-               "manager_recovery": signal.Signals(manager_signal).name if manager_signal else "not requested"}, flush=True)
-        return re.search(r"Console capture broker ready: uid=0 audit=(\d+)", text).group(1)
+               "capture": result, "persistent_processes": 3,
+               "cleanup": "deferred to next startup" if stop_signal == signal.SIGKILL else "passed",
+               "recovered_jobs": len(recover)}, flush=True)
+        return owned_dirs if stop_signal == signal.SIGKILL else set()
 
 
 @contextmanager
@@ -228,7 +240,7 @@ def protected_metadata(binary):
             assert all(p.exists() for p in fixtures), "unverified/live metadata was removed"
             assert all((p / "capture.plist").exists() for p in fixtures if not p.is_symlink())
             assert external.read_bytes() == b"unrelated data", "symlink target was modified"
-            print("Live-manager, mismatched-label, wrong-mode and symlink metadata preserved", flush=True)
+            print("Live-owner, mismatched-label, wrong-mode and symlink metadata preserved", flush=True)
         finally:
             for root in fixtures:
                 if root.is_symlink():
@@ -238,7 +250,7 @@ def protected_metadata(binary):
                     root.rmdir()
 
 
-def check_foreign_service(binary, audit):
+def check_foreign_service(binary):
     """An already registered root replayd service must also be preserved."""
     label = "com.mac-vnc-server.root-service-fixture." + uuid.uuid4().hex
     target = "user/0/" + label
@@ -248,7 +260,7 @@ def check_foreign_service(binary, audit):
             "LimitLoadToSessionType": ["Background"], "MachServices": {"com.apple.replayd": True}}))
         try:
             subprocess.run(["/bin/launchctl", "bootstrap", "user/0", str(path)], check=True, timeout=5)
-            check_broker_conflict(binary, audit, "an existing root capture service is not replaced")
+            check_rejection(binary, "an existing root capture service is not replaced")
             subprocess.run(["/bin/launchctl", "print", target], check=True, capture_output=True, timeout=5)
         finally:
             subprocess.run(["/bin/launchctl", "bootout", target], check=True, capture_output=True, timeout=5)
@@ -262,8 +274,9 @@ if __name__ == "__main__":
         parser.error("requires root; tests need the physical console to be at loginwindow")
     binary = options.binary.resolve()
     with protected_metadata(binary):
-        audit = check(binary, signal.SIGINT)
-    check(binary, signal.SIGKILL)
-    check(binary, signal.SIGINT, manager_signal=signal.SIGKILL)
-    check(binary, signal.SIGINT, manager_signal=signal.SIGHUP)
-    check_foreign_service(binary, audit)
+        check(binary, signal.SIGINT)
+    check(binary, signal.SIGTERM)
+    check(binary, signal.SIGHUP)
+    orphans = check(binary, signal.SIGKILL)
+    check(binary, signal.SIGINT, recover=orphans)
+    check_foreign_service(binary)

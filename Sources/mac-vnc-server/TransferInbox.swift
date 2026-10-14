@@ -98,7 +98,6 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
     private lazy var cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelSelected))
     private let partial = NSButton(checkboxWithTitle: "Use completed items from a failed transfer", target: nil, action: nil)
     private var timer: Timer?
-    private var statusItem: NSStatusItem?
     private var tableDragging = false
     private var tableDragFiles: [UUID: [URL]] = [:]
     private var nextCleanup = Date().addingTimeInterval(60)
@@ -131,8 +130,6 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         let note = NSTextField(wrappingLabelWithString: "Finder drops move received files out of this panel; other apps receive copies. Cancel keeps incomplete data. Client originals are unchanged.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
         note.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem?.button?.title = "VNC Files"; statusItem?.button?.target = self; statusItem?.button?.action = #selector(show)
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }

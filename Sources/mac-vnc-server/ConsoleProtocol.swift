@@ -3,7 +3,7 @@ import CVNCSession
 import Darwin
 import Foundation
 
-struct ConsoleIdentity: Codable, Equatable, Sendable {
+struct ConsoleIdentity: Codable, Hashable, Sendable {
     let uid: UInt32
     let auditID: Int32
     var native: VNCConsoleIdentity { VNCConsoleIdentity(uid: uid, audit_id: auditID) }

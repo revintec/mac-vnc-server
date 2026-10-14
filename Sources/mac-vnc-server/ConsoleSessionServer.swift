@@ -98,6 +98,10 @@ private final class ConsoleSupervisor: @unchecked Sendable {
     }
 
     func run() async {
+        // Retry abandoned root-service cleanup even if this startup finds an
+        // ordinary user on the console and does not need a new root service.
+        do { try ConsoleCaptureService.recoverOrphans() }
+        catch { logger.warning(error.localizedDescription) }
         var reportedMissing = false
         var retry = ConsoleWorkerRetryPolicy()
         while !Task.isCancelled {
@@ -111,8 +115,9 @@ private final class ConsoleSupervisor: @unchecked Sendable {
             reportedMissing = false
             var stable = false
             do {
-                let broker = identity.uid == 0 ? try ConsoleCaptureBroker(identity: identity) : nil
-                defer { broker?.stop() }
+                let service = identity.uid == 0 ? try ConsoleCaptureService(identity: identity) : nil
+                defer { service?.stop() }
+                try Task.checkCancellation()
                 let display: Int
                 if case .display(let index) = config.displaySelection { display = index } else { display = 0 }
                 let child = try ConsoleChild(options: ConsoleWorkerOptions(identity: identity,
@@ -147,10 +152,6 @@ private final class ConsoleSupervisor: @unchecked Sendable {
                 var heartbeat = ContinuousClock.now
                 var readySince: ContinuousClock.Instant?
                 while !Task.isCancelled, child.process.isRunning, desktop.isActive(token), ConsoleIdentity.current() == identity {
-                    if let broker, !broker.isRunning {
-                        logger.warning("console capture broker exited; restarting capture worker")
-                        break
-                    }
                     if desktop.hasReadyFrame {
                         if readySince == nil { readySince = .now }
                         if let readySince, readySince.duration(to: .now) >= .seconds(10) { stable = true }

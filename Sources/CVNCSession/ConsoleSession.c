@@ -20,17 +20,60 @@ static int number(CFDictionaryRef dict, CFStringRef key, int64_t *out) {
         CFNumberGetValue(value, kCFNumberSInt64Type, out);
 }
 
-static int decode(CFDictionaryRef dict, VNCConsoleIdentity *out) {
+static int decodeSession(CFDictionaryRef dict, VNCConsoleIdentity *out, int requireConsole) {
     int64_t uid = -1, asid = 0;
     CFTypeRef on = CFDictionaryGetValue(dict, CFSTR("kCGSSessionOnConsoleKey"));
     int64_t onNumber = 0;
     int onConsole = on && ((CFGetTypeID(on) == CFBooleanGetTypeID() && CFBooleanGetValue(on)) ||
         (number(dict, CFSTR("kCGSSessionOnConsoleKey"), &onNumber) && onNumber == 1));
-    if (!onConsole || !number(dict, CFSTR("kCGSSessionUserIDKey"), &uid) ||
+    if ((requireConsole && !onConsole) || !number(dict, CFSTR("kCGSSessionUserIDKey"), &uid) ||
         !number(dict, CFSTR("kCGSSessionAuditIDKey"), &asid) || uid < 0 || uid > UINT32_MAX ||
         asid <= 0 || asid > INT32_MAX) return EINVAL;
     *out = (VNCConsoleIdentity){(uint32_t)uid, (int32_t)asid};
     return 0;
+}
+
+static int decode(CFDictionaryRef dict, VNCConsoleIdentity *out) {
+    return decodeSession(dict, out, 1);
+}
+
+int VNCSessionForUser(uint32_t uid, VNCConsoleIdentity *identity) {
+    if (uid == 0) {
+        int error = VNCConsoleCurrent(identity);
+        return error ? error : (identity->uid == 0 ? 0 : ENXIO);
+    }
+    CFArrayRef (*copySessions)(void) = dlsym(RTLD_DEFAULT, "CGSCopySessionList");
+    if (!copySessions) return ENOTSUP;
+    CFArrayRef list = copySessions();
+    if (!list) return ENXIO;
+    int found = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+        CFTypeRef item = CFArrayGetValueAtIndex(list, i);
+        VNCConsoleIdentity candidate;
+        if (CFGetTypeID(item) == CFDictionaryGetTypeID() &&
+            !decodeSession(item, &candidate, 0) && candidate.uid == uid) {
+            if (found && identity->audit_id == candidate.audit_id) continue;
+            *identity = candidate;
+            found++;
+        }
+    }
+    CFRelease(list);
+    return found == 1 ? 0 : (found ? EEXIST : ENXIO);
+}
+
+int VNCSessionVerify(VNCConsoleIdentity identity) {
+    if (identity.uid == 0) return VNCConsoleVerify(identity);
+    if (getuid() != identity.uid || geteuid() != identity.uid ||
+        getgid() != getegid() || issetugid()) return EPERM;
+    auditinfo_addr_t audit = {0};
+    if (getaudit_addr(&audit, sizeof(audit))) return errno;
+    if (audit.ai_asid != identity.audit_id) return ESTALE;
+    CFDictionaryRef session = CGSessionCopyCurrentDictionary();
+    if (!session) return ENXIO;
+    VNCConsoleIdentity actual;
+    int error = decodeSession(session, &actual, 0);
+    CFRelease(session);
+    return error ? error : (actual.uid == identity.uid && actual.audit_id == identity.audit_id ? 0 : ESTALE);
 }
 
 static int consoleOwner(uint32_t uid) {
@@ -103,6 +146,36 @@ int VNCConsolePrepare(VNCConsoleIdentity identity) {
     if (getaudit_addr(&audit, sizeof(audit))) return errno;
     if (audit.ai_asid != identity.audit_id) return ESTALE;
     return consoleOwner(identity.uid);
+}
+
+int VNCSessionPrepare(VNCConsoleIdentity identity) {
+    if (identity.uid == 0) return VNCConsolePrepare(identity);
+    if (getuid() != 0 || geteuid() != 0) return VNCSessionVerify(identity);
+    VNCConsoleIdentity actual;
+    int error = VNCSessionForUser(identity.uid, &actual);
+    if (error) return error;
+    if (actual.audit_id != identity.audit_id) return ESTALE;
+    mach_port_name_t port = MACH_PORT_NULL;
+    if (audit_session_port(identity.audit_id, &port)) return errno;
+    au_asid_t joined = audit_session_join(port);
+    error = errno;
+    mach_port_deallocate(mach_task_self(), port);
+    if (joined != identity.audit_id) return error ? error : EPERM;
+    struct passwd *account = getpwuid(identity.uid);
+    if (!account) return ENOENT;
+    gid_t group = account->pw_gid;
+    if (setenv("HOME", account->pw_dir, 1) || setenv("USER", account->pw_name, 1) ||
+        setenv("LOGNAME", account->pw_name, 1) || unsetenv("TMPDIR") ||
+        initgroups(getenv("USER"), group) || setgid(group) || setuid(identity.uid)) return errno;
+    return getuid() == identity.uid && geteuid() == identity.uid ? 0 : EPERM;
+}
+
+int VNCSessionExecWorker(const char *executable, const char *options) {
+    int flags = fcntl(STDIN_FILENO, F_GETFD);
+    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFD, flags & ~FD_CLOEXEC) < 0) return errno;
+    char *const arguments[] = {(char *)executable, "--session-worker-attached", (char *)options, NULL};
+    execv(executable, arguments);
+    return errno;
 }
 
 int VNCConsoleExecWorker(const char *executable, const char *options) {

@@ -207,7 +207,7 @@ import zlib
     #expect(config.bindAddress == "utun4")
     #expect(config.clipboardSync && config.fileTransfer)
     #expect(!config.allowEncryption)
-    #expect(config.passwordFromEnvironment)
+    #expect(!config.passwordFromEnvironment)
 }
 
 @Test func cliDefaultsToAdaptiveFrameRate() throws {
@@ -220,14 +220,14 @@ import zlib
     #expect(config.adaptiveFrameRate)
 }
 
-@Test func cliUsesPasswordEnvironmentByDefault() throws {
+@Test func cliDefaultsToAccountAuthentication() throws {
     guard case .run(let config) = try CLI.parse(arguments: ["run"]) else {
         Issue.record("expected run command")
         return
     }
 
     #expect(config.password == nil)
-    #expect(config.passwordFromEnvironment)
+    #expect(!config.passwordFromEnvironment)
 }
 
 @Test func cliRejectsPasswordArgumentsWithoutEchoingTheSecret() throws {
@@ -241,7 +241,7 @@ import zlib
 }
 
 @Test func passwordComesOnlyFromTheEnvironment() throws {
-    let command = try CLI.parse(arguments: ["run"])
+    let command = try CLI.parse(arguments: ["run", "--session", "user"])
     #expect(throws: (any Error).self) { try command.resolvingPassword(environment: [:]) }
     #expect(throws: (any Error).self) { try command.resolvingPassword(environment: ["VNC_PASSWORD": ""]) }
     guard case .run(let config) = try command.resolvingPassword(environment: ["VNC_PASSWORD": "  testpass  "]) else {
@@ -256,7 +256,7 @@ import zlib
 }
 
 @Test func cliKeepsNoPasswordAsExplicitOverride() throws {
-    guard case .run(let config) = try CLI.parse(arguments: ["run", "--bind", "lo0", "--no-password"]) else {
+    guard case .run(let config) = try CLI.parse(arguments: ["run", "--session", "user", "--bind", "lo0", "--no-password"]) else {
         Issue.record("expected run command")
         return
     }
