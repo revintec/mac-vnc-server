@@ -618,7 +618,7 @@ struct MultiClientTests {
         #expect(try framePayload(active, encoding: 0).count == 8)
     }
 
-    @Test(arguments: ["RFB 003.003\n", "RFB 003.007\n", "RFB 003.008\n", AppleRFB.version], [false, true])
+    @Test(arguments: ["RFB 003.007\n", "RFB 003.008\n", AppleRFB.version], [false, true])
     func passwordEntryCanOutlastHandshakeBudget(version: String, fileTransfer: Bool) throws {
         let server = try MultiClientServer(handshakeTimeout: 0.4, authenticationTimeout: 3,
                                            fileTransfer: fileTransfer)
@@ -656,6 +656,7 @@ struct MultiClientTests {
         }
         #expect(!peer.hasData(timeout: 0.1), "password entry must not exhaust the protocol budget")
         try #require(peer.hasData(timeout: 0.7), "partial protocol work must not receive the password-entry timeout")
+        if !authenticated { #expect(try peer.number() == 1) }
         #expect(throws: (any Error).self) { try peer.read(1) }
     }
 
@@ -669,7 +670,7 @@ struct MultiClientTests {
         _ = try authenticationResponse(peer)
         #expect(!peer.hasData(timeout: 0.3))
         try #require(peer.hasData(timeout: 0.8), "an abandoned password prompt must expire")
-        #expect(throws: (any Error).self) { try peer.read(1) }
+        #expect(try peer.number() == 1)
     }
 
     @Test func passwordEntryBudgetIsSharedAcrossSelectionAndChallenge() throws {
@@ -679,7 +680,7 @@ struct MultiClientTests {
         defer { peer.finish() }
         _ = try authenticationResponse(peer, version: "RFB 003.008\n", selectorDelay: 0.6)
         try #require(peer.hasData(timeout: 0.5), "the challenge must not restart the password-entry budget")
-        #expect(throws: (any Error).self) { try peer.read(1) }
+        #expect(try peer.number() == 1)
     }
 
     @Test func clientLimitRejectsOnlyTheExtraConnection() throws {
@@ -693,7 +694,7 @@ struct MultiClientTests {
         _ = try second.handshake(version: AppleRFB.version)
         let extra = try server.connect()
         defer { extra.finish() }
-        #expect(throws: (any Error).self) { try extra.read(1) }
+        #expect(throws: (any Error).self) { try extra.handshake(version: AppleRFB.version) }
         for peer in [first, second] {
             try peer.write(fullUpdate)
             #expect(try framePayload(peer, encoding: 0).count == 8)
@@ -791,11 +792,7 @@ struct MultiClientTests {
         _ = try good.handshake(version: AppleRFB.version)
         let bad = try server.connect()
         defer { bad.finish() }
-        _ = try bad.read(12)
-        try bad.write(Array(AppleRFB.version.utf8))
-        #expect(try bad.read(2) == [1, 2])
-        _ = try bad.read(16)
-        try bad.write([UInt8](repeating: 0, count: 16))
+        try bad.write(try bad.authenticationResponse(password: "wrong-password"))
         #expect(try bad.number() == 1)
         #expect(throws: (any Error).self) { try bad.read(1) }
         try good.write(fullUpdate)
@@ -824,7 +821,7 @@ struct MultiClientTests {
         defer { server.finish() }
         let peer = try server.connect()
         defer { peer.finish() }
-        #expect(try peer.handshake(version: AppleRFB.version) == AppleRFB.desktopName(ClipboardTestPeer.systemShortHostname()))
+        #expect(try peer.handshake(version: AppleRFB.version) == AppleRFB.desktopName(ClipboardTestPeer.systemShortHostname(), allowEncryptedInput: true))
         var viewer = [UInt8](repeating: 0, count: 66)
         viewer[0] = 0x21; viewer[3] = 62; viewer[5] = 1
         viewer[36] = 0x08 // MiscStatus
@@ -977,7 +974,7 @@ struct MultiClientTests {
         let pending = try server.connect()
         defer { pending.finish() }
         _ = try pending.read(12)
-        server.server.stop()
+        server.stop()
         #expect(throws: (any Error).self) { try active.read(1) }
         #expect(throws: (any Error).self) { try pending.read(1) }
     }
@@ -986,34 +983,7 @@ struct MultiClientTests {
     private var changedStatus: [UInt8] { [0x14, 0, 0, 4, 0, 1, 0, 2] }
     private func authenticationResponse(_ peer: ClipboardTestPeer, version: String = AppleRFB.version,
                                         selectorDelay: TimeInterval = 0) throws -> [UInt8] {
-        #expect(try peer.read(12) == Array(AppleRFB.version.utf8))
-        try peer.write(Array(version.utf8))
-        let security: UInt8
-        if version == "RFB 003.003\n" {
-            #expect(try peer.number() == 2)
-            security = 2
-        } else {
-            #expect(try peer.read(1) == [1])
-            security = try peer.read(1)[0]
-            if version != AppleRFB.version || security == 30 {
-                if selectorDelay > 0 {
-                    #expect(!peer.hasData(timeout: selectorDelay), "allow prompting before security selection")
-                }
-                try peer.write([security])
-            }
-        }
-        if security == 30 {
-            #expect(try peer.read(4) == [0, 2] + UInt16(AppleAuth.prime.count).beBytes)
-            #expect(try peer.read(AppleAuth.prime.count) == AppleAuth.prime)
-            let serverKey = try peer.read(AppleAuth.prime.count)
-            let exchange = try AppleAuth.Exchange()
-            let key = try exchange.wrappingKey(peerKey: serverKey)
-            var credentials = [UInt8](repeating: 0, count: 128)
-            credentials.replaceSubrange(64..<72, with: "testpass".utf8)
-            return try AppleEncryption.ecb(credentials, key: key, encrypt: true) + exchange.publicKey
-        }
-        #expect(security == 2)
-        return try VNCAuth.response(challenge: peer.read(16), password: "testpass")
+        try peer.authenticationResponse(version: version, selectorDelay: selectorDelay)
     }
 
     private func fetch(_ peer: ClipboardTestPeer) throws {
@@ -1039,6 +1009,7 @@ private final class MultiClientServer: @unchecked Sendable {
     let input = MultiClientInput()
     let screen: MultiClientScreen
     private let done = DispatchSemaphore(value: 0)
+    private let worker: MultiClientListener
 
     init(maximumClients: Int = 32, handshakeTimeout: TimeInterval = 5,
          authenticationTimeout: TimeInterval = 120, messageTimeout: TimeInterval = 5,
@@ -1056,8 +1027,7 @@ private final class MultiClientServer: @unchecked Sendable {
         }
         guard status == 0 else { throw RFBError.socketError("test getsockname failed") }
         port = UInt16(bigEndian: address.sin_port)
-        let config = ServerConfig(bindAddress: "127.0.0.1", port: port, password: "testpass",
-            passwordFromEnvironment: false, fps: 30, scale: 1, encodingPreference: encodingPreference,
+        let config = ServerConfig(bindAddress: "127.0.0.1", port: port, fps: 30, scale: 1, encodingPreference: encodingPreference,
             displaySelection: .all, verbose: false, clipboardSync: true,
             adaptiveStreaming: false, adaptiveFrameRate: false, fileTransfer: fileTransfer,
             allowEncryption: allowEncryption)
@@ -1068,11 +1038,11 @@ private final class MultiClientServer: @unchecked Sendable {
             makeInput: { inputs.makeClient() },
             makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
             logger: ServerLogger(verbose: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil), maximumClients: maximumClients,
-            handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout, messageTimeout: messageTimeout,
+            handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout,
             transferInbox: transferInbox)
         // The listener is owned by this worker once created.
-        let worker = MultiClientListener(server: server, listener: listener, done: done)
-        DispatchQueue.global().async { worker.run() }
+        worker = MultiClientListener(server: server, listener: listener, done: done, handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout)
+        DispatchQueue.global().async { [worker] in worker.run() }
     }
 
     func connect() throws -> ClipboardTestPeer {
@@ -1095,8 +1065,10 @@ private final class MultiClientServer: @unchecked Sendable {
         return ClipboardTestPeer(socket: try ClientSocket(fd: fd))
     }
 
+    func stop() { worker.stop() }
+
     func finish() {
-        server.stop()
+        worker.stop()
         #expect(done.wait(timeout: .now() + 3) == .success)
         board.releaseGlobally()
     }
@@ -1106,13 +1078,38 @@ private final class MultiClientListener: @unchecked Sendable {
     let server: RFBServer
     let listener: ListeningSocket
     let done: DispatchSemaphore
-    init(server: RFBServer, listener: ListeningSocket, done: DispatchSemaphore) {
+    let handshakeTimeout: TimeInterval, authenticationTimeout: TimeInterval
+    private let lock = NSLock()
+    private var stopped = false
+    private var pending: [ObjectIdentifier: ClientSocket] = [:]
+    private let handshakes = DispatchGroup()
+    init(server: RFBServer, listener: ListeningSocket, done: DispatchSemaphore,
+         handshakeTimeout: TimeInterval, authenticationTimeout: TimeInterval) {
         self.server = server; self.listener = listener; self.done = done
+        self.handshakeTimeout = handshakeTimeout; self.authenticationTimeout = authenticationTimeout
     }
     func run() {
-        defer { done.signal() }
-        do { try server.run(listener: listener) }
-        catch { Issue.record(error) }
+        defer { handshakes.wait(); server.waitForClients(); done.signal() }
+        do {
+            while !lock.withLock({ stopped }) {
+                guard let client = try listener.acceptClient(timeout: 0.05) else { continue }
+                let id = ObjectIdentifier(client)
+                lock.withLock { pending[id] = client }
+                handshakes.enter()
+                DispatchQueue.global().async { [self] in
+                    defer { _ = lock.withLock { pending.removeValue(forKey: id) }; handshakes.leave() }
+                    do {
+                        let admission = try AccountHandshake.authenticate(socket: client, handshakeTimeout: handshakeTimeout,
+                            authenticationTimeout: authenticationTimeout, verify: fixtureAccount)
+                        _ = server.serve(client: client, admission: admission)
+                    } catch { client.shutdown() }
+                }
+            }
+        } catch { Issue.record(error) }
+    }
+    func stop() {
+        lock.withLock { stopped = true; for client in pending.values { client.shutdown() } }
+        server.stop()
     }
 }
 

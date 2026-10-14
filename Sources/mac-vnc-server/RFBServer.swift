@@ -4,8 +4,6 @@ import Foundation
 struct ServerConfig: Codable, Sendable {
     let bindAddress: String
     let port: UInt16
-    let password: String?
-    let passwordFromEnvironment: Bool
     let fps: Int
     let scale: Double
     let encodingPreference: EncodingPreference
@@ -19,16 +17,10 @@ struct ServerConfig: Codable, Sendable {
     var allowEncryption = false
     var zlibConfiguration = ZlibConfiguration()
     var transferOptions = TransferStore.Options()
-    var nativeFileDrops = false
-    var insecureAllowNoAuth = false
-    var sessionTarget: SessionTarget = .user
     var transferDirectoryIsExplicit = false
 }
 
-enum SessionTarget: String, Codable, Sendable { case listener, user, console }
-
 enum DisplaySelection: Equatable, Codable, Sendable {
-    case automatic
     case all
     case display(Int)
 }
@@ -128,7 +120,6 @@ final class RFBServer: @unchecked Sendable {
     private let transferInbox: TransferInbox?
     private let maximumClients: Int
     private let handshakeTimeout: TimeInterval
-    private let authenticationTimeout: TimeInterval
     private let messageTimeout: TimeInterval
     private let lock = NSLock()
     private let workers = DispatchGroup()
@@ -143,7 +134,6 @@ final class RFBServer: @unchecked Sendable {
         logger: ServerLogger,
         maximumClients: Int = 32,
         handshakeTimeout: TimeInterval = 5,
-        authenticationTimeout: TimeInterval = 120,
         messageTimeout: TimeInterval = 5,
         transferInbox: TransferInbox? = nil
     ) {
@@ -155,55 +145,7 @@ final class RFBServer: @unchecked Sendable {
         self.transferInbox = transferInbox
         self.maximumClients = maximumClients
         self.handshakeTimeout = handshakeTimeout
-        self.authenticationTimeout = authenticationTimeout
         self.messageTimeout = messageTimeout
-    }
-
-    func run(listener suppliedListener: ListeningSocket? = nil) throws {
-        let listener = try suppliedListener ?? ListeningSocket(bindAddress: config.bindAddress, port: config.port)
-        // Recheck the actual address: an interface may change after CLI parsing
-        // or between service installation and launch.
-        guard config.password != nil || config.passwordFromEnvironment || config.insecureAllowNoAuth
-                || BindAddress.isLoopback(listener.bindAddress) else {
-            throw RFBError.socketError("refusing unauthenticated VNC on \(listener.bindAddress); use --insecure-allow-no-auth to opt in")
-        }
-        defer {
-            stop()
-            workers.wait()
-        }
-        logger.info("mac-vnc-server \(AppVersion.current)")
-        let interfaceDescription = listener.bindAddress == config.bindAddress ? "" : " (interface \(config.bindAddress))"
-        logger.info("mac-vnc-server listening on \(listener.bindAddress):\(config.port)\(interfaceDescription)")
-        let fpsDescription = config.adaptiveFrameRate ? "auto(60-45-30)" : "\(config.fps)"
-        logger.info("fps=\(fpsDescription) scale=\(config.scale) encoding=\(config.encodingPreference.rawValue) display=\(config.displaySelection.description)")
-        logger.info("zlib backend=\(config.zlibConfiguration.backend.rawValue) version=\(config.zlibConfiguration.backend.version) level=\(config.zlibConfiguration.initialLevel) adaptive=\(config.adaptiveStreaming && config.zlibConfiguration.level == nil)")
-        logger.info("password configured: \(config.password != nil)")
-        logger.info("clipboard sync: \(config.clipboardSync ? "enabled" : "disabled")")
-        let encryptionDescription = !config.allowEncryption ? "disabled by server policy"
-            : (config.fileTransfer ? "negotiated with viewer" : "disabled (basic VNC profile)")
-        logger.info("session encryption: \(encryptionDescription)")
-        if config.fileTransfer {
-            logger.info("Apple file transfer backend: \(NativeTransferProcess.available ? "enabled" : "unavailable: native helpers missing")")
-            logger.info(config.allowEncryption
-                ? "Apple file drag and drop: enabled; encryption negotiated with viewer"
-                : "Apple file drag and drop: experimental plaintext mode; encryption key exchange suppressed")
-            if let transferInbox {
-                logger.info("Incoming file drops: staged local files; storage=\(transferInbox.store.options.root.path)")
-            } else { logger.info("Incoming file drops: native file promises") }
-            if config.password != nil {
-                logger.info(config.allowEncryption
-                    ? "Screen Sharing login: any username and the configured server password (Apple authentication)"
-                    : "Screen Sharing login: configured server password (VNC authentication)")
-            }
-        }
-        logger.info("shared desktop: up to \(maximumClients) concurrent clients per port")
-        let connectionSuffix = config.fileTransfer ? "/" : ""
-        logger.info("Connect with vnc://\(listener.bindAddress == "0.0.0.0" ? "127.0.0.1" : listener.bindAddress):\(config.port)\(connectionSuffix)")
-
-        while !lock.withLock({ stopped }) {
-            guard let client = try listener.acceptClient(timeout: 0.25) else { continue }
-            _ = serve(client: client)
-        }
     }
 
     var activeClientCount: Int { lock.withLock { clients.count } }
@@ -212,7 +154,7 @@ final class RFBServer: @unchecked Sendable {
     /// Takes an already-connected socket. Account workers enter here after the
     /// listener has authenticated and passed ownership through SCM_RIGHTS.
     @discardableResult
-    func serve(client: ClientSocket, admission: SessionAdmission? = nil) -> Bool {
+    func serve(client: ClientSocket, admission: SessionAdmission) -> Bool {
         let id = ObjectIdentifier(client)
         let admitted = lock.withLock {
             guard !stopped, clients.count < maximumClients else { return false }
@@ -220,7 +162,7 @@ final class RFBServer: @unchecked Sendable {
             return true
         }
         guard admitted else {
-            if let admission { try? AccountHandshake.reject(socket: client, version: admission.version) }
+            try? AccountHandshake.reject(socket: client, version: admission.version)
             client.shutdown()
             logger.warning("connection rejected: server stopping or client limit reached")
             return false
@@ -229,12 +171,12 @@ final class RFBServer: @unchecked Sendable {
             // A peer closing during socket setup must only fail its own session.
             try client.configureTCP()
             let session = try RFBClientSession(
-                socket: client, password: config.password, fps: config.fps,
+                socket: client, fps: config.fps,
                 encodingPreference: config.encodingPreference, capture: capture,
                 input: makeInput(), clipboard: makeClipboard(),
                 clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
                 adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
-                handshakeTimeout: handshakeTimeout, authenticationTimeout: authenticationTimeout,
+                handshakeTimeout: handshakeTimeout,
                 messageTimeout: messageTimeout, fileTransfer: config.fileTransfer,
                 allowEncryption: config.allowEncryption, zlibConfiguration: config.zlibConfiguration,
                 transferInbox: transferInbox
@@ -251,7 +193,7 @@ final class RFBServer: @unchecked Sendable {
             }
             return true
         } catch {
-            if let admission { try? AccountHandshake.reject(socket: client, version: admission.version) }
+            try? AccountHandshake.reject(socket: client, version: admission.version)
             client.shutdown()
             lock.withLock { clients[id] = nil }
             logger.warning("could not start client: \(error.localizedDescription)")
@@ -263,19 +205,6 @@ final class RFBServer: @unchecked Sendable {
         lock.withLock {
             stopped = true
             for client in clients.values { client.shutdown() }
-        }
-    }
-}
-
-extension DisplaySelection {
-    var description: String {
-        switch self {
-        case .automatic:
-            return "auto"
-        case .all:
-            return "all"
-        case .display(let index):
-            return "\(index)"
         }
     }
 }
@@ -439,10 +368,8 @@ final class RFBClientSession: @unchecked Sendable {
 
     private let socket: ClientSocket
     private let handshakeTimeout: TimeInterval
-    private let authenticationTimeout: TimeInterval
     private let messageTimeout: TimeInterval
     private let writer = DispatchGroup()
-    private let password: String?
     private let minimumFrameInterval: TimeInterval
     private var frameInterval: TimeInterval
     private let encodingPreference: EncodingPreference
@@ -533,7 +460,6 @@ final class RFBClientSession: @unchecked Sendable {
 
     init(
         socket: ClientSocket,
-        password: String?,
         fps: Int,
         encodingPreference: EncodingPreference,
         capture: FramebufferSource,
@@ -544,7 +470,6 @@ final class RFBClientSession: @unchecked Sendable {
         adaptiveFrameRate: Bool,
         logger: ServerLogger,
         handshakeTimeout: TimeInterval = 5,
-        authenticationTimeout: TimeInterval = 120,
         messageTimeout: TimeInterval = 5,
         fileTransfer: Bool = false,
         allowEncryption: Bool = true,
@@ -553,10 +478,8 @@ final class RFBClientSession: @unchecked Sendable {
     ) throws {
         self.transferInbox = transferInbox
         self.handshakeTimeout = handshakeTimeout
-        self.authenticationTimeout = authenticationTimeout
         self.messageTimeout = messageTimeout
         self.socket = socket
-        self.password = password
         minimumFrameInterval = 1.0 / Double(fps)
         frameInterval = minimumFrameInterval
         self.encodingPreference = encodingPreference
@@ -574,19 +497,15 @@ final class RFBClientSession: @unchecked Sendable {
         zlibEncoder = try ZlibEncoder(configuration: zlibConfiguration)
     }
 
-    func run(admission: SessionAdmission? = nil) throws {
+    func run(admission: SessionAdmission) throws {
         let initialFrame = try capture.capture()
         currentLayout = initialFrame.layout
         previousFramebuffer = initialFrame
 
         try socket.withReadTimeout(handshakeTimeout, operation: "RFB handshake") {
-            if let admission {
-                appleWrappingKey = admission.wrappingKey
-                try socket.writeAll(UInt32(0).beBytes)
-                try initializeClient(versionText: admission.version, initialFrame: initialFrame)
-            } else {
-                try handshake(initialFrame: initialFrame)
-            }
+            appleWrappingKey = admission.wrappingKey
+            try socket.writeAll(UInt32(0).beBytes)
+            try initializeClient(versionText: admission.version, initialFrame: initialFrame)
         }
         let captureRateConsumer = ObjectIdentifier(self)
         self.captureRateConsumer = captureRateConsumer
@@ -714,99 +633,6 @@ final class RFBClientSession: @unchecked Sendable {
         }
     }
 
-    private func handshake(initialFrame: Framebuffer) throws {
-        let preferLegacyHandshake = password != nil
-        let banner = (clipboardSync || fileTransferEnabled) ? AppleRFB.version
-            : (preferLegacyHandshake ? "RFB 003.003\n" : "RFB 003.008\n")
-        try socket.writeString(banner)
-        let clientVersion = try socket.readExact(12)
-        let versionText = String(bytes: clientVersion, encoding: .ascii) ?? "unknown"
-        guard ["RFB 003.003\n", "RFB 003.007\n", "RFB 003.008\n", AppleRFB.version].contains(versionText),
-              versionText != AppleRFB.version || clipboardSync || fileTransferEnabled else {
-            throw RFBError.protocolError("unsupported RFB protocol version")
-        }
-        let isRFB33 = versionText == "RFB 003.003\n"
-        logger.verbose("RFB handshake: viewer selected \(versionText.trimmingCharacters(in: .whitespacesAndNewlines))")
-        // Some viewers prompt before selecting a security type, others after
-        // receiving its challenge. Both pauses share one password-entry limit.
-        let authenticationDeadline = DispatchTime.now() + authenticationTimeout
-        if password != nil {
-            logger.verbose("RFB authentication: password_entry_timeout=\(authenticationTimeout)s")
-        }
-
-        if isRFB33 {
-            if let password {
-                try socket.writeAll(UInt32(2).beBytes)
-                try authenticate(password: password, deadline: authenticationDeadline)
-            } else {
-                try socket.writeAll(UInt32(1).beBytes)
-            }
-        } else {
-            let appleAuthentication = versionText == AppleRFB.version && fileTransferEnabled
-                && allowEncryption && password != nil
-            if password == nil {
-                try socket.writeAll([1, 1])
-            } else {
-                // Never offer None alongside a configured password.
-                // Use type 30 when the native profile can negotiate encryption:
-                // type 2 does not initialize the viewer's wrapping cipher.
-                // Explicit plaintext sessions retain classic VNC authentication.
-                // Type 30 also enables per-event encryption without records,
-                // independent of the EncryptedInputEvent capability bit.
-                try socket.writeAll([1, appleAuthentication ? 30 : 2])
-            }
-
-            // Apple's viewer implicitly selects the single classic security type
-            // in 3.889 and waits for the challenge (or None's result) immediately.
-            // Standard 3.7/3.8 viewers still send the one-byte selector.
-            let selectedSecurity: UInt8
-            if versionText == AppleRFB.version && !appleAuthentication {
-                selectedSecurity = password == nil ? 1 : 2
-            } else if password != nil {
-                selectedSecurity = try readAuthenticationBytes(1, deadline: authenticationDeadline)[0]
-            } else {
-                selectedSecurity = try socket.readExact(1)[0]
-            }
-            guard !appleAuthentication || selectedSecurity == 30 else {
-                throw RFBError.protocolError("security type was not offered")
-            }
-            logger.verbose("RFB handshake: security type \(selectedSecurity)")
-            switch selectedSecurity {
-            case 1:
-                guard password == nil else {
-                    throw RFBError.authenticationFailed
-                }
-                // RFB 3.7 omits SecurityResult for the None security type.
-                if versionText != "RFB 003.007\n" {
-                    try socket.writeAll(UInt32(0).beBytes)
-                }
-            case 2:
-                guard let password else {
-                    try socket.writeAll(UInt32(1).beBytes)
-                    throw RFBError.authenticationFailed
-                }
-                try authenticate(password: password, deadline: authenticationDeadline)
-            case 30:
-                guard appleAuthentication, let password else { throw RFBError.authenticationFailed }
-                let exchange = try AppleAuth.Exchange()
-                try socket.writeAll(exchange.challenge)
-                let credentials = try readAuthenticationBytes(128, deadline: authenticationDeadline)
-                let peerKey = try socket.readExact(AppleAuth.prime.count)
-                do {
-                    appleWrappingKey = try exchange.authenticate(credentials: credentials, peerKey: peerKey, password: password)
-                    try socket.writeAll(UInt32(0).beBytes)
-                } catch {
-                    try socket.writeAll(UInt32(1).beBytes)
-                    throw error
-                }
-            default:
-                throw RFBError.protocolError("unsupported security type \(selectedSecurity)")
-            }
-        }
-
-        try initializeClient(versionText: versionText, initialFrame: initialFrame)
-    }
-
     private func initializeClient(versionText: String, initialFrame: Framebuffer) throws {
         let clientInit = try socket.readExact(1)[0]
         logger.verbose("RFB handshake: ClientInit=\(clientInit)")
@@ -817,41 +643,6 @@ final class RFBClientSession: @unchecked Sendable {
         // request is declined by leaving server flag 0x04 clear, not by disconnecting.
         try sendServerInit(framebuffer: initialFrame)
         logger.info("client connected: \(versionText.trimmingCharacters(in: .whitespacesAndNewlines)), framebuffer \(initialFrame.width)x\(initialFrame.height), clipboard=\(clipboardSync ? (usesAppleExtensions ? "apple" : "classic") : "off")")
-    }
-
-    private func readAuthenticationBytes(_ count: Int, deadline: DispatchTime) throws -> [UInt8] {
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard now < deadline.uptimeNanoseconds else {
-            throw RFBError.socketError("RFB password entry timed out")
-        }
-        let remaining = Double(deadline.uptimeNanoseconds - now) / 1_000_000_000
-        // Suspend the handshake budget only until the response starts. The
-        // remaining bytes (including Apple's public key) use its original
-        // deadline, so a partial response cannot hold a client slot for minutes.
-        let first = try socket.withReadTimeout(remaining, operation: "RFB password entry",
-                                              suspendingOuterDeadline: true) {
-            try socket.readExact(1)
-        }
-        return try first + socket.readExact(count - 1)
-    }
-
-    private func authenticate(password: String, deadline: DispatchTime) throws {
-        var challenge = [UInt8](repeating: 0, count: 16)
-        let status = SecRandomCopyBytes(kSecRandomDefault, challenge.count, &challenge)
-        if status != errSecSuccess {
-            for index in challenge.indices {
-                challenge[index] = UInt8.random(in: UInt8.min...UInt8.max)
-            }
-        }
-
-        try socket.writeAll(challenge)
-        let response = try readAuthenticationBytes(16, deadline: deadline)
-        if try VNCAuth.response(challenge: challenge, password: password) == response {
-            try socket.writeAll(UInt32(0).beBytes)
-        } else {
-            try socket.writeAll(UInt32(1).beBytes)
-            throw RFBError.authenticationFailed
-        }
     }
 
     private func desktopHostname() -> String {

@@ -81,10 +81,12 @@ struct SessionWorkerOptions: Codable, Sendable {
     let config: ServerConfig
 
     func validate() throws {
-        guard identity.auditID > 0, config.password == nil, !config.passwordFromEnvironment,
-              (1...120).contains(config.fps), config.scale.isFinite, config.scale > 0, config.scale <= 4,
-              config.sessionTarget != .listener else {
+        guard identity.auditID > 0,
+              (1...120).contains(config.fps), config.scale.isFinite, config.scale > 0, config.scale <= 4 else {
             throw CLIError.invalidArgument("invalid account session worker options")
+        }
+        if identity.uid == 0, config.clipboardSync || config.fileTransfer {
+            throw CLIError.invalidArgument("loginwindow workers support display and input only")
         }
     }
 

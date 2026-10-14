@@ -26,8 +26,6 @@ The panel's Cancel button stops transfers owned by this server process. A
 separate `mac-vnc-server transfers` process can reopen the same completed
 copies, but cannot cancel another process's active native receivers.
 
-Use `--file-drop-mode native` with `--file-transfer` to keep the previous native
-file-promise workflow, which delivers directly into a Finder destination.
 The staged path avoids dependence on the target app implementing file promises;
 it does not force an app to accept an otherwise unsupported file type.
 Server-to-client drops still use Apple's native helper and the client's own

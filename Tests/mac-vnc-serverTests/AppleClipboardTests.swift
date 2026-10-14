@@ -287,7 +287,7 @@ struct AppleClipboardTests {
 }
 
 @Test func classicClipboardStillWorksWithAppleBanner() throws {
-    for version in ["RFB 003.003\n", "RFB 003.007\n", "RFB 003.008\n"] {
+    for version in ["RFB 003.007\n", "RFB 003.008\n"] {
         let peer = try ClipboardTestPeer()
         defer { peer.finish() }
         let name = try peer.handshake(version: version)
@@ -309,28 +309,15 @@ struct AppleClipboardTests {
     defer { peer.finish() }
     #expect(try peer.read(12) == Array(AppleRFB.version.utf8))
     try peer.write(Array("RFB 003.008\n".utf8))
-    #expect(try peer.read(2) == [1, 2])
+    #expect(try peer.read(2) == [1, 30])
     try peer.write([1])
-    #expect(throws: (any Error).self) { try peer.read(1) }
-}
-
-@Test func clipboardHandshakeNoAuthenticationHasCorrectVersionFraming() throws {
-    for version in ["RFB 003.003\n", "RFB 003.007\n", "RFB 003.008\n", AppleRFB.version] {
-        let peer = try ClipboardTestPeer(password: nil)
-        defer { peer.finish() }
-        _ = try peer.handshake(version: version)
-    }
+    #expect(try peer.number() == 1)
 }
 
 @Test func applePasswordAuthenticationRejectsAnInvalidChallengeResponse() throws {
     let peer = try ClipboardTestPeer()
     defer { peer.finish() }
-    _ = try peer.read(12)
-    try peer.write(Array(AppleRFB.version.utf8))
-    #expect(try peer.read(2) == [1, 2])
-    // Apple's type-2 path has no selector byte before the challenge.
-    _ = try peer.read(16)
-    try peer.write([UInt8](repeating: 0, count: 16))
+    try peer.write(try peer.authenticationResponse(password: "wrong-password"))
     #expect(try peer.number() == 1)
     #expect(throws: (any Error).self) { try peer.read(1) }
 }
@@ -449,18 +436,18 @@ final class ClipboardTestPeer: @unchecked Sendable {
 
     let clipboard = ClipboardTestBridge()
     let socket: ClientSocket
-    let password: String?
+    let password: String
     let done = DispatchSemaphore(value: 0)
     private var ownsSession = true
     private(set) var appleWrappingKey: [UInt8]?
 
-    init(socket: ClientSocket, password: String? = "testpass") {
+    init(socket: ClientSocket, password: String = "testpass") {
         self.socket = socket
         self.password = password
         ownsSession = false
     }
 
-    init(password: String? = "testpass", includesCursor: Bool = false, fileTransfer: Bool = false,
+    init(password: String = "testpass", includesCursor: Bool = false, fileTransfer: Bool = false,
          messageTimeout: TimeInterval = 5, allowEncryption: Bool = true) throws {
         self.password = password
         var fds = [Int32](repeating: -1, count: 2)
@@ -473,14 +460,18 @@ final class ClipboardTestPeer: @unchecked Sendable {
         }
         socket = try ClientSocket(fd: fds[1])
         let server = try ClientSocket(fd: fds[0])
-        let session = try RFBClientSession(socket: server, password: password, fps: 30,
+        let session = try RFBClientSession(socket: server, fps: 30,
             encodingPreference: .raw, capture: ClipboardTestScreen(includesCursor: includesCursor), input: ClipboardTestInput(),
             clipboard: clipboard, clipboardSync: true, adaptiveStreaming: false,
             adaptiveFrameRate: false, logger: ServerLogger(verbose: false), messageTimeout: messageTimeout,
             fileTransfer: fileTransfer, allowEncryption: allowEncryption)
         DispatchQueue.global().async { [self] in
-            defer { done.signal() }
-            try? session.run()
+            defer { server.shutdown(); done.signal() }
+            do {
+                let admission = try AccountHandshake.authenticate(socket: server, verify: fixtureAccount)
+                try session.run(admission: admission)
+            } catch { }
+
         }
     }
 
@@ -510,36 +501,34 @@ final class ClipboardTestPeer: @unchecked Sendable {
     func handshake(version: String, shared: Bool = true) throws -> [UInt8] {
         #expect(try read(12) == Array(AppleRFB.version.utf8))
         try write(Array(version.utf8))
-        var security: UInt8 = password == nil ? 1 : 2
-        if version == "RFB 003.003\n" {
-            #expect(try number() == (password == nil ? 1 : 2))
-        } else {
-            #expect(try read(1) == [1])
-            security = try read(1)[0]
-            #expect(security == (password == nil ? 1 : 2) || (version == AppleRFB.version && security == 30))
-            if version != AppleRFB.version || security == 30 { try write([security]) }
-        }
-        if security == 30 {
-            #expect(try read(4) == [0, 2] + UInt16(AppleAuth.prime.count).beBytes)
-            #expect(try read(AppleAuth.prime.count) == AppleAuth.prime)
-            let serverKey = try read(AppleAuth.prime.count)
-            let exchange = try AppleAuth.Exchange()
-            let key = try exchange.wrappingKey(peerKey: serverKey)
-            appleWrappingKey = key
-            var credentials = [UInt8](repeating: 0, count: 128)
-            credentials.replaceSubrange(64..<(64 + (password ?? "").utf8.count), with: (password ?? "").utf8)
-            try write(AppleEncryption.ecb(credentials, key: key, encrypt: true) + exchange.publicKey)
-            #expect(try number() == 0)
-        } else if let password {
-            let challenge = try read(16)
-            try write(VNCAuth.response(challenge: challenge, password: password))
-            #expect(try number() == 0)
-        } else if version != "RFB 003.003\n" && version != "RFB 003.007\n" {
-            #expect(try number() == 0)
-        }
+        try write(try authenticationResponseAfterVersion(password: password))
+        guard try number() == 0 else { throw RFBError.authenticationFailed }
         try write([version == AppleRFB.version ? 0xc0 | (shared ? 1 : 0) : (shared ? 1 : 0)])
         _ = try read(20)
         return try read(Int(number()))
+    }
+
+    func authenticationResponse(version: String = AppleRFB.version, password: String = "testpass",
+                                selectorDelay: TimeInterval = 0) throws -> [UInt8] {
+        #expect(try read(12) == Array(AppleRFB.version.utf8))
+        try write(Array(version.utf8))
+        return try authenticationResponseAfterVersion(password: password, selectorDelay: selectorDelay)
+    }
+
+    private func authenticationResponseAfterVersion(password: String, selectorDelay: TimeInterval = 0) throws -> [UInt8] {
+        #expect(try read(2) == [1, 30])
+        if selectorDelay > 0 { #expect(!hasData(timeout: selectorDelay)) }
+        try write([30])
+        #expect(try read(4) == [0, 2] + UInt16(AppleAuth.prime.count).beBytes)
+        #expect(try read(AppleAuth.prime.count) == AppleAuth.prime)
+        let serverKey = try read(AppleAuth.prime.count)
+        let exchange = try AppleAuth.Exchange()
+        let key = try exchange.wrappingKey(peerKey: serverKey)
+        appleWrappingKey = key
+        var credentials = [UInt8](repeating: 0, count: 128)
+        credentials.replaceSubrange(0..<12, with: "fixture-user".utf8)
+        credentials.replaceSubrange(64..<(64 + password.utf8.count), with: password.utf8)
+        return try AppleEncryption.ecb(credentials, key: key, encrypt: true) + exchange.publicKey
     }
 
     func enableAppleClipboard() throws {
@@ -563,4 +552,10 @@ final class ClipboardTestPeer: @unchecked Sendable {
         let contents = try AppleClipboard.decode(header: header, compressed: read(header.compressedSize))
         return (header, contents)
     }
+}
+
+/// Test-only verifier: the production handshake still exercises both account fields and DH/AES.
+func fixtureAccount(_ username: String, _ password: String) throws -> ConsoleIdentity {
+    guard username == "fixture-user", password == "testpass" else { throw RFBError.authenticationFailed }
+    return ConsoleIdentity(uid: 501, auditID: 12345)
 }

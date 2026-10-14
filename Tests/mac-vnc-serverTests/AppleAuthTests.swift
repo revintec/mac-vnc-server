@@ -10,25 +10,31 @@ struct AppleAuthTests {
         #expect(try server.wrappingKey(peerKey: client.publicKey) == key)
         let password = "eightchr-and-the-rest"
         var credentials = [UInt8](repeating: 0xa5, count: 128)
-        credentials[0] = 0
+        credentials.replaceSubrange(0..<8, with: Array("fixture".utf8) + [0])
         credentials.replaceSubrange(64..<(65 + password.utf8.count), with: Array(password.utf8) + [0])
         let encrypted = try AppleEncryption.ecb(credentials, key: key, encrypt: true)
-        #expect(try server.authenticate(credentials: encrypted, peerKey: client.publicKey, password: password) == key)
+        let authenticated = try server.authenticateAccount(credentials: encrypted, peerKey: client.publicKey, verify: { name, actual in
+            #expect(name == "fixture" && actual == password)
+            return name
+        })
+        #expect(authenticated.1 == key)
         for wrong in ["", "wrong", "eightchr", "eightchr-and-the-reST", password + "x"] {
             #expect(throws: (any Error).self) {
-                try server.authenticate(credentials: encrypted, peerKey: client.publicKey, password: wrong)
+                try server.authenticateAccount(credentials: encrypted, peerKey: client.publicKey, verify: { _, actual in
+                    guard actual == wrong else { throw RFBError.authenticationFailed }; return actual
+                })
             }
         }
         credentials[0..<64] = ArraySlice(repeating: 1, count: 64)
         let invalidName = try AppleEncryption.ecb(credentials, key: key, encrypt: true)
         #expect(throws: (any Error).self) {
-            try server.authenticate(credentials: invalidName, peerKey: client.publicKey, password: password)
+            try server.authenticateAccount(credentials: invalidName, peerKey: client.publicKey, verify: { _, _ in Issue.record("malformed credentials reached verifier"); return 0 })
         }
-        credentials[0] = 0
+        credentials.replaceSubrange(0..<8, with: Array("fixture".utf8) + [0])
         credentials[64...] = ArraySlice(repeating: 1, count: 64)
         let invalidPassword = try AppleEncryption.ecb(credentials, key: key, encrypt: true)
         #expect(throws: (any Error).self) {
-            try server.authenticate(credentials: invalidPassword, peerKey: client.publicKey, password: password)
+            try server.authenticateAccount(credentials: invalidPassword, peerKey: client.publicKey, verify: { _, _ in Issue.record("malformed credentials reached verifier"); return 0 })
         }
     }
 

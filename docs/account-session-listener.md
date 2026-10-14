@@ -1,6 +1,6 @@
 # Account session listener
 
-The default `--session listener` opens one TCP port and authenticates macOS
+The listener opens one TCP port and authenticates macOS
 usernames/passwords through OpenDirectory. `VNC_PASSWORD` is neither required nor
 read. Account-policy failures and incorrect credentials fail authentication.
 Passwords never enter worker options, child environments, logs, files, or IPC.
@@ -26,6 +26,22 @@ listener (root for multiple accounts; otherwise current user only)
 Root listener also owns lifecycle/cleanup of the isolated root replayd service.
 ```
 
+Both worker identities use `StreamingScreenCapture`, including RichCursor,
+dirty-region hints, a bounded newest-frame copy queue, capture-driven wakeups,
+and adaptive SCStream frame rates. The loginwindow source additionally checks
+its console identity and requires ScreenCaptureKit's display IDs to match
+CoreGraphics, with valid bounds in that session. A mismatch or session change fails closed;
+it never substitutes the invoking user's display. Clipboard, file transfer and
+menu UI stay disabled for UID 0.
+
+The common `MacInputController` and `SharedInputController` still build and
+coordinate events. The final posting operation differs: loginwindow uses the
+verified HID adapter. On 2026-10-15, a bounded probe in the correct UID 0/audit
+session obtained a system cursor and complete ScreenCaptureKit frames, but
+mouse events posted to either `cgSessionEventTap` or `cghidEventTap`, using both
+`combinedSessionState` and the default mouse-event source, left the pointer unchanged. Keeping HID preserves working input; successful capture or
+permission preflight does not establish event delivery.
+
 There is one session worker per UID/audit session **per listener**. A fresh exec
 attaches it to the target bootstrap/audit session and drops credentials for an
 ordinary account before AppKit or capture initializes. Additional clients reuse
@@ -37,7 +53,7 @@ The listener transfers the authenticated TCP descriptor using `SCM_RIGHTS` over
 an inherited anonymous Unix socket. Its metadata contains only the selected
 session identity, negotiated RFB version, and credential-exchange wrapping key.
 The worker sends SecurityResult, reads ClientInit, sends ServerInit, and runs the
-same RFB engine used by the existing user backend. The listener closes its copy
+shared RFB engine. The listener closes its copy
 without calling `shutdown`, which would also disconnect the worker's socket.
 No framebuffer, input, clipboard, or file-transfer payload is relayed through the
 listener. Each client retains independent encoders, encryption state, flow
@@ -61,8 +77,7 @@ exchange uses the existing Apple DH/AES implementation; framebuffer, clipboard,
 and file-transfer traffic remain plaintext by default. After type-30 login,
 Screen Sharing wraps keyboard/mouse events in individual AES blocks using the
 authentication key, even with session-record encryption disabled. The worker
-decodes these input envelopes without enabling record ciphers. A type-2 legacy
-connection has no wrapping key and still rejects encrypted input. ARD does not establish a
+decodes these input envelopes without enabling record ciphers. ARD does not establish a
 trusted server identity, so protect untrusted-network access with VPN/SSH.
 
 `root` means the actual root account, not an administrator alias. The account
@@ -86,9 +101,7 @@ started for this route.
 
 Connections remain attached to their selected session. A selected user desktop
 can continue off console. A selected loginwindow worker ends when its console
-identity changes. Reconnect as root to select the new console owner. The legacy
-`--session console` follows console identities using the older architecture and
-remains available separately.
+identity changes. Reconnect as root to select the new console owner. There is no separate console-following endpoint or raw-frame relay.
 
 If the console cannot be resolved during a transition, authentication reports
 that the password was accepted but the physical console is temporarily
@@ -101,13 +114,24 @@ Incorrect passwords and account-policy failures remain generic.
 
 ## Menu and storage
 
-Each user worker owns an adaptive template remote-display icon. While VNC clients
-are connected and that user's desktop is visible on the physical console, the
-icon becomes a blinking red eye. It returns to the template icon at loginwindow,
-on another user's desktop, or when no clients remain. Unknown visibility is
-reported explicitly. Clicking opens a menu showing physical-display state,
-connected-client count, **Switch to Login Window**, and **Received Files…**. The
-files item is disabled when staged receiving is disabled.
+Each user worker owns a remote-display icon. The normal template icon appears
+only after verified, consistent observations show that this worker is off console
+and loginwindow or another user owns the physical console. Confirmation requires
+matching samples at least half a second apart. Visible, unknown, conflicting and
+transitional states all show the blinking red eye, even with zero VNC clients.
+A screen-lock flag alone does not confirm that the desktop is hidden.
+
+Session/wake notifications immediately discard earlier hidden-state confirmation.
+The half-second timer and opening the menu both refresh the observations. The
+indicator reflects the latest checks; it is not an atomic guarantee across a
+physical-console transition between samples.
+
+Clicking the icon opens a menu with physical-display state, connected-client
+count, **Session Details**, **Switch to Login Window**, and **Received Files…**.
+Session Details shows the worker account/PID/UID, worker and console audit-session
+identities, the reported on-console and lock flags (including unavailable values),
+and the reason for the indicator. The files item is disabled when receiving is
+disabled.
 
 The two red eye images contain their own color rather than relying on status-bar
 template tinting, which Tahoe can ignore. They are cached and alternate every
@@ -146,45 +170,31 @@ next-start recovery remain available.
 
 ## Validation
 
-The console-owner routing update passed 62 tests across the account-routing,
-Apple-encryption, and multi-client suites. A regression first reproduced the
-old rejection when the console belonged to a user. Tests now cover selecting
-loginwindow or either of two user identities, rejecting root on an unprivileged
-listener before target lookup, and sharing one user worker between root and user
-logins with independent frame delivery for RFB 3.889, 3.8, and 3.7. The release
-build and strict code-signature verification passed. This update was prepared as
-a separate binary without restarting running servers; live root-password and
-capture validation was not performed.
-
-The status-icon/session-error update passed 61 tests across the account-routing,
-Apple-encryption, and multi-client suites. A native `NSStatusBarButton` rendering
-probe reproduced the missing red tint and verified red pixels at both 100% and
-40% opacity after the fix. The updated release was installed on port 5902; its
-user worker reported a visible physical desktop, one connected client, and the
-blinking-red-eye state while continuing framebuffer and input delivery. A full
-physical-console lock/unlock cycle was not repeated for this change.
-
 `AccountSessionTests` exercises credential parsing, rejected logins before worker
-creation, protocol handoff for RFB 3.889, 3.8 and 3.7, simultaneous admissions reusing
-one worker, client independence, malformed descriptor messages, descriptor
-survival after the listener closes its copy, and full-duplex descriptor use from
-a real child process. It uses synthetic frames and a test account verifier, not
-real account passwords or capture/input injection. Existing encoding, clipboard,
-file-transfer, shared-input and streaming tests cover the reused RFB engine.
+creation, root/own-account restrictions, mixed real/effective UID rejection,
+console-owner selection, and handoff for RFB 3.889, 3.8 and 3.7. Tests verify
+concurrent admissions reusing one worker, independent frame delivery, malformed
+descriptor rejection, descriptor survival after the listener closes its copy,
+and full-duplex use from a real child. Fixture credentials are verified by a
+test verifier; real macOS passwords are not used.
 
-A 237-test regression run passed serially before the startup privilege reporting
-change. All eleven account-routing tests passed after the input fix, including
-own-account restrictions, rejection of mixed real/effective credentials,
-availability of the switching action only for the console's user session, and
-type-30 keyboard/mouse input with plaintext framebuffer traffic. The
-eight interrupt tests also passed in the earlier regression validation.
-`scripts/test-account-attachment.py --root` verified fresh exec into
-both the existing off-console user session (UID 501) and loginwindow (UID 0),
-with matching audit identity, inherited IPC, and cleared setugid state. The
-non-root own-session check passed separately. These attachment checks performed
-no capture or input injection.
+The shared engine tests cover codecs, frame scheduling, encrypted input with
+plaintext frames, Control/Observe gating, clipboard and staged file transfers.
+Optional native ScreenSharing.framework probes use plain URLs and fixture
+account credentials. They execute the host framework, not a remote Ventura app.
 
-This host's Command Line Tools required an explicit test macro plugin:
+On 2026-10-14 the user confirmed working keyboard and mouse after reconnecting
+with the plain `vnc://oker-vm.ip:5902/` URL to an off-console user session. Earlier
+root/user attachment checks verified matching audit identity, inherited IPC and
+cleared setugid state without input or capture injection. Native menu rendering
+checks verified red pixels at both eye-animation opacities. These earlier results
+do not substitute for testing a new binary or a full physical-console transition.
+
+See [loginwindow validation](console-session-backend.md#validation-and-limitations)
+for isolated listener, attachment and capture checks. All temporary checks must
+leave existing servers and capture services running unchanged.
+
+This host's Command Line Tools require an explicit test macro plugin:
 
 ```sh
 swift test --no-parallel \
@@ -192,34 +202,4 @@ swift test --no-parallel \
   -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib
 ```
 
-The parallel run exhausted short socket-fixture deadlines; the serial run passed.
-
-The account-input regression reproduced a disconnect on the first type-30 input
-message when `--no-encryption` was set. The corrected handler requires the
-authenticated wrapping key but does not enable record encryption. It delivers
-combined keyboard/pointer events, preserves Apple's button mapping, and continues
-to suppress input in Observe mode. The related serial run reported 79 tests across
-account routing, Apple encryption, file transfer, and multi-client protocol suites;
-it passed, with native Screen Sharing UI tests skipped.
-
-On 2026-10-14, the user reconnected to the non-root account listener with the plain
-`vnc://oker-vm.ip:5902/` URL and confirmed that both mouse and keyboard worked after
-the input fix. The physical console was at loginwindow. This validates the native
-user-account connection and interactive worker path; it does not validate a root
-account connection or every clipboard/file-transfer feature in the new path.
-Root-account native operation and the menu's appearance across physical
-lock/unlock transitions still need validation. The earlier same-process rebinding
-probes are not used by this implementation.
-The login-window switching symbol and its dedicated Fast User Switching request
-were inspected on this host without invoking it. A live menu click/transition
-remains untested because the console was already at loginwindow during the change.
-
-The isolated release build is staged at
-`.build/account-session/mac-vnc-server-dev`; validation metadata and its SHA-256
-are saved beside it in `validation.json`. Before the menu addition, the built listener was smoke-tested as
-UID 501 and UID 0: each printed the correct startup privilege report and offered
-security type 30 without starting a worker or capture before authentication.
-Ctrl-C closed the pending login and exited in
-approximately 1.1 seconds. Those smoke tests did not restart existing endpoints.
-For the input fix, the idle session worker on port 5902 was retired so the next
-authenticated connection loaded the new binary; its listener remained running.
+Use serial execution for socket fixtures with short timing deadlines.

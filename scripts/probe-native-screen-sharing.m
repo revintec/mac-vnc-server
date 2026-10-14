@@ -17,7 +17,6 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 @interface NSObject (NativeScreenSharingProbe)
 + (id)defaultOptions;
 + (NSDictionary *)optionsFromURL:(NSURL *)url;
-+ (id)vncAuthenticationCredentialsWithPassword:(NSString *)password;
 + (id)diffieHellmanCredentialsWithUsername:(NSString *)username withPassword:(NSString *)password label:(NSString *)label;
 - (void)applyURLOptions:(NSDictionary *)options;
 - (NSInteger)minimumEncryptionLevel;
@@ -235,10 +234,9 @@ int main(int argc, char **argv) {
         NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 640, 480)
             styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
         window.contentView = view;
-        id credentials = [NSClassFromString(@"SSPasswordCredentials") vncAuthenticationCredentialsWithPassword:@"testpass"];
         id appleCredentials = [NSClassFromString(@"SSUsernamePasswordCredentials")
-            diffieHellmanCredentialsWithUsername:@"test" withPassword:@"testpass" label:nil];
-        [view connectToURL:[NSString stringWithUTF8String:argv[1]] withPreferredCredentials:@[appleCredentials, credentials] options:options];
+            diffieHellmanCredentialsWithUsername:@"fixture-user" withPassword:@"testpass" label:nil];
+        [view connectToURL:[NSString stringWithUTF8String:argv[1]] withPreferredCredentials:@[appleCredentials] options:options];
         NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:4];
         while (deadline.timeIntervalSinceNow > 0) {
             [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];

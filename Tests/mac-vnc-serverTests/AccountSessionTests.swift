@@ -19,22 +19,20 @@ struct AccountSessionTests {
         #expect(throws: (any Error).self) { try AccountListenerAccess.resolve(realUID: 0, effectiveUID: 501) }
     }
 
-    @Test func listenerNeverReadsEnvironmentPasswordAndUsesOnePort() throws {
-        for environment in [[:], ["VNC_PASSWORD": ""], ["VNC_PASSWORD": "ignored"]] {
-            guard case .run(let config) = try CLI.parse(arguments: []).resolvingPassword(environment: environment) else {
-                Issue.record("expected listener"); return
-            }
-            #expect(config.sessionTarget == .listener)
-            #expect(config.password == nil && !config.passwordFromEnvironment)
-            #expect(config.displaySelection == .all)
-            #expect(config.fileTransfer && config.clipboardSync && !config.allowEncryption)
+    @Test func listenerHasOneModeAndRejectsRemovedOptions() throws {
+        guard case .run(let config) = try CLI.parse(arguments: []) else { Issue.record("expected listener"); return }
+        #expect(config.displaySelection == .all)
+        #expect(config.fileTransfer && config.clipboardSync && !config.allowEncryption)
+        let encoded = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+        #expect(!encoded.contains("password") && !encoded.contains("sessionTarget"))
+        for args in [["--session", "user"], ["--session", "console"], ["--session", "listener"],
+                     ["--no-password"], ["--insecure-allow-no-auth"], ["--console-worker", "{}"]] {
+            #expect(throws: (any Error).self) { try CLI.parse(arguments: args) }
         }
-        #expect(throws: (any Error).self) { try CLI.parse(arguments: ["--no-password"]) }
-        #expect(throws: (any Error).self) { try CLI.parse(arguments: ["--insecure-allow-no-auth"]) }
-        guard case .service(let service, _) = try CLI.parse(arguments: ["--service"]) else {
+        guard case .service(_, let arguments) = try CLI.parse(arguments: ["--service"]) else {
             Issue.record("expected service"); return
         }
-        #expect(!service.passwordFromEnvironment && service.sessionTarget == .listener)
+        #expect(arguments.isEmpty)
     }
 
     @Test func rootSessionSelectsTheCurrentConsoleOwner() throws {
@@ -318,31 +316,6 @@ struct AccountSessionTests {
         #expect(worker.server.activeClientCount == 1)
     }
 
-    @Test func physicalVisibilityOnlyWarnsForAnActiveVisibleDesktop() {
-        let own = ConsoleIdentity(uid: 501, auditID: 2)
-        let other = ConsoleIdentity(uid: 502, auditID: 3)
-        let root = ConsoleIdentity(uid: 0, auditID: 4)
-        #expect(PhysicalDisplayState.resolve(uid: 501, console: own, locked: false).showsEye(clientCount: 1))
-        #expect(!PhysicalDisplayState.resolve(uid: 501, console: own, locked: false).showsEye(clientCount: 0))
-        #expect(!PhysicalDisplayState.resolve(uid: 501, console: own, locked: true).showsEye(clientCount: 1))
-        #expect(!PhysicalDisplayState.resolve(uid: 501, console: root, locked: false).showsEye(clientCount: 1))
-        #expect(!PhysicalDisplayState.resolve(uid: 501, console: other, locked: false).showsEye(clientCount: 1))
-        #expect(PhysicalDisplayState.resolve(uid: 501, console: nil, locked: false).visibility == .unknown)
-    }
-
-    @Test func loginWindowSwitchIsOnlyAvailableToTheConsoleUser() {
-        let own = ConsoleIdentity(uid: 501, auditID: 2)
-        let other = ConsoleIdentity(uid: 502, auditID: 3)
-        let loginWindow = ConsoleIdentity(uid: 0, auditID: 4)
-        #expect(PhysicalDisplayState.resolve(uid: 501, console: own, locked: false).canSwitchToLoginWindow)
-        // A locked user session can still switch out to the login window.
-        #expect(PhysicalDisplayState.resolve(uid: 501, console: own, locked: true).canSwitchToLoginWindow)
-        #expect(!PhysicalDisplayState.resolve(uid: 501, console: other, locked: false).canSwitchToLoginWindow)
-        #expect(!PhysicalDisplayState.resolve(uid: 501, console: loginWindow, locked: false).canSwitchToLoginWindow)
-        #expect(!PhysicalDisplayState.resolve(uid: 0, console: loginWindow, locked: false).canSwitchToLoginWindow)
-        #expect(!PhysicalDisplayState.resolve(uid: 501, console: nil, locked: false).canSwitchToLoginWindow)
-    }
-
     private func credentials(username: String, password: String) -> [UInt8] {
         var clear = [UInt8](repeating: 0, count: 128)
         clear.replaceSubrange(0..<username.utf8.count, with: username.utf8)
@@ -369,10 +342,10 @@ struct AccountSessionTests {
 }
 
 private func accountConfig() -> ServerConfig {
-    ServerConfig(bindAddress: "127.0.0.1", port: 0, password: nil, passwordFromEnvironment: false,
+    ServerConfig(bindAddress: "127.0.0.1", port: 0,
         fps: 30, scale: 1, encodingPreference: .raw, displaySelection: .all, verbose: false,
         clipboardSync: false, adaptiveStreaming: false, adaptiveFrameRate: false,
-        fileTransfer: false, sessionTarget: .listener)
+        fileTransfer: false)
 }
 private func accountSocketPair() throws -> (ClientSocket, ClientSocket) {
     var fds: [Int32] = [-1, -1]
@@ -423,7 +396,7 @@ private final class AccountDirectWorker: SessionWorkerConnection, @unchecked Sen
         try child.close()
         let input = SharedInputController(input: self.input)
         server = RFBServer(config: accountConfig(), capture: AccountTestFrame(),
-            makeInput: { input.makeClient() }, makeClipboard: { ConsoleClipboard() }, logger: ServerLogger(verbose: false))
+            makeInput: { input.makeClient() }, makeClipboard: { DisabledClipboard() }, logger: ServerLogger(verbose: false))
     }
     func send(client: ClientSocket, admission: SessionAdmission) throws {
         try sender.send(client: client, admission: admission)

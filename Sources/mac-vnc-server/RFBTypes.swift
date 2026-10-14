@@ -219,7 +219,7 @@ struct Framebuffer {
     }
 }
 
-struct Rect: Equatable {
+struct Rect: Equatable, Codable, Sendable {
     var x: Int
     var y: Int
     var width: Int

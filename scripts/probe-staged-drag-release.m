@@ -1,7 +1,8 @@
 // Interactive regression probe: native ScreenSharing sender -> real server ->
 // an AppKit receiving app. Input is triggered by the visible Begin/Release buttons.
 // Build: xcrun clang -fobjc-arc -framework AppKit scripts/probe-staged-drag-release.m -o /tmp/staged-drag-release
-// Use a separate server on loopback with VNC_PASSWORD=testpass and --file-transfer.
+// Use an isolated loopback account listener with --file-transfer.
+// Authenticate using its normal macOS username/password dialog; do not save credentials.
 // Run: /tmp/staged-drag-release vnc://127.0.0.1:5906/
 // Wait after Begin: the target must stay orange, with no "target perform" log.
 // Release: expect content_matches=1 original_held=0, and server operation=1.
@@ -29,7 +30,6 @@ typedef struct { NSInteger width, height; } NativeFramebufferSize;
 @interface NSObject (NativeScreenSharingProbe)
 + (id)defaultOptions;
 + (NSDictionary *)optionsFromURL:(NSURL *)url;
-+ (id)vncAuthenticationCredentialsWithPassword:(NSString *)password;
 + (id)diffieHellmanCredentialsWithUsername:(NSString *)username withPassword:(NSString *)password label:(NSString *)label;
 - (void)applyURLOptions:(NSDictionary *)options;
 - (NSInteger)minimumEncryptionLevel;
@@ -190,9 +190,8 @@ int main(int argc,char **argv) { @autoreleasepool {
     ProbeStartupDelegate *startup=[ProbeStartupDelegate new];startup.view=nativeView;[(ProbeSessionView *)nativeView setDelegate:startup];
     [nativeView setShouldWarnUserForUnencryptedLegacyVNC:NO];[nativeView setAllowsFileTransferToRemote:YES];[nativeView setAllowsFileTransferFromRemote:YES];[nativeView setShouldScaleScreen:NO];
     NSWindow *hidden=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,640,480) styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];hidden.contentView=nativeView;
-    id credentials=[NSClassFromString(@"SSPasswordCredentials") vncAuthenticationCredentialsWithPassword:@"testpass"];
-    [nativeView connectToURL:url.absoluteString withPreferredCredentials:@[credentials] options:options];
-    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:5];while(deadline.timeIntervalSinceNow>0 && !startup.finished)[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    [nativeView connectToURL:url.absoluteString withPreferredCredentials:@[] options:options];
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:120];while(deadline.timeIntervalSinceNow>0 && !startup.finished)[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
     record([NSString stringWithFormat:@"connected=%d control=%d files=%d",[nativeView isConnected],[nativeView isControlling],[nativeView supportsFileTransfer]]);
     NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(350,650,700,250) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];window.releasedWhenClosed=NO;window.title=@"Routed VNC Drag Test";
     // Keep the known app target visible when Finder is expanded behind it.

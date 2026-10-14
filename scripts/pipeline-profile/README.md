@@ -22,21 +22,23 @@ limitations and reproduction commands.
 `instrument-server.py SOURCE DESTINATION` copies the checkout (excluding Git and
 build directories), records source hashes, and adds monotonic wall/thread-CPU
 probes to the copy. The script checks each insertion point and fails if the
-source layout has changed. Build that copy in release mode and set
-`MAC_VNC_PROFILE` to an absolute CSV output path when running it.
+source layout has changed. Build that copy in release mode. Each instrumented worker writes
+`worker-PID.csv` beside the disposable source directory. The output path is
+embedded only in that disposable build because workers intentionally do not
+inherit arbitrary listener environment variables. Use an own-user listener and
+one client for these measurements.
 
 ```sh
 profile_dir=$(mktemp -d /tmp/mac-vnc-pipeline.XXXXXX)
 python3 scripts/pipeline-profile/instrument-server.py "$PWD" "$profile_dir/server"
 swift build -c release --package-path "$profile_dir/server"
-VNC_PASSWORD=testpass MAC_VNC_PROFILE="$profile_dir/server.csv" \
-  "$profile_dir/server/.build/release/mac-vnc-server-dev" \
+"$profile_dir/server/.build/release/mac-vnc-server-dev" \
   --bind 127.0.0.1 --port 5911 --display 1 --encoding zlib \
   --file-transfer --verbose
 ```
 
 The server stays in the foreground. Use a separate terminal for subsequent
-commands. The test password is limited to this loopback process.
+commands. Authenticate with the current macOS account; no fixture password is accepted by the production listener.
 
 `client-trace.m` times native Zlib inflation, cipher updates, framebuffer-update
 notifications and draw submission. It also contains socket hooks, but they did
@@ -58,8 +60,7 @@ DYLD_INSERT_LIBRARIES="$profile_dir/client-trace.dylib" \
   "$profile_dir/Screen Sharing Pipeline.app/Contents/MacOS/Screen Sharing"
 ```
 
-Connect through the application's UI to `127.0.0.1:5911`, use any username and
-`testpass`, leave Remember Password unchecked, and choose Actual Size. Relaunch
+Connect through the application's UI to `127.0.0.1:5911`, use your macOS account credentials, leave Remember Password unchecked, and choose Actual Size. Relaunch
 through the command above for each separate session: launching the copied app
 normally omits the injected compatibility adapter. Keep the test document
 visible in the captured desktop. Viewer overlap changes the workload.
@@ -82,12 +83,12 @@ and scaling have settled.
 
 ```sh
 python3 scripts/pipeline-profile/sample-cpu.py scrolling 30 \
-  SERVER_PID CLIENT_PID WORKLOAD_PID > "$profile_dir/scroll-cpu.json"
+  WORKER_PID CLIENT_PID WORKLOAD_PID > "$profile_dir/scroll-cpu.json"
 python3 scripts/pipeline-profile/analyze.py "$profile_dir" client.csv
 ```
 
-Disconnect the viewer to flush the server's buffered trace before the final
-analysis. The client flushes once per second. Close only the temporary processes
+Disconnect the viewer to flush the worker's buffered trace, then copy its
+`worker-PID.csv` to `server.csv` before the final analysis. The client flushes once per second. Close only the temporary processes
 you launched. `analyze.py` produces `summary.json`, distinguishes an incomplete
 shutdown tail from a byte-count mismatch, and reports per-interval matching
 counts. Verify that every nonempty response in each timed interval matched.

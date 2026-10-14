@@ -72,25 +72,6 @@ enum AppleAuth {
             return key
         }
 
-        func authenticate(credentials: [UInt8], peerKey: [UInt8], password: String) throws -> [UInt8] {
-            let key = try wrappingKey(peerKey: peerKey)
-            guard credentials.count == 128 else { throw RFBError.authenticationFailed }
-            var clear = try AppleEncryption.ecb(credentials, key: key, encrypt: false)
-            defer { clear.withUnsafeMutableBytes { _ = memset_s($0.baseAddress!, $0.count, 0, $0.count) } }
-            guard clear[..<64].contains(0), let end = clear[64...].firstIndex(of: 0) else {
-                throw RFBError.authenticationFailed
-            }
-            let expected = Array(password.utf8)
-            guard expected.count < 64, !expected.contains(0) else { throw RFBError.authenticationFailed }
-            var difference = UInt8(expected.count ^ (end - 64))
-            for index in 0..<63 {
-                let actual = index < end - 64 ? clear[64 + index] : 0
-                difference |= actual ^ (index < expected.count ? expected[index] : 0)
-            }
-            guard difference == 0 else { throw RFBError.authenticationFailed }
-            return key
-        }
-
         func authenticateAccount<T>(credentials: [UInt8], peerKey: [UInt8],
                                     verify: (String, String) throws -> T) throws -> (T, [UInt8]) {
             let key = try wrappingKey(peerKey: peerKey)

@@ -85,9 +85,6 @@ final class SessionListener: @unchecked Sendable {
 
     func run(listener supplied: ListeningSocket? = nil) throws {
         let access = try AccountListenerAccess.resolve()
-        guard config.password == nil, !config.passwordFromEnvironment else {
-            throw CLIError.invalidArgument("account listeners do not accept a shared password")
-        }
         switch access {
         case .allAccounts:
             logger.info("Account listener privileges: root; ordinary accounts select their user sessions; root selects the current console owner (loginwindow or user desktop)")
@@ -170,8 +167,7 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
             defer { try? childInput.close() }
             let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath()
             var workerConfig = config
-            workerConfig.sessionTarget = identity.uid == 0 ? .console : .user
-            if identity.uid == 0 { workerConfig.clipboardSync = false; workerConfig.fileTransfer = false; workerConfig.cursorMode = .embedded }
+            if identity.uid == 0 { workerConfig.clipboardSync = false; workerConfig.fileTransfer = false }
             let options = SessionWorkerOptions(identity: identity, config: workerConfig)
             try options.validate()
             let encoded = String(decoding: try JSONEncoder().encode(options), as: UTF8.self)

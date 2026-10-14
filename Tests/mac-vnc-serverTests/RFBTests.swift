@@ -207,7 +207,6 @@ import zlib
     #expect(config.bindAddress == "utun4")
     #expect(config.clipboardSync && config.fileTransfer)
     #expect(!config.allowEncryption)
-    #expect(!config.passwordFromEnvironment)
 }
 
 @Test func cliDefaultsToAdaptiveFrameRate() throws {
@@ -220,49 +219,14 @@ import zlib
     #expect(config.adaptiveFrameRate)
 }
 
-@Test func cliDefaultsToAccountAuthentication() throws {
-    guard case .run(let config) = try CLI.parse(arguments: ["run"]) else {
-        Issue.record("expected run command")
-        return
-    }
-
-    #expect(config.password == nil)
-    #expect(!config.passwordFromEnvironment)
-}
-
 @Test func cliRejectsPasswordArgumentsWithoutEchoingTheSecret() throws {
     do {
         _ = try CLI.parse(arguments: ["run", "--password", "private-test-value"])
         Issue.record("expected removal error")
     } catch {
-        #expect(error.localizedDescription.contains("VNC_PASSWORD"))
+        #expect(error.localizedDescription.contains("unknown run argument"))
         #expect(!error.localizedDescription.contains("private-test-value"))
     }
-}
-
-@Test func passwordComesOnlyFromTheEnvironment() throws {
-    let command = try CLI.parse(arguments: ["run", "--session", "user"])
-    #expect(throws: (any Error).self) { try command.resolvingPassword(environment: [:]) }
-    #expect(throws: (any Error).self) { try command.resolvingPassword(environment: ["VNC_PASSWORD": ""]) }
-    guard case .run(let config) = try command.resolvingPassword(environment: ["VNC_PASSWORD": "  testpass  "]) else {
-        Issue.record("expected run command"); return
-    }
-    #expect(config.password == "  testpass  ")
-    #expect(!config.passwordFromEnvironment)
-    #expect(config.bindAddress == "utun4" && config.clipboardSync && config.fileTransfer && !config.allowEncryption)
-    // Non-server commands must not require a password.
-    _ = try CLI.parse(arguments: ["version"]).resolvingPassword(environment: [:])
-    _ = try CLI.parse(arguments: ["transfers"]).resolvingPassword(environment: [:])
-}
-
-@Test func cliKeepsNoPasswordAsExplicitOverride() throws {
-    guard case .run(let config) = try CLI.parse(arguments: ["run", "--session", "user", "--bind", "lo0", "--no-password"]) else {
-        Issue.record("expected run command")
-        return
-    }
-
-    #expect(config.password == nil)
-    #expect(!config.passwordFromEnvironment)
 }
 
 @Test func cliParsesFixedFrameRate() throws {
@@ -955,12 +919,6 @@ import zlib
 
     #expect(status == Z_OK)
     #expect(decompressed == [0, 0x30, 0x20, 0x10, 0])
-}
-
-@Test func vncAuthKnownVector() throws {
-    let challenge: [UInt8] = Array(0..<16)
-    let response = try VNCAuth.response(challenge: challenge, password: "password")
-    #expect(response == [0xb8, 0x66, 0x92, 0x41, 0x25, 0xc8, 0xee, 0xbb, 0x9d, 0xeb, 0xc1, 0xdb, 0x61, 0xc5, 0x38, 0xe2])
 }
 
 @Test func virtualLayoutMapsNegativeCoordinates() {

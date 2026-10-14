@@ -51,8 +51,6 @@ def relay_server(server, client):
             # Apple Diffie-Hellman challenge: generator, size, prime, public key.
             header = read_exact(4)
             client.sendall(header + read_exact(2 * int.from_bytes(header[2:], "big")))
-        elif security == b"\x01\x02":
-            client.sendall(read_exact(16))
         else:
             raise ValueError("unexpected test authentication type")
         client.sendall(read_exact(4))

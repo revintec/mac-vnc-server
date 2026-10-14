@@ -15,7 +15,7 @@ The default setup targets Apple Screen Sharing over the `utun4` interface:
 
 Use `--bind 127.0.0.1` for loopback, `--bind en0` for another interface, or an explicit IPv4 address. An unavailable interface is an error; the server never falls back to listening on all interfaces.
 
-The default account listener routes each authenticated client to an existing macOS
+The account listener routes each authenticated client to an existing macOS
 GUI session. Start it as root to serve multiple accounts or loginwindow; a
 non-root listener serves only its own account. One worker per UID/audit session
 owns capture and every connected client socket. Encoded frames, input, clipboard,
@@ -26,6 +26,9 @@ and file-transfer features while off console.
 Startup checks listener privileges before binding. Non-root startup warns about
 the own-account restriction; root startup reports broader account access.
 
+The menu-bar icon blinks red unless consistent session checks confirm that this
+desktop is hidden from the physical console, including when no clients are connected.
+**Session Details** explains the console/worker identities and visibility checks.
 The VNC menu-bar icon includes **Switch to Login Window**, which uses Fast User
 Switching to hide this desktop on the physical console while keeping its VNC
 session and apps running. It is available while this user owns the console.
@@ -39,10 +42,9 @@ or elevate a non-root listener. Each connection stays on the session selected at
 login; reconnect as root to select a new console owner after a user switch.
 See [account routing and process lifetimes](docs/account-session-listener.md).
 
-Explicit `--session user` and [`--session console`](docs/console-session-backend.md)
-retain the older shared-password endpoints for compatibility. The native
-loginwindow capture implementation remains experimental on macOS versions other
-than the tested Tahoe host.
+The [loginwindow backend](docs/console-session-backend.md) shares the user worker's
+ScreenCaptureKit and encoding pipeline. Its session attachment and root capture
+service remain experimental outside the tested Tahoe host.
 
 ## Requirements
 
@@ -225,13 +227,7 @@ Or bind a specific LAN IP:
 ./.build/release/mac-vnc-server-dev --bind 192.168.1.10 --port 5900
 ```
 
-The server refuses unauthenticated non-loopback binds by default. To disable auth for clients that support unauthenticated VNC, you must opt in explicitly:
-
-```sh
-./.build/release/mac-vnc-server-dev --session user --bind 0.0.0.0 --no-password --insecure-allow-no-auth
-```
-
-Classic VNC password auth is weak and limited by the protocol. For untrusted networks, prefer an SSH tunnel:
+Every connection requires macOS account authentication. For untrusted networks, use an authenticated VPN or an SSH tunnel:
 
 ```sh
 ssh -L 5900:127.0.0.1:5900 user@mac-host
@@ -259,10 +255,6 @@ Options:
 | --- | --- | --- |
 | `--bind <ipv4 or interface>` | `utun4` | Listen on an IPv4 address or the first active IPv4 address of an interface such as `utun4`, `en0`, or `lo0`. Resolved at startup; restart after an address change. |
 | `--port <port>` / `-p <port>` | `5900` | The account listener TCP port. |
-| `--session listener\|user\|console` | `listener` | Account routing, or explicit legacy shared-password user/console endpoints. |
-| `VNC_PASSWORD` (environment) | ignored | Used only by explicit legacy `--session user` / `--session console`. |
-| `--no-password` | off | Legacy `--session user` only; never bypasses account listener authentication. |
-| `--insecure-allow-no-auth` | off | Required with `--no-password` on non-loopback binds. |
 | `--fps <auto\|1...120>` | `auto` | Adaptive `60 -> 45 -> 30` target, or a fixed framebuffer update rate when an explicit number is provided. |
 | `--scale <value>` | `1.0` | Base virtual framebuffer scale. Adaptive sessions may temporarily use `0.75` or `0.67` for compatible generic clients that advertise DesktopSize when encoding or network pressure persists. Apple Screen Sharing uses its own display/scaling negotiation and is excluded from these automatic scale changes. |
 | `--encoding <auto\|zrle\|zlib\|raw>` | `auto` | Framebuffer encoding preference. |
@@ -277,7 +269,6 @@ Options:
 | `--encryption` | off | Negotiate Apple encryption when file transfer is enabled. |
 | `--no-clipboard-sync` | off | Disable clipboard sharing. |
 | `--no-file-transfer` | off | Disable file transfer and its receiving panel. |
-| `--file-drop-mode` | `staged` | `staged` offers real local files and a receiving panel; `native` keeps the original Finder/file-promise workflow. |
 | `--transfer-directory` | `~/Library/Application Support/mac-vnc-server/Transfers` | Persistent storage for received copies. Supply an absolute path. |
 | `--transfer-limit-gib` | 10 | Limit retained files plus active transfer storage reservations. |
 | `--transfer-free-gib` | 1 | Minimum free disk space to preserve while receiving. |
@@ -285,18 +276,17 @@ Options:
 
 ### Password and storage
 
-The default listener verifies macOS account credentials with OpenDirectory,
+The listener verifies macOS account credentials with OpenDirectory,
 including account policies. It does not read `VNC_PASSWORD`, generate passwords,
 write passwords to disk, or forward passwords to workers. Apple security type 30
 protects the credential exchange; session encryption remains off by default.
 This legacy authentication protocol does not authenticate the server to the client.
 Use an authenticated VPN/SSH transport when the network is not trusted.
 
-The listener needs a client supporting username/password authentication via ARD
-security type 30. Classic password-only clients cannot use this endpoint; they can
-still use an explicit legacy `--session user` server with `VNC_PASSWORD`.
-Only those legacy services need the variable in the user launchd environment.
-`--password` remains unsupported.
+The listener requires username/password authentication through ARD security type
+30, including when frame encryption is disabled. Clients supporting only None
+or password-only VNC authentication are unsupported. The removed `--session`,
+`--password`, `--no-password`, and `--insecure-allow-no-auth` options are rejected.
 
 There is no runtime read/write code for `~/.mac-vnc-server`. Settings come from
 CLI arguments. Each user worker resolves default transfer storage inside its own
@@ -316,9 +306,8 @@ Clipboard snapshots and session encryption keys remain in memory.
 
 ### Display modes
 
-The account listener serves all session displays on its single port by default.
-Only the legacy `--session user` mode opens additional consecutive ports when
-`--display` is omitted.
+The listener serves all displays of each selected session on one TCP port.
+`--display` selects the combined desktop or one display within each worker.
 
 To keep a single listener with the combined desktop:
 
@@ -345,7 +334,7 @@ Use `diagnose` to list display numbers:
 The server implements the RFB handshake and core client messages:
 
 - protocol negotiation
-- `SecurityType None` and classic VNC auth
+- ARD security type 30 with macOS account authentication
 - `SetPixelFormat`
 - `SetEncodings`
 - `FramebufferUpdateRequest`
@@ -353,7 +342,10 @@ The server implements the RFB handshake and core client messages:
 - `PointerEvent`
 - `ClientCutText`
 
-Apple Screen Sharing negotiates RFB 3.3 and requires VNC auth, so authentication is enabled by default.
+Supported protocol versions are Apple RFB 3.889 and RFB 3.7/3.8 with security
+type 30. RFB 3.3 and authentication downgrades are rejected. The retained
+[Screen Sharing 3.0 fixes](docs/screen-sharing-compatibility.md) cover display
+initialization, mode handling, encrypted input, cursor, clipboard and file transfer.
 
 ### Capture pipeline
 
@@ -381,6 +373,8 @@ Capture arrivals wake the sender, which uses monotonic frame deadlines and skips
 
 With `--cursor auto` (the default), the server reads the system cursor through AppKit and excludes it from ScreenCaptureKit frames. RichCursor viewers receive shape/hotspot updates and move the cursor locally, without waiting for a round trip or another compressed frame. If cursor sampling is unavailable at startup, the server uses embedded capture. Viewers without RichCursor and Apple Observe sessions receive a composited cursor. Use `--cursor embedded` to retain capture-based rendering throughout.
 
+Loginwindow workers now use this same ScreenCaptureKit, RichCursor, newest-frame delivery, dirty-region and adaptive capture-rate pipeline. Their display IDs and geometry must match the attached console session; a mismatch fails instead of showing another user's desktop. The root `replayd` service is still needed. Input mapping and coordination are shared too, but loginwindow retains the final HID posting adapter because CoreGraphics session-tap events did not move its pointer in the verified-session test. Clipboard, file transfer and menu-bar UI remain disabled there.
+
 The BGRX pixel-copy path supports Screen Sharing's depth-32 format as well as depth 24. Large visible scroll updates are coalesced and sent in one framebuffer update. See [performance measurements and limitations](docs/performance.md) for the benchmark, encryption policy, and why offscreen application content cannot be prefetched through RFB.
 
 See [encoding compatibility and smoother scrolling](docs/encoding-compatibility.md) for per-client support, fallback behavior and CopyRect limits.
@@ -388,19 +382,21 @@ The [ZRLE repair and scrolling measurements](docs/scrolling-upgrade-2026-10-12.m
 
 ### Multiple clients
 
-Up to 32 clients can connect to the same port simultaneously. Each client authenticates separately and has its own framebuffer encoding, update rate, and clipboard subscription. A new connection does not disconnect existing viewers, including clients that request exclusive access through the standard RFB shared flag. Protocol handshake work has a 5-second total read budget. Password-protected connections have a separate 2-minute window for entering credentials, shared across security-type selection and the authentication prompt. Waiting for the first byte of those responses pauses the handshake budget; partial authentication responses and initialization after authentication still use its remaining time. This applies to both classic VNC passwords and Apple's username/password authentication. An established viewer can remain idle.
+Up to 32 clients can connect to the same port simultaneously. Each client authenticates separately and has its own framebuffer encoding, update rate, and clipboard subscription. A new connection does not disconnect existing viewers, including clients that request exclusive access through the standard RFB shared flag. Protocol handshake work has a 5-second total read budget. Password-protected connections have a separate 2-minute window for entering credentials, shared across security-type selection and the authentication prompt. Waiting for the first byte of those responses pauses the handshake budget; partial authentication responses and initialization after authentication still use its remaining time. The same deadlines cover security-type selection and Apple account credentials. An established viewer can remain idle.
 
 Accepted connections use TCP keepalive after 3 seconds of inactivity, with probes 1 second apart and three unanswered probes before disconnection (roughly 6 seconds for an unreachable idle peer, subject to OS timer scheduling). TCP retransmissions for unacknowledged data also have a 6-second limit; the three-second write-stall timeout can close a blocked writer sooner. These short limits target cleanup within 10 seconds during normal operation; brief network outages may require reconnecting. No viewer-side extension is required. A healthy viewer can remain idle indefinitely, but once it sends a message type, the complete message must arrive within 5 seconds, including any clipboard payload. Partial progress does not reset that deadline. Timeout cleanup releases that viewer's held controls and client slot without disconnecting other viewers. TCP keepalive detects network loss; it cannot detect a frozen viewer application whose OS still answers probes.
 
-All viewers share the logged-in Mac's desktop, keyboard, and system cursor. Pointer movement from any controlling viewer moves that cursor. Held keys and mouse buttons are tracked by client and stay pressed until their last remote owner releases them; disconnecting or switching an Apple viewer to observe mode releases only that viewer's controls. Click sequences reset when another client takes over the pointer. These rules also apply across the automatic display ports within one server process.
+Viewers routed to the same session share its desktop, keyboard, and system cursor. Pointer movement from any controlling viewer moves that cursor. Held keys and mouse buttons are tracked by client and stay pressed until their last remote owner releases them; disconnecting or switching an Apple viewer to observe mode releases only that viewer's controls. Click sequences reset when another client takes over the pointer. These rules apply to all clients of the same session worker.
 
-With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text or images copied by one Apple viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical content echoes do not produce another clipboard change. This is a shared desktop, not separate macOS login sessions. Concurrent screen encoding and network traffic grow with the number of viewers.
+With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text or images copied by one Apple viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical content echoes do not produce another clipboard change. Different account sessions have separate workers and clipboard state. Concurrent screen encoding and network traffic grow with the number of viewers.
 
-For an already logged-in user, the server stays attached to that user's desktop when Fast User Switching moves the physical console to loginwindow. Input targets the user's WindowServer session and capture follows its replacement displays. Start the server in that user's GUI session (the per-user service does this), then connect using the ordinary VNC URL. This does not provide the console loginwindow, log another account in, or create a GUI session before login. See [off-console session access](docs/off-console-session-access.md) for validation and remaining limitations.
+For an already logged-in user, the server stays attached to that user's desktop when Fast User Switching moves the physical console to loginwindow. Input targets the user's WindowServer session and capture follows its replacement displays. Connect using that account's credentials and the ordinary VNC URL. Account authentication does not create a GUI session before login. Authenticating as root selects the current physical console owner instead. See [off-console session access](docs/off-console-session-access.md) for validation and remaining limitations.
 
 ### Input
 
-Keyboard and mouse events are injected with `CGEvent` at `cgSessionEventTap`, matching Apple's ScreensharingAgent. Mouse movement, scrolling, modifiers, Unicode input, and disconnect releases all use the same destination. This keeps remote input in the server user's session when the physical console switches to loginwindow.
+User-worker keyboard and mouse events are injected with `CGEvent` at `cgSessionEventTap`, matching Apple's ScreensharingAgent. Mouse movement, scrolling, modifiers, Unicode input, and disconnect releases all use the same destination. This keeps remote input in the server user's session when the physical console switches to loginwindow.
+
+Loginwindow uses the same event construction and ownership coordination, with a session-verified `IOHIDPostEvent` adapter for final delivery. CGEvent posting at either event tap failed to deliver loginwindow pointer movement on the tested host.
 
 The server processes input on the read loop and streams framebuffer updates on a separate writer queue. This prevents keyboard/mouse events from getting stuck behind frame compression or socket writes.
 
@@ -414,9 +410,9 @@ Clipboard synchronization is enabled by default. Use `--no-clipboard-sync` to di
 ./.build/release/mac-vnc-server-dev run --clipboard-sync
 ```
 
-With `--clipboard-sync`, the server advertises Apple's RFB 3.889 dialect and negotiates an extended ServerInit with compatible viewers. Apple Screen Sharing uses native pasteboard notifications, fetches, and compressed text and image archives. Other viewers can negotiate RFB 3.3, 3.7, or 3.8 and continue using classic cut text messages. The configured password remains required in either mode.
+With `--clipboard-sync`, the server advertises Apple's RFB 3.889 dialect and negotiates an extended ServerInit with compatible viewers. Apple Screen Sharing uses native pasteboard notifications, fetches, and compressed text and image archives. Other clients supporting account authentication can negotiate RFB 3.7 or 3.8 and use standard cut-text messages. Authentication remains required in either profile.
 
-On the client, enable **Edit → Use Shared Clipboard** after connecting. Screen Sharing owns this checkbox through its saved clipboard preference. Verbose logs report when clipboard sharing is available but disabled by the viewer. The implementation supports Unicode and multiline text, PNG, TIFF, JPEG, GIF, BMP, WebP, HEIC/HEIF, AVIF and JPEG 2000 images, clearing, and deferred clipboard requests in both directions. Image bytes are preserved, including GIF animation when the source app supplies the original GIF representation; a still-image copy cannot restore animation. The receiving app must support the supplied format. Apple clipboard archives are limited to 100 MiB; classic VNC text remains limited to 16 MiB. Rich-text preservation and macOS account authentication are not implemented. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
+On the client, enable **Edit → Use Shared Clipboard** after connecting. Screen Sharing owns this checkbox through its saved clipboard preference. Verbose logs report when clipboard sharing is available but disabled by the viewer. The implementation supports Unicode and multiline text, PNG, TIFF, JPEG, GIF, BMP, WebP, HEIC/HEIF, AVIF and JPEG 2000 images, clearing, and deferred clipboard requests in both directions. Image bytes are preserved, including GIF animation when the source app supplies the original GIF representation; a still-image copy cannot restore animation. The receiving app must support the supplied format. Apple clipboard archives are limited to 100 MiB; classic VNC text remains limited to 16 MiB. Rich-text preservation is not implemented. See [Apple clipboard implementation and validation](docs/apple-clipboard.md) for protocol details and validation results.
 
 File/folder drag and drop is enabled by default. Use `--no-file-transfer` to disable it.
 The default is the experimental plaintext Apple profile; `--encryption` enables
@@ -434,7 +430,6 @@ Copies are stored under `~/Library/Application Support/mac-vnc-server/Transfers`
 used files remain until explicitly removed. Choose **Received Files…** from the remote-VNC menu-bar icon, or use
 `mac-vnc-server transfers` to reopen them. See [staging, retention, and timing
 verification](docs/staged-file-drops.md) for limits and remaining client tests.
-`--file-drop-mode native` retains direct drops into Finder through file promises.
 Drag a remote Finder item out of Screen Sharing into local Finder to copy in the
 other direction. Existing destinations are preserved with numbered names.
 The account listener always uses Apple Diffie–Hellman username/password
@@ -449,13 +444,11 @@ See [plaintext validation and client limitations](docs/apple-file-transfer.md#pl
 Control permission is available from startup;
 Screen Sharing's selected mode is respected, including a saved Observe choice. This legacy protocol does not
 authenticate the server's identity. Use SSH or a VPN for a trusted channel over
-untrusted networks. The `--no-password` profile cannot negotiate Apple encryption.
-Display negotiation prefers Apple's modern layout format (1105) with console
+untrusted networks. Display negotiation prefers Apple's modern layout format (1105) with console
 state and explicit scale, retaining format 1101 for older viewers.
 
 The backend uses the system's private `SSFileCopySender` and
-`SSFileCopyReceiver` executables as the logged-in user. Reverse-direction and
-native-mode drags also use `SSDragHelper`; incoming staged drags use AppKit.
+`SSFileCopyReceiver` executables as the logged-in user. Server-to-client drags also use `SSDragHelper`; incoming staged drags use AppKit.
 Tests cover native file/folder helpers, drag initialization and authorization,
 completion staging, collision handling and cancellation. An unshown Tahoe native
 Screen Sharing view also verifies that a real connection registers Finder drops
@@ -518,7 +511,7 @@ The self-signed certificate provides a stable signing identity for macOS permiss
 
 ### Apple Screen Sharing keeps asking for a password
 
-Use the selected macOS account username and password. Confirm that its GUI session already exists. Root requires a root listener and an enabled root account; it selects the current console owner, whether loginwindow or a user desktop. Only explicit legacy endpoints use `VNC_PASSWORD`.
+Use the selected macOS account username and password. Confirm that its GUI session already exists. Root requires a root listener and an enabled root account; it selects the current console owner, whether loginwindow or a user desktop.
 
 ### Startup stops after the cursor message
 
@@ -540,15 +533,16 @@ use separate executable copies: Tahoe's capture-service conflict can persist
 with concurrent instances of the same path even when streams stop cleanly.
 `diagnose` reports permission status.
 
-To check the actual capture startup, including staged file drops and automatic
-display ports, from a session with Screen Recording permission:
+To check an attached worker's capture and RichCursor from a session with
+Screen Recording permission:
 
 ```sh
-python3 scripts/smoke-capture-startup.py .build/release/mac-vnc-server-dev
+python3 scripts/test-session-capture.py .build/release/mac-vnc-server-dev
 ```
 
-This uses isolated loopback ports, receives real Zlib frames, and checks clean
-shutdown without posting input or saving desktop images.
+This passes a fixture admission through a private channel, receives a complete
+Zlib frame and RichCursor, and checks worker cleanup without posting input,
+saving desktop images, or restarting an existing server.
 
 ### Screen updates work, but input lags
 

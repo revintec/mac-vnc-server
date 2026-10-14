@@ -12,12 +12,10 @@ to bypass that choice.
 
 ## Scope
 
-This implements Apple's native text and image pasteboard exchange as an optional RFB
-3.889 profile. The server continues to support standard RFB 3.3/3.7/3.8 clients.
-Password authentication remains required when configured: security type 2 for
-the clipboard profile and `--no-encryption`, or Apple type 30 with
-`--file-transfer` when encryption is allowed.
-None is advertised only when authentication has explicitly been disabled.
+Apple's native text and image pasteboard exchange uses the RFB 3.889 profile.
+RFB 3.7/3.8 clients use standard cut-text messages. All clients must authenticate
+with a macOS account through security type 30; password-only and None modes
+are unsupported. Session-record encryption remains optional.
 
 The profile supports UTF-8 text, newlines, empty pasteboards, PNG, TIFF, JPEG,
 GIF, BMP, WebP, HEIC/HEIF, AVIF and JPEG 2000 representations, multiple image
@@ -29,10 +27,9 @@ preview cannot reconstruct it. The destination app must support the supplied
 format. No image decoder or format conversion is required on the server.
 Compressed and expanded
 Apple archives are each limited to 100 MiB; classic text remains limited to 16 MiB.
-Malformed sizes, counts and compressed streams are rejected. Rich text, Apple
-account authentication, virtual displays and private framebuffer
-codecs remain unsupported. The separate `--file-transfer` profile enables Finder
-drag negotiation plus Apple's authentication and encrypted records;
+Malformed sizes, counts and compressed streams are rejected. Rich text, newly created virtual login sessions and private framebuffer
+codecs remain unsupported. `--file-transfer` enables Finder
+drag negotiation and optional Apple encrypted records;
 see [Apple file transfers](apple-file-transfer.md).
 
 Supported image pasteboard types:
@@ -94,7 +91,7 @@ arbitrary application data and other unsupported flavors remain excluded.
 
 Each connection has its own framebuffer writer, compressors, negotiated
 capabilities and clipboard change cursor. Up to 32 connections can run on each
-listening port; incomplete handshakes expire after 5 seconds. Standard RFB
+listening port; partial handshake messages have a 5-second budget, while password entry allows 120 seconds. Standard RFB
 exclusive ClientInit requests do not evict other viewers. Apple's SetMode still
 supports control and observe only, not exclusive control.
 

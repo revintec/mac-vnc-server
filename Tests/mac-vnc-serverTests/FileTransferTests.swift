@@ -110,11 +110,11 @@ struct FileTransferTests {
         let peer = try ClipboardTestPeer(fileTransfer: true, allowEncryption: false)
         defer { peer.finish() }
         let name = try peer.handshake(version: AppleRFB.version)
-        #expect(peer.appleWrappingKey == nil) // Type 2 password authentication, no AES session key.
+        #expect(peer.appleWrappingKey?.count == 16) // Account key wraps input; session records stay plaintext.
         for message in [0x0e, 0x12, 0x20, 0x22] {
             #expect(AppleRFB.supports(message, bitmap: Array(name[6..<22])))
         }
-        #expect(!AppleRFB.supports(0x10, bitmap: Array(name[6..<22])))
+        #expect(AppleRFB.supports(0x10, bitmap: Array(name[6..<22])))
         // Disabling records is legal even when enabling them is forbidden.
         try peer.write([0x12, 0, 0, 2, 0, 0, 0, 0])
         try peer.enableAppleClipboard()
@@ -134,14 +134,14 @@ struct FileTransferTests {
         try peer.enableAppleClipboard()
         try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 42])
         #expect(try peer.readClipboard().1 == .text("initial"))
-        #expect(peer.appleWrappingKey == nil)
+        #expect(peer.appleWrappingKey?.count == 16)
     }
 
     @Test(.enabled(if: NativeTransferProcess.available), arguments: [
         [UInt8(0x12), 0, 0, 2, 0, 1, 0, 0], // incoming records
         [UInt8(0x10), 0] + [UInt8](repeating: 0, count: 16) // encrypted input
     ])
-    func plaintextPolicyRefusesEncryptedTraffic(request: [UInt8]) throws {
+    func plaintextPolicyRejectsRecordEncryptionAndMalformedInput(request: [UInt8]) throws {
         let peer = try ClipboardTestPeer(fileTransfer: true, allowEncryption: false)
         defer { peer.finish() }
         _ = try peer.handshake(version: AppleRFB.version)
@@ -201,8 +201,16 @@ struct FileTransferTests {
         }
     }
 
+    private func stage(_ receiver: MacFileTransfer, store: TransferStore, source: URL, session: UInt32) throws -> URL {
+        let archive = try AppleClipboard.archive(content: ClipboardContent(items: [[
+            .init(type: "public.file-url", data: Data(source.absoluteString.utf8))
+        ]]))
+        try receiver.startDrag(sessionID: session, compressed: AppleClipboard.compress(archive), archiveSize: archive.count)
+        return store.destination(try #require(store.snapshot().first).id)
+    }
+
     @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true])
-    func nativeHelpersTransferNestedFolderAndKeepExistingDestination(legacy: Bool) throws {
+    func nativeHelpersTransferNestedFolderIntoStaging(named: Bool) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-vnc-native-files-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -214,24 +222,26 @@ struct FileTransferTests {
         let payload = Data((0..<2_000_000).map { UInt8(truncatingIfNeeded: $0 &* 31) })
         try payload.write(to: nested.appendingPathComponent("binary.dat"))
         try Data().write(to: source.appendingPathComponent("empty.txt"))
-        let targetName = legacy ? "source" : "copy"
-        let existing = destination.appendingPathComponent(targetName)
-        try Data("existing".utf8).write(to: existing)
         let result = FileTransferTestResult()
-        let receiver = MacFileTransfer(logger: ServerLogger(verbose: true)) { bytes in result.receive(bytes) }
+        let store = try TransferStore(options: .init(root: destination))
+        let receiver = MacFileTransfer(logger: ServerLogger(verbose: true), inbox: TransferInbox(store: store)) { bytes in
+            if bytes.first != 0x1e { result.receive(bytes) }
+        }
         let sender = MacFileTransfer(logger: ServerLogger(verbose: true)) { bytes in
             guard bytes.count >= 6 else { throw RFBError.protocolError("missing output header") }
             try receiver.handle(AppleFileTransfer.Message(body: Array(bytes.dropFirst(6))))
         }
         defer { sender.stop(); receiver.stop() }
-        try receiver.startReceiver(session: 123, directory: destination, name: legacy ? nil : "copy")
+        let directory = try stage(receiver, store: store, source: source, session: 123)
+        try receiver.startReceiver(session: 123, directory: directory, name: named ? "source" : nil)
         try sender.startSender(session: 123, source: source)
         #expect(result.ready.wait(timeout: .now() + 15) == .success)
         let response = try AppleFileTransfer.Message(body: Array(try #require(result.bytes).dropFirst(6)))
         #expect(response.command == 200)
         #expect(response.payload.prefix(2) == [0, 0])
-        #expect(try Data(contentsOf: existing) == Data("existing".utf8))
-        let received = destination.appendingPathComponent(targetName + " 1")
+        let batch = try #require(store.snapshot().first)
+        let urls = try store.urls(batch.id)
+        let received = try #require(urls.first)
         #expect(try Data(contentsOf: received.appendingPathComponent("日本語 folder/binary.dat")) == payload)
         #expect(try Data(contentsOf: received.appendingPathComponent("empty.txt")).isEmpty)
     }
@@ -242,15 +252,17 @@ struct FileTransferTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let result = FileTransferTestResult()
-        let receiver = MacFileTransfer(logger: ServerLogger(verbose: false)) { bytes in result.receive(bytes) }
-        try receiver.startReceiver(session: 9, directory: root, name: "incomplete")
-        receiver.stop()
-        // Closing the helper pipe wakes its reader and removes private staging.
-        let deadline = Date().addingTimeInterval(2)
-        while (try FileManager.default.contentsOfDirectory(atPath: root.path)).count > 0 && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.01)
+        let store = try TransferStore(options: .init(root: root.appendingPathComponent("inbox")))
+        let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), inbox: TransferInbox(store: store)) { bytes in
+            if bytes.first != 0x1e { result.receive(bytes) }
         }
-        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+        defer { receiver.stop() }
+        let directory = try stage(receiver, store: store, source: root.appendingPathComponent("incomplete"), session: 9)
+        try receiver.startReceiver(session: 9, directory: directory, name: "incomplete")
+        receiver.stop()
+        let batch = try #require(store.snapshot().first)
+        #expect(try store.urls(batch.id).isEmpty)
+        #expect(!batch.isComplete)
     }
 
     @Test func unrelatedConnectionCannotRequestAFile() throws {
@@ -260,39 +272,6 @@ struct FileTransferTests {
         let message = AppleFileTransfer.Message(command: 1, sessionID: 8,
             payload: UInt32(0).beBytes + UInt32(0).beBytes + UInt16(path.count).beBytes + path)
         #expect(throws: (any Error).self) { try transfer.handle(message) }
-    }
-
-    @Test func incomingDragWaitsForReadyAndReleasesTheSharedButton() throws {
-        let helper = try DragTestHelper()
-        let input = DragTestInput()
-        let shared = SharedInputController(input: input)
-        let client = shared.makeClient()
-        let transfer = MacFileTransfer(logger: ServerLogger(verbose: false), input: client,
-            makeDragHelper: { helper }, send: { _ in })
-        defer { transfer.stop() }
-        let archive = try AppleClipboard.archive(content: ClipboardContent(items: [[
-            .init(type: "public.file-url", data: Data("file:///tmp/example.txt".utf8))
-        ]]))
-        let compressed = try AppleClipboard.compress(archive)
-        let started = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            defer { started.signal() }
-            do { try transfer.startDrag(sessionID: 7, compressed: compressed, archiveSize: archive.count) }
-            catch { Issue.record(error) }
-        }
-        #expect(try Array(helper.readCommands(12 + compressed.count).prefix(4)) == UInt32(7).nativeBytes)
-        #expect(started.wait(timeout: .now() + 0.05) == .timedOut)
-        #expect(input.masks.isEmpty)
-        try helper.events.writeAll([15])
-        #expect(try helper.readCommands(1) == [20])
-        #expect(started.wait(timeout: .now() + 1) == .success)
-        #expect(input.masks.last == 1)
-        // A viewer can send mouse-up immediately after DropEvent. It must
-        // release the same button the helper pressed, with no stuck drag.
-        client.pointer(buttonMask: 0, x: 0, y: 0, layout: .empty)
-        #expect(input.masks.last == 0)
-        transfer.cancelDrag()
-        #expect(input.masks.last == 0)
     }
 
     @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true], [false, true])
@@ -307,7 +286,8 @@ struct FileTransferTests {
         let dragResult = FileTransferTestResult()
         let upload = try RecordTestLink(encrypted: encrypted)
         let download = try RecordTestLink(encrypted: encrypted)
-        let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(),
+        let store = try TransferStore(options: .init(root: root.appendingPathComponent("inbox")))
+        let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(), inbox: TransferInbox(store: store),
             makeDragHelper: { helper }) { bytes in
                 let bytes = try download.transfer([bytes])
                 if bytes.first == 0x1e { dragResult.receive(bytes) }
@@ -327,30 +307,37 @@ struct FileTransferTests {
         try helper.events.writeAll([15])
         if toServer {
             try receiver.startDrag(sessionID: 77, compressed: compressed, archiveSize: archive.count)
-            _ = try helper.readCommands(12 + compressed.count)
-            #expect(try helper.readCommands(1) == [20])
-            let path = Array(root.path.utf8)
-            try helper.events.writeAll([10] + UInt32(77).nativeBytes + UInt32(path.count).nativeBytes + path)
+            let batch = try #require(store.snapshot().first)
+            let path = Array(store.destination(batch.id).path.utf8)
             #expect(dragResult.ready.wait(timeout: .now() + 2) == .success)
-            let name = Array("received.txt".utf8)
+            let name = Array("source.txt".utf8)
             let body = UInt16(2).beBytes + UInt16(2).beBytes + UInt32(88).beBytes
                 + [UInt8](repeating: 0, count: 8) + UInt16(path.count).beBytes + UInt16(name.count).beBytes
                 + path + [0] + name + [0]
             try receiver.handle(AppleFileTransfer.Message(body: body))
             try sender.startSender(session: 88, source: source)
         } else {
+            let directory = try stage(receiver, store: store, source: source, session: 88)
+            // The receiving peer has finished its drop before the source
+            // helper starts. Both peers share this test process's drag gate.
+            let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 1, height: 1)
+            #expect(receiver.pointer(mask: 0, x: 0, y: 0, layout: layout))
+            #expect(dragResult.ready.wait(timeout: .now() + 2) == .success)
             try sender.startDrag(sessionID: 77, compressed: [], archiveSize: 0)
             _ = try helper.readCommands(12)
             try helper.events.writeAll([11] + UInt32(77).nativeBytes + UInt32(compressed.count).nativeBytes
                 + UInt32(archive.count).nativeBytes + compressed)
             #expect(dragResult.ready.wait(timeout: .now() + 2) == .success)
-            try receiver.startReceiver(session: 88, directory: root, name: "received.txt")
+            try receiver.startReceiver(session: 88, directory: directory, name: "source.txt")
             let path = Array(source.path.utf8)
             try sender.handle(AppleFileTransfer.Message(command: 1, sessionID: 88,
                 payload: [UInt8](repeating: 0, count: 8) + UInt16(path.count).beBytes + path))
         }
         #expect(result.ready.wait(timeout: .now() + 10) == .success)
-        #expect(try Data(contentsOf: root.appendingPathComponent("received.txt")) == Data(contentsOf: source))
+        let batch = try #require(store.snapshot().first)
+        let urls = try store.urls(batch.id)
+        let received = try #require(urls.first)
+        #expect(try Data(contentsOf: received) == Data(contentsOf: source))
     }
 }
 

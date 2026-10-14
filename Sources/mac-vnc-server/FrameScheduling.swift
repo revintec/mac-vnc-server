@@ -21,12 +21,10 @@ final class FrameChangeHub: @unchecked Sendable {
     private let lock = NSLock()
     private var observers: [UUID: @Sendable () -> Void] = [:]
     private var sequence: UInt64 = 0
-    private var displaySequences: [UInt32: UInt64] = [:]
-    func nextSequences(displayID: UInt32) -> (UInt64, UInt64) {
+    func nextSequence() -> UInt64 {
         lock.withLock {
             sequence &+= 1
-            displaySequences[displayID, default: 0] &+= 1
-            return (sequence, displaySequences[displayID]!)
+            return sequence
         }
     }
     func observe(_ callback: @escaping @Sendable () -> Void) -> UUID {

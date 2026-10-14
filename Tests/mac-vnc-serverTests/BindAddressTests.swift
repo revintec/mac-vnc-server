@@ -54,19 +54,4 @@ struct BindAddressTests {
         #expect(!reversed.allowEncryption && reversed.fileTransfer && reversed.clipboardSync)
     }
 
-    @Test func authenticationGuardUsesTheResolvedAddress() throws {
-        #expect(BindAddress.isLoopback("127.0.0.2"))
-        #expect(!BindAddress.isLoopback("127.invalid"))
-        #expect(!BindAddress.isLoopback("192.0.2.1"))
-        #expect(throws: (any Error).self) {
-            try CLI.parse(arguments: ["--bind", "192.0.2.1", "--no-password"])
-        }
-        #expect(throws: (any Error).self) {
-            try CLI.parse(arguments: ["--bind", "127.invalid", "--no-password"])
-        }
-        guard case .run(let config) = try CLI.parse(arguments: [
-            "--session", "user", "--bind", "192.0.2.1", "--no-password", "--insecure-allow-no-auth"
-        ]) else { Issue.record("expected run command"); return }
-        #expect(config.insecureAllowNoAuth)
-    }
 }

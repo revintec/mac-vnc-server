@@ -82,12 +82,11 @@ import Testing
     guard case .run(let config) = try CLI.parse(arguments: ["--no-encryption", "--cursor", "embedded"]) else {
         Issue.record("expected run command"); return
     }
-    #expect(!config.passwordFromEnvironment)
     #expect(!config.allowEncryption && config.fileTransfer && config.cursorMode == .embedded)
     guard case .run(let transfer) = try CLI.parse(arguments: ["--no-encryption", "--file-transfer"]) else {
         Issue.record("expected run command"); return
     }
-    #expect(transfer.fileTransfer && !transfer.allowEncryption && !transfer.passwordFromEnvironment)
+    #expect(transfer.fileTransfer && !transfer.allowEncryption)
     #expect(throws: (any Error).self) { try CLI.parse(arguments: ["--cursor", "unknown"]) }
 }
 

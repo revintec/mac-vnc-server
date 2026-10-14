@@ -11,7 +11,7 @@ enum RemoteSessionIcon {
     static let eyeDim = redEye(alpha: 0.4)
 
     private static func redEye(alpha: CGFloat) -> NSImage? {
-        guard let symbol = NSImage(systemSymbolName: "eye.fill", accessibilityDescription: "Desktop visible on physical display") else {
+        guard let symbol = NSImage(systemSymbolName: "eye.fill", accessibilityDescription: "Desktop may be visible on the physical display") else {
             return nil
         }
         // NSStatusBarButton's template rendering can ignore contentTintColor

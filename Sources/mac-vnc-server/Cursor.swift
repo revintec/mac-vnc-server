@@ -58,7 +58,7 @@ struct CursorImage: Equatable, Sendable {
     }
 }
 
-struct CursorSnapshot: Sendable {
+struct CursorSnapshot: Equatable, Sendable {
     let image: CursorImage
     let position: CGPoint
 
@@ -96,15 +96,20 @@ final class MacCursorMonitor: @unchecked Sendable {
     private let lock = NSLock()
     private var value: CursorSnapshot
     private var task: Task<Void, Never>?
+    private let onChange: @Sendable () -> Void
 
-    private init(initial: CursorSnapshot) { value = initial }
+    private init(initial: CursorSnapshot, onChange: @escaping @Sendable () -> Void) {
+        value = initial; self.onChange = onChange
+    }
     deinit { task?.cancel() }
+    func stop() { task?.cancel() }
 
     var snapshot: CursorSnapshot { lock.withLock { value } }
 
-    @MainActor static func start() -> MacCursorMonitor? {
+    @MainActor static func start(onChange: @escaping @Sendable () -> Void = {}) -> MacCursorMonitor? {
         guard let cursor = NSCursor.currentSystem, let image = render(cursor) else { return nil }
-        let monitor = MacCursorMonitor(initial: CursorSnapshot(image: image, position: CGEvent(source: nil)?.location ?? .zero))
+        let monitor = MacCursorMonitor(initial: CursorSnapshot(image: image, position: CGEvent(source: nil)?.location ?? .zero),
+                                       onChange: onChange)
         monitor.task = Task { @MainActor [weak monitor] in
             while !Task.isCancelled {
                 autoreleasepool { monitor?.sample() }
@@ -123,7 +128,12 @@ final class MacCursorMonitor: @unchecked Sendable {
             image = .hidden
         }
         let position = CGEvent(source: nil)?.location ?? snapshot.position
-        lock.withLock { value = CursorSnapshot(image: image, position: position) }
+        let next = CursorSnapshot(image: image, position: position)
+        let changed = lock.withLock {
+            guard value != next else { return false }
+            value = next; return true
+        }
+        if changed { onChange() }
     }
 
     @MainActor static func render(_ cursor: NSCursor) -> CursorImage? {

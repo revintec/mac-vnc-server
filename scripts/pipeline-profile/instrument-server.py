@@ -20,7 +20,8 @@ enum PipelineProfile {
         let lock = NSLock()
         let file: UnsafeMutablePointer<FILE>?
         init() {
-            file = ProcessInfo.processInfo.environment["MAC_VNC_PROFILE"].flatMap { fopen($0, "w") }
+            let directory = String(decoding: __PROFILE_DIRECTORY__, as: UTF8.self)
+            file = fopen("\\(directory)/worker-\\(getpid()).csv", "w")
             if let file { setvbuf(file, nil, _IOFBF, 1024 * 1024) }
         }
     }
@@ -44,7 +45,7 @@ enum PipelineProfile {
         emit(name, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), 0, 0, info)
     }
 }
-''')
+'''.replace('__PROFILE_DIRECTORY__', str(list(str(dest.parent.resolve()).encode()))))
 def replace(name, old, new, count=1):
     p = files / name
     s = p.read_text()
@@ -53,17 +54,15 @@ def replace(name, old, new, count=1):
 def span(name, signature, label):
     replace(name, signature, signature + f'\n        let profile = PipelineProfile.Span(name: "{label}")\n        defer {{ profile.end() }}')
 span('RFBServer.swift', 'private func handleFramebufferUpdateRequestMessage() throws {', 'request_read_parse')
-server_source = (files / 'RFBServer.swift').read_text()
-new_pacing = 'private func throttleFrameRate() throws' in server_source
-signal = '        state.signal(); wake.signal()' if new_pacing else '        state.signal()'
+signal = '        state.signal(); wake.signal()'
 replace('RFBServer.swift', signal + '\n        state.unlock()\n        if requestNumber',
         '        PipelineProfile.point("request_queued", "fd=\\(socket.fd);request=\\(requestNumber)")\n' + signal + '\n        state.unlock()\n        if requestNumber')
-throttle = '        try throttleFrameRate()' if new_pacing else '        throttleFrameRate()'
+throttle = '        try throttleFrameRate()'
 replace('RFBServer.swift', '        frameHadNetworkStall = false\n' + throttle,
         '        let profileFrame = PipelineProfile.Span(name: "response_including_throttle")\n        defer { profileFrame.end("fd=\\(socket.fd);unsolicited=\\(unsolicited)") }\n        frameHadNetworkStall = false\n' + throttle)
-span('RFBServer.swift', 'private func throttleFrameRate()' + (' throws' if new_pacing else '') + ' {', 'fps_wait')
+span('RFBServer.swift', 'private func throttleFrameRate() throws {', 'fps_wait')
 span('RFBServer.swift', 'private func captureClientFramebuffer() throws -> (framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout) {', 'snapshot_cursor_scale')
-capture_decl = ('let' if new_pacing else 'var') + ' captured = try capture.capture()'
+capture_decl = 'let captured = try capture.capture()'
 replace('RFBServer.swift', '        ' + capture_decl, '        ' + capture_decl + '\n        PipelineProfile.point("snapshot_sequence", "seq=\\(captured.sequence ?? 0)")')
 replace('RFBServer.swift', '        let diffStarted = logger.isVerbose ? Date() : .distantPast', '        let profileDiff = PipelineProfile.Span(name: "dirty_region_diff")\n        let diffStarted = logger.isVerbose ? Date() : .distantPast')
 replace('RFBServer.swift', '        let diffDuration = logger.isVerbose ? Date().timeIntervalSince(diffStarted) : 0', '        profileDiff.end()\n        let diffDuration = logger.isVerbose ? Date().timeIntervalSince(diffStarted) : 0')
@@ -75,9 +74,9 @@ span('RFBServer.swift', 'private func applyKeyEvent(down: Bool, keysym: UInt32) 
 replace('ZlibEncoding.swift', '        try RawEncoding.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, into: &rawBuffer)', '        let profilePack = PipelineProfile.Span(name: "pixel_pack")\n        try RawEncoding.encode(rect: rect, framebuffer: framebuffer, pixelFormat: pixelFormat, into: &rawBuffer)\n        profilePack.end()\n        let profileDeflate = PipelineProfile.Span(name: "zlib_deflate")\n        defer { profileDeflate.end("backend=\\(configuration.backend.rawValue);level=\\(stream.level)") }')
 span('AppleEncryption.swift', '        func seal(_ payload: [UInt8]) throws -> [UInt8] {', 'aes_record_seal')
 span('Socket.swift', '    private func writeRaw(_ bytes: [UInt8], idleTimeout: TimeInterval, onStall: (() -> Void)?) throws {', 'socket_write_raw')
-capture_lock = '        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {' if new_pacing else '        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)'
+capture_lock = '        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {'
 replace('StreamingScreenCapture.swift', capture_lock, '        let profileCopy = PipelineProfile.Span(name: "capture_buffer_copy")\n        defer { profileCopy.end() }\n' + capture_lock)
-sequence_line = '        sequence = sequences.0' if new_pacing else '        sequence &+= 1'
+sequence_line = '        sequence = changes.nextSequence()'
 replace('StreamingScreenCapture.swift', sequence_line, sequence_line + '\n        PipelineProfile.point("capture_ready", "seq=\\(sequence);pts=\\(presentationTime ?? 0)")')
 # Flush stage records when a client disconnects, and diagnostic stdout per line.
 replace('Logging.swift', '        fputs("\\(message)\\n", stream)', '        fputs("\\(message)\\n", stream)\n        fflush(stream)\n        PipelineProfile.sink.lock.withLock { if let file = PipelineProfile.sink.file { fflush(file) } }')

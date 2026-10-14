@@ -8,24 +8,17 @@ enum AccountSessionWorker {
         let channel = try SessionChannel(fd: dup(STDIN_FILENO))
         let config = options.config
         let logger = ServerLogger(verbose: config.verbose)
-        let capture: any FramebufferSource & Sendable
-        let userCapture: StreamingScreenCapture?
-        let rootCapture: ConsoleDisplayCapture?
+        logger.verbose("Session worker attached: uid=\(options.identity.uid) audit=\(options.identity.auditID) pid=\(getpid())")
+        // Both identities use the same capture, cursor and delivery pipeline.
+        // The listener has already installed loginwindow's capture service in
+        // user/0; the attached worker must never fall back to another desktop.
+        let capture = try await StreamingScreenCapture(scale: config.scale, fps: config.fps,
+            displaySelection: config.displaySelection,
+            logger: logger, cursorMode: config.cursorMode,
+            consoleIdentity: options.identity.uid == 0 ? options.identity : nil)
         let rootInput: ConsoleRootInput?
-        if options.identity.uid == 0 {
-            let source = try ConsoleDisplayCapture(scale: config.scale, fps: config.fps,
-                displaySelection: config.displaySelection, logger: logger)
-            do { try await source.waitUntilReady() }
-            catch { source.stop(); throw error }
-            rootCapture = source; userCapture = nil; capture = source
-            do { rootInput = try ConsoleRootInput(identity: options.identity) }
-            catch { source.stop(); throw error }
-        } else {
-            let source = try await StreamingScreenCapture(scale: config.scale, fps: config.fps,
-                displaySelection: config.displaySelection == .automatic ? .all : config.displaySelection,
-                logger: logger, cursorMode: config.cursorMode)
-            userCapture = source; rootCapture = nil; capture = source; rootInput = nil
-        }
+        do { rootInput = options.identity.uid == 0 ? try ConsoleRootInput(identity: options.identity) : nil }
+        catch { await capture.stop(); throw error }
         let inputs: SharedInputController
         if let rootInput {
             inputs = SharedInputController(input: MacInputController(logger: ServerLogger(verbose: false),
@@ -33,7 +26,7 @@ enum AccountSessionWorker {
         } else { inputs = SharedInputController(input: MacInputController(logger: logger)) }
         let server = RFBServer(config: config, capture: capture, makeInput: { inputs.makeClient() },
             makeClipboard: {
-                if options.identity.uid == 0 { return ConsoleClipboard() }
+                if options.identity.uid == 0 { return DisabledClipboard() }
                 return MacClipboard()
             },
             logger: logger, transferInbox: transferInbox)
@@ -58,13 +51,11 @@ enum AccountSessionWorker {
             } onCancel: { channel.shutdown(); server.stop() }
         } catch {
             server.stop(); server.waitForClients(); channel.shutdown()
-            rootCapture?.stop()
-            await userCapture?.stop()
+            await capture.stop()
             throw error
         }
         server.stop(); server.waitForClients(); channel.shutdown()
-        rootCapture?.stop()
-        await userCapture?.stop()
+        await capture.stop()
     }
 }
 

@@ -14,6 +14,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     private let scale: CGFloat
     private let fps: Int
     private let displaySelection: DisplaySelection
+    private let consoleIdentity: ConsoleIdentity?
     private let logger: ServerLogger
     private let streamEventSink: StreamEventSink
     private let stateLock = NSLock()
@@ -42,16 +43,20 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         fps: Int,
         displaySelection: DisplaySelection,
         logger: ServerLogger,
-        cursorMode: CursorMode = .auto
+        cursorMode: CursorMode = .auto,
+        consoleIdentity: ConsoleIdentity? = nil
     ) async throws {
         self.scale = CGFloat(scale)
         self.fps = fps
         self.displaySelection = displaySelection
+        self.consoleIdentity = consoleIdentity
+        try Self.verifyConsole(consoleIdentity)
         self.logger = logger
         desiredCaptureFPS = fps
         captureRateTask = nil
 
-        cursorMonitor = cursorMode == .embedded ? nil : await MacCursorMonitor.start()
+        let changes = self.changes
+        cursorMonitor = cursorMode == .embedded ? nil : await MacCursorMonitor.start(onChange: { changes.signal() })
         includesCursor = cursorMonitor == nil
         logger.info("cursor: \(includesCursor ? "embedded in framebuffer" : "client-rendered shapes; embedded fallback for viewers without RichCursor")")
 
@@ -61,6 +66,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
             fps: fps,
             displaySelection: displaySelection,
             includesCursor: includesCursor,
+            consoleIdentity: consoleIdentity,
             eventSink: eventSink,
             changes: changes,
             logger: logger
@@ -70,6 +76,8 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
             await Self.stopStreams(started.streams, logger: logger)
             throw RFBError.captureFailed("ScreenCaptureKit did not produce frames; check Screen Recording permission")
         }
+        do { try Self.verifyConsole(consoleIdentity) }
+        catch { await Self.stopStreams(started.streams, logger: logger); throw error }
 
         streamEventSink = eventSink
         store = started.store
@@ -81,11 +89,14 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         // Fast User Switching can replace display IDs without stopping every
         // SCStream. Re-enumerate the displays in this user's session on both
         // transitions, including when the old stream silently stops delivering.
-        for (notification, reason) in [
-            (NSWorkspace.screensDidWakeNotification, "screens did wake"),
+        var notifications = [(NSWorkspace.screensDidWakeNotification, "screens did wake")]
+        // A console worker is bound to one verified console identity. It must
+        // end on a switch, not rebuild into the next user's graphical session.
+        if consoleIdentity == nil { notifications += [
             (NSWorkspace.sessionDidResignActiveNotification, "user session moved off console"),
             (NSWorkspace.sessionDidBecomeActiveNotification, "user session returned to console")
-        ] {
+        ] }
+        for (notification, reason) in notifications {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
                 forName: notification,
                 object: nil,
@@ -103,6 +114,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     }
 
     func stop() async {
+        cursorMonitor?.stop()
         let recovery = recoveryLock.withLock {
             stopping = true
             recoveryTask?.cancel()
@@ -120,19 +132,13 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     }
 
     func capture() throws -> Framebuffer {
-        try currentStore().snapshot()
-    }
-
-    func capture(displayIndex: Int) throws -> Framebuffer {
-        try currentStore().snapshot(displayIndex: displayIndex)
+        try Self.verifyConsole(consoleIdentity)
+        return try currentStore().snapshot()
     }
 
     func currentSequence() throws -> UInt64? {
-        try currentStore().currentSequence()
-    }
-
-    func currentSequence(displayIndex: Int) throws -> UInt64? {
-        try currentStore().currentSequence(displayIndex: displayIndex)
+        try Self.verifyConsole(consoleIdentity)
+        return try currentStore().currentSequence()
     }
 
     func requestRecoveryAfterInput() {
@@ -140,7 +146,8 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         let needed = recoveryNeeded
         recoveryLock.unlock()
 
-        guard needed else {
+        let blank = stateLock.withLock { outputs.contains { $0.isBlank } }
+        guard needed || blank else {
             return
         }
         scheduleDisplayWakeup()
@@ -295,11 +302,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         return true
     }
 
-    static func displayCount() async throws -> Int {
-        let content = try await shareableContent(onScreenWindowsOnly: true)
-        return content.displays.count
-    }
-
     private static func shareableContent(onScreenWindowsOnly: Bool) async throws -> SCShareableContent {
         // The framework's immutable snapshot is read only after its callback.
         struct Content: @unchecked Sendable { let value: SCShareableContent }
@@ -318,13 +320,23 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         fps: Int,
         displaySelection: DisplaySelection,
         includesCursor: Bool,
+        consoleIdentity: ConsoleIdentity?,
         eventSink: StreamEventSink,
         changes: FrameChangeHub,
         logger: ServerLogger
     ) async throws -> StartedCapture {
+        try verifyConsole(consoleIdentity)
         logger.verbose("ScreenCaptureKit: enumerating displays")
         let content = try await shareableContent(onScreenWindowsOnly: false)
-        let selectedDisplays = try selectDisplays(from: orderedDisplays(content.displays), displaySelection: displaySelection)
+        try verifyConsole(consoleIdentity)
+        let offered = orderedDisplays(content.displays)
+        if consoleIdentity != nil {
+            try validateConsoleDisplays(offered.map { display in
+                VirtualDisplay(id: display.displayID, bounds: CGDisplayBounds(display.displayID),
+                    pixelWidth: display.width, pixelHeight: display.height)
+            }, activeDisplayIDs: MacDisplays.activeDisplayIDs(), scale: scale)
+        }
+        let selectedDisplays = try selectDisplays(from: offered, displaySelection: displaySelection)
         let displays = selectedDisplays.map { display in
             VirtualDisplay(
                 id: display.displayID,
@@ -351,6 +363,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
         do {
             for display in selectedDisplays {
+                try verifyConsole(consoleIdentity)
                 let bounds = CGDisplayBounds(display.displayID)
                 let width = max(1, Int(bounds.width * scale))
                 let height = max(1, Int(bounds.height * scale))
@@ -365,7 +378,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
                 let delegate = ScreenCaptureStreamDelegate(eventSink: eventSink)
                 let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
-                let output = ScreenCaptureStreamOutput(displayID: display.displayID, store: store)
+                let output = ScreenCaptureStreamOutput(displayID: display.displayID, width: width, height: height, store: store)
                 try stream.addStreamOutput(
                     output,
                     type: .screen,
@@ -381,6 +394,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                         complete(error.map { .failure($0) } ?? .success(()))
                     }
                 }
+                try verifyConsole(consoleIdentity)
             }
         } catch {
             await stopStreams(streams, logger: logger)
@@ -440,6 +454,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
     private func restartCapture(reason: String) async throws {
         try Task.checkCancellation()
+        try Self.verifyConsole(consoleIdentity)
         logger.info("ScreenCaptureKit: rebuilding capture after \(reason)")
 
         let oldStreams = currentStreams()
@@ -453,6 +468,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                     fps: fps,
                     displaySelection: displaySelection,
                     includesCursor: includesCursor,
+                    consoleIdentity: consoleIdentity,
                     eventSink: streamEventSink,
                     changes: changes,
                     logger: logger
@@ -462,7 +478,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                     throw RFBError.captureFailed("ScreenCaptureKit did not produce frames during recovery")
                 }
 
-                if Task.isCancelled {
+                if Task.isCancelled || (consoleIdentity.map { !$0.verifyWorker() } ?? false) {
                     await Self.stopStreams(started.streams, logger: logger)
                     throw CancellationError()
                 }
@@ -550,7 +566,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         }
 
         switch displaySelection {
-        case .automatic, .all:
+        case .all:
             return displays
         case .display(let index):
             guard displays.indices.contains(index - 1) else {
@@ -561,7 +577,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     }
 
     private static func orderedDisplays(_ displays: [SCDisplay]) -> [SCDisplay] {
-        guard let activeDisplayIDs = try? MacScreenCapture.activeDisplayIDs() else {
+        guard let activeDisplayIDs = try? MacDisplays.activeDisplayIDs() else {
             return displays
         }
 
@@ -569,6 +585,41 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         return displays.sorted {
             (order[$0.displayID] ?? Int.max, $0.displayID) < (order[$1.displayID] ?? Int.max, $1.displayID)
         }
+    }
+
+    private static func verifyConsole(_ identity: ConsoleIdentity?) throws {
+        if let identity, !identity.verifyWorker() {
+            throw RFBError.captureFailed("console identity changed; ScreenCaptureKit capture stopped")
+        }
+    }
+
+    static func consoleLayout(displays: [VirtualDisplay], scale: Double) throws -> VirtualDisplayLayout {
+        guard !displays.isEmpty, displays.count <= 32, scale.isFinite, scale > 0, scale <= 4,
+              displays.allSatisfy({
+                  $0.bounds.origin.x.isFinite && $0.bounds.origin.y.isFinite &&
+                  $0.bounds.size.width.isFinite && $0.bounds.size.height.isFinite &&
+                  $0.bounds.size.width > 0 && $0.bounds.size.height > 0 &&
+                  (1...65535).contains($0.pixelWidth) && (1...65535).contains($0.pixelHeight)
+              }) else { throw RFBError.captureFailed("console has no valid CoreGraphics display geometry") }
+        let union = displays.dropFirst().reduce(displays[0].bounds) { $0.union($1.bounds) }
+        let width = ceil(union.width * scale), height = ceil(union.height * scale)
+        guard width.isFinite, height.isFinite, width > 0, height > 0,
+              width <= 65535, height <= 65535, max(1, width) * max(1, height) * 4 <= Double(256 * 1024 * 1024) else {
+            throw RFBError.captureFailed("console display layout exceeds framebuffer limits")
+        }
+        return VirtualDisplayLayout(displays: displays, scaleOverride: scale)
+    }
+
+    static func validateConsoleDisplays(_ displays: [VirtualDisplay], activeDisplayIDs: [CGDirectDisplayID],
+                                        scale: CGFloat) throws {
+        // Root SCK once returned the invoking user's off-console display 30.
+        // Valid dimensions alone are insufficient: require precisely the
+        // displays reported by this attached console's CoreGraphics session.
+        guard !activeDisplayIDs.isEmpty, displays.count == activeDisplayIDs.count,
+              Set(displays.map(\.id)) == Set(activeDisplayIDs) else {
+            throw RFBError.captureFailed("ScreenCaptureKit displays do not match the attached console; no user-desktop fallback")
+        }
+        _ = try consoleLayout(displays: displays, scale: Double(scale))
     }
 }
 
@@ -625,7 +676,6 @@ private final class ScreenCaptureStreamDelegate: NSObject, SCStreamDelegate {
 }
 
 private struct DisplayFrame {
-    let sequence: UInt64
     let width: Int
     let height: Int
     let bytesPerRow: Int
@@ -638,7 +688,6 @@ final class StreamingFrameStore: @unchecked Sendable {
     private let layout: VirtualDisplayLayout
     private let expectedDisplayIDs: Set<CGDirectDisplayID>
     private var frames: [CGDirectDisplayID: DisplayFrame] = [:]
-    private var displaySequences: [CGDirectDisplayID: UInt64] = [:]
     private var acceptedFrameInterval: TimeInterval
     private var nextPresentationTimes: [CGDirectDisplayID: TimeInterval] = [:]
     private let changes: FrameChangeHub
@@ -721,12 +770,8 @@ final class StreamingFrameStore: @unchecked Sendable {
         condition.lock()
         // The hub survives stream recovery. Never reuse an old sequence/cache
         // identity when ScreenCaptureKit restarts at the same dimensions.
-        let sequences = changes.nextSequences(displayID: displayID)
-        sequence = sequences.0
-        let displaySequence = sequences.1
-        displaySequences[displayID] = displaySequence
+        sequence = changes.nextSequence()
         frames[displayID] = DisplayFrame(
-            sequence: displaySequence,
             width: width,
             height: height,
             bytesPerRow: bytesPerRow,
@@ -845,132 +890,11 @@ final class StreamingFrameStore: @unchecked Sendable {
         return sequence
     }
 
-    func currentSequence(displayIndex: Int) throws -> UInt64? {
-        condition.lock()
-        defer { condition.unlock() }
-        guard layout.displays.indices.contains(displayIndex - 1) else {
-            throw RFBError.captureFailed("display \(displayIndex) is not available")
-        }
-        let display = layout.displays[displayIndex - 1]
-        guard let frame = frames[display.id] else {
-            throw RFBError.captureFailed("no ScreenCaptureKit frame available for display \(displayIndex)")
-        }
-        return frame.sequence
-    }
-
-    func snapshot(displayIndex: Int) throws -> Framebuffer {
-        condition.lock()
-        let currentFrames = frames
-        condition.unlock()
-
-        guard layout.displays.indices.contains(displayIndex - 1) else {
-            throw RFBError.captureFailed("display \(displayIndex) is not available")
-        }
-
-        let display = layout.displays[displayIndex - 1]
-        guard let frame = currentFrames[display.id] else {
-            throw RFBError.captureFailed("no ScreenCaptureKit frame available for display \(displayIndex)")
-        }
-
-        let displayLayout = VirtualDisplayLayout(displays: [display], scaleOverride: layout.scale)
-        if frame.width == displayLayout.width, frame.height == displayLayout.height {
-            return Framebuffer(
-                width: displayLayout.width,
-                height: displayLayout.height,
-                bytesPerRow: frame.bytesPerRow,
-                bgra: frame.bgra,
-                layout: displayLayout,
-                sequence: frame.sequence,
-                dirtyRects: frame.dirtyRects
-            )
-        }
-
-        let bytesPerRow = displayLayout.width * 4
-        var pixels = [UInt8](repeating: 0, count: bytesPerRow * displayLayout.height)
-        let copyWidth = min(frame.width, displayLayout.width)
-        let copyHeight = min(frame.height, displayLayout.height)
-
-        for row in 0..<copyHeight {
-            let sourceOffset = row * frame.bytesPerRow
-            let destinationOffset = row * bytesPerRow
-            _ = pixels.withUnsafeMutableBytes { destination in
-                frame.bgra.withUnsafeBytes { source in
-                    memcpy(
-                        destination.baseAddress!.advanced(by: destinationOffset),
-                        source.baseAddress!.advanced(by: sourceOffset),
-                        copyWidth * 4
-                    )
-                }
-            }
-        }
-
-        return Framebuffer(
-            width: displayLayout.width,
-            height: displayLayout.height,
-            bytesPerRow: bytesPerRow,
-            bgra: pixels,
-            layout: displayLayout,
-            sequence: frame.sequence,
-            dirtyRects: frame.dirtyRects
-        )
-    }
 }
 
-final class SelectedDisplayFramebufferSource: @unchecked Sendable, FramebufferSource, FramebufferSequenceSource, InputRecoverySource, CaptureFrameRateController {
-    private let source: StreamingScreenCapture
-    private let displayIndex: Int?
-
-    var includesCursor: Bool { source.includesCursor }
-    var frameChanges: FrameChangeHub? { source.frameChanges }
-    var cursorSnapshot: CursorSnapshot? { source.cursorSnapshot }
-
-    init(source: StreamingScreenCapture, displayIndex: Int?) {
-        self.source = source
-        self.displayIndex = displayIndex
-    }
-
-    func capture() throws -> Framebuffer {
-        if let displayIndex {
-            return try source.capture(displayIndex: displayIndex)
-        }
-
-        return try source.capture()
-    }
-
-    func currentSequence() throws -> UInt64? {
-        if let displayIndex {
-            return try source.currentSequence(displayIndex: displayIndex)
-        }
-        return try source.currentSequence()
-    }
-
-    func requestRecoveryAfterInput() {
-        source.requestRecoveryAfterInput()
-    }
-
-    func registerCaptureRateConsumer(_ consumer: ObjectIdentifier, fps: Int) {
-        source.registerCaptureRateConsumer(consumer, fps: fps)
-    }
-
-    func updateCaptureRate(
-        _ fps: Int,
-        consumer: ObjectIdentifier,
-        reconfigureCapture: Bool
-    ) {
-        source.updateCaptureRate(
-            fps,
-            consumer: consumer,
-            reconfigureCapture: reconfigureCapture
-        )
-    }
-
-    func unregisterCaptureRateConsumer(_ consumer: ObjectIdentifier) {
-        source.unregisterCaptureRateConsumer(consumer)
-    }
-}
-
-private final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
+final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let displayID: CGDirectDisplayID
+    private let width: Int, height: Int
     private let store: StreamingFrameStore
     private struct Delivery {
         let pixelBuffer: CVPixelBuffer
@@ -978,37 +902,59 @@ private final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, @unchec
         let presentationTime: TimeInterval?
     }
     private let deliveryLock = NSLock()
-    private let deliveryQueue = DispatchQueue(label: "mac-vnc.capture-copy", qos: .userInteractive)
+    private let deliveryQueue: DispatchQueue
     private var pending: Delivery?
     private var copying = false
+    private var blank = false
+    var isBlank: Bool { deliveryLock.withLock { blank } }
 
-    init(displayID: CGDirectDisplayID, store: StreamingFrameStore) {
+    init(displayID: CGDirectDisplayID, width: Int, height: Int, store: StreamingFrameStore,
+         deliveryQueue: DispatchQueue = DispatchQueue(label: "mac-vnc.capture-copy", qos: .userInteractive)) {
         self.displayID = displayID
+        self.width = width; self.height = height
         self.store = store
+        self.deliveryQueue = deliveryQueue
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, sampleBuffer.isValid, let pixelBuffer = sampleBuffer.imageBuffer else {
+        guard type == .screen, sampleBuffer.isValid else {
             return
         }
-        if let entries = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
-            as? [[SCStreamFrameInfo: Any]],
-           let status = entries.first?[.status] as? Int,
-           status != SCFrameStatus.complete.rawValue { return }
-        let dirtyRects = Self.dirtyRects(
-            from: sampleBuffer,
-            width: CVPixelBufferGetWidth(pixelBuffer),
-            height: CVPixelBufferGetHeight(pixelBuffer)
-        )
+        let entries = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+            as? [[SCStreamFrameInfo: Any]]
+        guard let status = SCFrameStatus(rawValue: entries?.first?[.status] as? Int ?? SCFrameStatus.complete.rawValue) else { return }
+        let pixelBuffer = sampleBuffer.imageBuffer
+        let dirtyRects = pixelBuffer.flatMap { Self.dirtyRects(from: sampleBuffer,
+            width: CVPixelBufferGetWidth($0), height: CVPixelBufferGetHeight($0)) }
         let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let presentationSeconds = presentationTime.isValid
             ? CMTimeGetSeconds(presentationTime)
             : nil
-        let delivery = Delivery(pixelBuffer: pixelBuffer, dirtyRects: dirtyRects,
-            presentationTime: presentationSeconds?.isFinite == true ? presentationSeconds : nil)
+        receive(status: status, pixelBuffer: pixelBuffer, dirtyRects: dirtyRects,
+                presentationTime: presentationSeconds?.isFinite == true ? presentationSeconds : nil)
+    }
+
+    func receive(status: SCFrameStatus, pixelBuffer: CVPixelBuffer?, dirtyRects: [Rect]?,
+                 presentationTime: TimeInterval?) {
+        guard status == .complete || status == .blank else { return }
+        var buffer = pixelBuffer
+        if status == .blank {
+            if isBlank { return }
+            // Blank samples can have no image. Preserve the former console
+            // backend's black-frame behavior instead of retaining stale pixels.
+            guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &buffer) == kCVReturnSuccess,
+                  let buffer, CVPixelBufferLockBaseAddress(buffer, []) == kCVReturnSuccess else { return }
+            memset(CVPixelBufferGetBaseAddress(buffer), 0, CVPixelBufferGetBytesPerRow(buffer) * height)
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+        }
+        guard let buffer else { return }
+        let delivery = Delivery(pixelBuffer: buffer, dirtyRects: status == .blank ? nil : dirtyRects,
+            presentationTime: status == .blank ? nil : presentationTime)
         deliveryLock.lock()
+        let wasBlank = blank
+        blank = status == .blank
         var newest = delivery
-        if pending != nil { newest.dirtyRects = nil }
+        if pending != nil || wasBlank { newest.dirtyRects = nil }
         pending = newest
         let start = !copying
         copying = true

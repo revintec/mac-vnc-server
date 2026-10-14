@@ -32,8 +32,4 @@ enum BindAddress {
         throw RFBError.socketError("interface \(value) has no active IPv4 address; bring it up or choose another --bind target")
     }
 
-    static func isLoopback(_ address: String) -> Bool {
-        var parsed = in_addr()
-        return inet_pton(AF_INET, address, &parsed) == 1 && UInt32(bigEndian: parsed.s_addr) >> 24 == 127
-    }
 }

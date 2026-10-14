@@ -177,13 +177,3 @@ int VNCSessionExecWorker(const char *executable, const char *options) {
     execv(executable, arguments);
     return errno;
 }
-
-int VNCConsoleExecWorker(const char *executable, const char *options) {
-    // The supervisor maps the anonymous socket to stdin. Preserve it through
-    // the second exec; all other worker IPC descriptors are close-on-exec.
-    int flags = fcntl(STDIN_FILENO, F_GETFD);
-    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFD, flags & ~FD_CLOEXEC) < 0) return errno;
-    char *const arguments[] = {(char *)executable, "--console-worker-attached", (char *)options, NULL};
-    execv(executable, arguments);
-    return errno;
-}

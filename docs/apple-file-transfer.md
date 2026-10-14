@@ -20,40 +20,24 @@ completed local files, and attempts to continue the held gesture using AppKit.
 If the gesture ends first, drag completed rows from the Received Files panel.
 See [staged file drops](staged-file-drops.md) for storage, retention, configuration,
 verified early-transfer timing, and the outstanding macOS 13 end-to-end test.
-`--file-drop-mode native` retains the original helper's file-promise workflow
-for direct Finder destinations. Remote Finder items can still be dragged out
-into local Finder. Shared Clipboard is separate and is not required.
-[Application drop research](session-access-and-app-drops.md#drops-into-applications-other-than-finder)
-explains target-app differences and the reverse direction's constraints.
-Files are copied; the originals are retained. With a configured password and
-encryption allowed (`--encryption`), Apple viewers use security type 30 (Diffie–Hellman), which initializes the wrapping key
-needed by Apple's record encryption. Enter any username and the existing server
-password in Screen Sharing's login dialog. The username is a label; this server
-does not authenticate macOS accounts. Standard VNC viewers retain security type 2.
+Remote Finder items can also be dragged out into local Finder. Shared Clipboard
+is separate and is not required. [Application drop research](session-access-and-app-drops.md#drops-into-applications-other-than-finder)
+explains target-app differences. Client originals are retained; Finder drops can
+move the staged server copy, with status shown in the Received Files panel.
 
-Earlier versions refused SetEncryption and depended on a client URL override. Simply
-implementing the record cipher with type 2 still fails in the native viewer:
-that authentication path leaves its wrapping cipher uninitialized. The type 30
-exchange fixes this prerequisite, and the server now handles SetEncryption
-without a URL override. Native Tahoe tests use a plain URL and register the
-Screen Sharing 3.0 app's encryption default, which requests encrypted records.
-The macOS 13.1 client needs a manual retest with the plain URL.
+Every connection authenticates the actual macOS account through security type
+30 (Apple DH/AES), regardless of `--encryption`. The resulting wrapping key also
+decodes Screen Sharing's individually encrypted keyboard/mouse events. The
+default `--no-encryption` policy suppresses session-record key exchange, leaving
+framebuffer, clipboard and file payloads plaintext on the same plain VNC URL.
+`--encryption` allows the viewer to negotiate record encryption. There is no
+password-only or unauthenticated endpoint. See [account authentication](account-session-listener.md).
 
-Apple's legacy protocol does not authenticate the server's identity. Encryption
-is selected by the viewer, not forced by this option. SSH or a VPN supplies a
-trusted channel over untrusted networks. `--no-password` continues to offer None
-authentication and cannot negotiate Apple's record encryption.
-
-`--file-transfer --no-encryption` is the default experimental plaintext server mode
-using the same plain URL. It retains native capabilities and classic VNC password
-authentication. The client still requests encryption, but the server consumes
-that request without sending encryption keys or enabling encrypted records.
-Tahoe's native viewer continues in plaintext, including key input and file-drop
-registration. This behavior is undocumented and has not been verified with real
-Finder gestures on macOS 13. Opting in with `--encryption` honors encryption
-requests; the default plaintext mode does not satisfy the client's encryption preference.
-With file transfer disabled, framebuffer traffic is already unencrypted, including
-with text/image clipboard sharing. See [performance measurements](performance.md).
+The plaintext file-transfer negotiation uses undocumented Apple behavior.
+Recorded native tests use Tahoe's ScreenSharing.framework with the Screen Sharing
+3.0 app's normal encryption preference. They do not emulate the full Ventura
+client. ARD does not authenticate the server's identity; use an authenticated
+VPN/SSH channel over an untrusted network.
 
 Use Shared Clipboard remains a client preference. Advertising Control permission
 does not select it. See [clipboard behavior](apple-clipboard.md).
@@ -116,6 +100,10 @@ macOS 13.1 still requires a manual retest of the rebuilt server; passing the
 Tahoe probe does not establish that the older client no longer crashes.
 
 ## Native-client negotiation
+
+The following investigation records earlier profiles and experiments. Type-2
+profiles discussed here have since been removed; current account connections
+always use type 30 and retain the tested display, input and transfer fixes.
 
 A user test with Screen Sharing 3.0/macOS 13.1 produced no drag logs when a local
 Finder file was dragged into the remote desktop, even with `--file-transfer` on.
@@ -360,8 +348,7 @@ client that never sends a drag from one whose message is rejected by the server.
 
 ### Authentication and encrypted records
 
-Apple viewers with a configured password and encryption allowed are offered only
-type 30 for this profile. Offering type 2 alongside it lets saved VNC credentials select a path
+All connections are offered only type 30. Offering type 2 alongside it lets saved VNC credentials select a path
 that cannot initialize Apple's record keys. The server sends RFC 3526 group 14,
 generator 2, and a fresh 2048-bit public key. macOS Security's SecDH functions
 generate the private key and validate/compute the peer exchange; these exported
@@ -371,7 +358,7 @@ is described in Apple's [SecDH header](https://github.com/apple-oss-distribution
 The full-width shared secret's MD5 digest is the protocol-required AES-128
 wrapping key. The client sends a 128-byte AES-ECB credential block followed by
 its public key. Both credential fields must terminate within their 64-byte
-slots. The entire configured password is compared; credentials are never logged.
+slots. OpenDirectory verifies the selected account password and account policies; credentials are never logged or forwarded to workers.
 
 SetEncryption command 1 carries a level and supported cipher methods. Method 1
 selects AES. Encoding 1103 returns a method word and fresh key/IV, wrapped under

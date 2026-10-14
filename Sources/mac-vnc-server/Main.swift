@@ -28,14 +28,9 @@ struct MacVNCServerApp {
         let shutdown = ProcessShutdown.shared
         shutdown.installSignalHandlers()
         do {
-            let command = try CLI.parse(arguments: arguments).resolvingPassword()
+            let command = try CLI.parse(arguments: arguments)
             // Set credentials/audit membership, then exec before AppKit can
             // initialize. The attached entry point verifies the fresh process.
-            if case .consoleWorker(let options, let attached) = command {
-                setvbuf(stdout, nil, _IOLBF, 0)
-                if attached { try options.verifyAttachment() }
-                else { try options.attachAndExec() }
-            }
             if case .sessionWorker(let options, let attached) = command {
                 setvbuf(stdout, nil, _IOLBF, 0)
                 if attached { try options.verifyAttachment() }
@@ -51,19 +46,16 @@ struct MacVNCServerApp {
             switch command {
             case .run(let config):
                 verbose = config.verbose
-                showsStatus = config.sessionTarget == .user
-                if config.sessionTarget == .console || config.sessionTarget == .listener {
-                    setvbuf(stdout, nil, _IOLBF, 0)
-                    shutdown.installSignalHandlers([SIGHUP])
-                }
-                storageOptions = config.sessionTarget == .user && config.fileTransfer && !config.nativeFileDrops ? config.transferOptions : nil
+                setvbuf(stdout, nil, _IOLBF, 0)
+                shutdown.installSignalHandlers([SIGHUP])
+                storageOptions = nil
                 panelOnly = false
             case .sessionWorker(let options, _):
                 verbose = options.config.verbose
                 showsStatus = options.identity.uid != 0
                 var storage = options.config.transferOptions
                 if !options.config.transferDirectoryIsExplicit { storage.root = TransferStore.Options().root }
-                storageOptions = showsStatus && options.config.fileTransfer && !options.config.nativeFileDrops ? storage : nil
+                storageOptions = showsStatus && options.config.fileTransfer ? storage : nil
                 panelOnly = false
             case .transfers(let options): storageOptions = options; panelOnly = true; showsStatus = true
             default: storageOptions = nil; panelOnly = false

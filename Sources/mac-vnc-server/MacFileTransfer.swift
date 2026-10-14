@@ -198,7 +198,8 @@ final class MacFileTransfer: @unchecked Sendable {
             old?.cancel()
             oldGesture?.cancel()
             guard active else { releaseDrag(token: token); return }
-            if let inbox, !incomingFiles.isEmpty {
+            if !incomingFiles.isEmpty {
+                guard let inbox else { throw RFBError.protocolError("incoming file transfer requires a staging inbox") }
                 let batch: TransferStore.Batch
                 do { batch = try inbox.store.begin(names: incomingFiles.map(\.lastPathComponent)) }
                 catch {
@@ -239,15 +240,6 @@ final class MacFileTransfer: @unchecked Sendable {
             // processing the viewer's next pointer packet (which may be up).
             guard try helper.read(1, timeout: 5) == [15] else {
                 throw RFBError.protocolError("native drag helper did not initialize")
-            }
-            if !compressed.isEmpty {
-                guard lock.withLock({ () -> Bool in
-                    guard !stopped && drag === helper else { return false }
-                    postMouse(.leftMouseUp)
-                    postMouse(.leftMouseDown, offset: 1)
-                    return true
-                }) else { return }
-                try helper.input.writeAll([20])
             }
             logger.verbose("Apple drag ready: session=\(sessionID)")
             DispatchQueue.global(qos: .userInitiated).async { [self, helper] in
@@ -356,24 +348,6 @@ final class MacFileTransfer: @unchecked Sendable {
                     postMouse(code == 12 ? .leftMouseUp : .leftMouseDragged, offset: code == 13 ? 1 : 0)
                 }
             case 14: return
-            case 10:
-                let header = try helper.read(8)
-                let session = UInt32(littleEndianBytes: header, at: 0)
-                let length = Int(UInt32(littleEndianBytes: header, at: 4))
-                guard length > 0, length < 16_384 else { throw RFBError.protocolError("invalid drop destination length") }
-                let path = try AppleFileTransfer.pathString(helper.read(length))
-                let directory = URL(fileURLWithPath: path).standardizedFileURL
-                guard directory.hasDirectoryPath || (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
-                    throw RFBError.protocolError("drop destination is not a directory")
-                }
-                guard lock.withLock({ () -> Bool in
-                    guard !stopped && drag === helper else { return false }
-                    dropDirectories.insert(directory.path)
-                    return true
-                }) else { return }
-                // Server-to-viewer file-transfer request: session, UTF-8 path.
-                let bytes = Array(path.utf8)
-                try send([0x1e, 0, 0, 0] + session.beBytes + UInt32(bytes.count).beBytes + bytes)
             case 11:
                 let header = try helper.read(12)
                 let session = UInt32(littleEndianBytes: header, at: 0)
@@ -506,38 +480,33 @@ final class MacFileTransfer: @unchecked Sendable {
     func startReceiver(session: UInt32, directory: URL, name: String?) throws {
         // A private staging directory prevents incomplete transfers and name
         // collisions from replacing existing files at the selected destination.
-        let batch = lock.withLock { stagedBatches[directory.path] }
-        let receive = try batch.flatMap { try inbox?.store.receive(batch: $0, name: name) }
-        let staging = receive?.staging ?? directory.appendingPathComponent(".mac-vnc-transfer-\(UUID())", isDirectory: true)
-        if receive == nil {
-            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false,
-                                                   attributes: [.posixPermissions: 0o700])
+        guard let inbox, let batch = lock.withLock({ stagedBatches[directory.path] }) else {
+            throw RFBError.protocolError("file receiver requires an active staging batch")
         }
+        let receive = try inbox.store.receive(batch: batch, name: name)
+        let staging = receive.staging
         let helper: NativeTransferProcess
         do { helper = try NativeTransferProcess(path: NativeTransferProcess.receiverPath) }
         catch {
-            if let receive { try? inbox?.store.fail(receive, reason: error.localizedDescription) }
-            else { try? FileManager.default.removeItem(at: staging) }
+            try? inbox.store.fail(receive, reason: error.localizedDescription)
             throw error
         }
         lock.lock()
         guard !stopped, receivers[session] == nil, senders.count + receivers.count < 8 else {
             lock.unlock(); helper.cancelAndWait()
-            if let receive { try? inbox?.store.fail(receive, reason: "Too many or duplicate transfers") }
-            else { try? FileManager.default.removeItem(at: staging) }
+            try? inbox.store.fail(receive, reason: "Too many or duplicate transfers")
             throw RFBError.protocolError("too many or duplicate file-copy sessions")
         }
         receivers[session] = helper
-        if let receive { stagedReceives[session] = receive }
+        stagedReceives[session] = receive
         lock.unlock()
         do {
-            if let receive { try inbox?.store.writerStarted(receive, pid: helper.processID) }
+            try inbox.store.writerStarted(receive, pid: helper.processID)
             try helper.input.writeAll(AppleFileTransfer.receiverStart(sessionID: session, directory: staging, name: name))
         } catch {
             helper.cancelAndWait()
             lock.withLock { _ = receivers.removeValue(forKey: session); stagedReceives.removeValue(forKey: session) }
-            if let receive { try? inbox?.store.fail(receive, reason: error.localizedDescription) }
-            else { try? FileManager.default.removeItem(at: staging) }
+            try? inbox.store.fail(receive, reason: error.localizedDescription)
             throw error
         }
         DispatchQueue.global(qos: .utility).async { [self, helper] in
@@ -547,12 +516,11 @@ final class MacFileTransfer: @unchecked Sendable {
                 helper.cancelAndWait()
                 lock.withLock {
                     if let reason = receiveFailures.removeValue(forKey: session) { failure = reason }
-                    if receive != nil && !succeeded { cancelledReceives.insert(session) }
+                    if !succeeded { cancelledReceives.insert(session) }
                     if receivers[session] === helper { receivers.removeValue(forKey: session) }
                     stagedReceives.removeValue(forKey: session)
                 }
-                if let receive { try? inbox?.store.fail(receive, reason: failure) }
-                else { try? FileManager.default.removeItem(at: staging) }
+                try? inbox.store.fail(receive, reason: failure)
             }
             do {
                 while true {
@@ -577,15 +545,13 @@ final class MacFileTransfer: @unchecked Sendable {
                     guard !stopped, receivers[session] === helper else { lock.unlock(); return }
                     let finalName: String
                     do {
-                        if let receive, let inbox {
-                            finalName = try inbox.store.complete(receive, name: receivedName).lastPathComponent
-                        } else { finalName = try publish(staging: staging, directory: directory, name: receivedName) }
+                        finalName = try inbox.store.complete(receive, name: receivedName).lastPathComponent
                     }
                     catch { lock.unlock(); throw error }
                     lock.unlock()
                     succeeded = true
                     try send(AppleFileTransfer.receiverResult(sessionID: session, status: 0, name: finalName))
-                    logger.verbose("Apple file receive completed: session=\(session)\(receive.map { " batch=\($0.batch)" } ?? "")")
+                    logger.verbose("Apple file receive completed: session=\(session) batch=\(receive.batch)")
                     return
                 }
             } catch {
@@ -597,9 +563,6 @@ final class MacFileTransfer: @unchecked Sendable {
         }
     }
 
-    private func publish(staging: URL, directory: URL, name: String) throws -> String {
-        try TransferStore.publish(source: staging.appendingPathComponent(name), directory: directory, name: name).lastPathComponent
-    }
 
 }
 
