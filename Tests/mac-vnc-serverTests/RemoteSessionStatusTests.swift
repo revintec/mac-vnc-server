@@ -95,6 +95,19 @@ struct RemoteSessionStatusTests {
         #expect(indicator.showsEye)
     }
 
+    @Test func venturaLoginwindowInsideLockedUserSessionIsNeverConfirmedHidden() {
+        // The Mac mini probe found loginwindow, Finder and the worker all in
+        // UID 501/audit 100005, while the device itself was owned by root.
+        let locked = state(console: loginWindow, onConsole: true, locked: true)
+        #expect(locked.visibility == .unknown)
+        #expect(!locked.isConfirmedHidden)
+        #expect(!locked.canSwitchToLoginWindow)
+        var indicator = PhysicalDisplayIndicator()
+        indicator.update(locked, at: 1)
+        indicator.update(locked, at: 30)
+        #expect(indicator.showsEye)
+    }
+
     @Test func missingOrInvalidDictionaryValuesRemainUnknown() {
         let absent = PhysicalSessionSnapshot(dictionary: nil)
         #expect(absent.identity == nil && absent.onConsole == nil && absent.locked == nil)
@@ -122,11 +135,11 @@ struct RemoteSessionStatusTests {
     @Test func sessionDetailsExplainIdentitiesFlagsAndUncertainty() {
         let hidden = state(console: loginWindow, onConsole: false)
         #expect(hidden.sessionDetails.contains("Worker session: UID 501, audit 2"))
-        #expect(hidden.sessionDetails.contains("Console session: loginwindow — UID 0, audit 4"))
+        #expect(hidden.sessionDetails.contains("Console owner session (device): loginwindow — UID 0, audit 4"))
         #expect(hidden.sessionDetails.contains("Worker session lock flag: Unknown"))
         #expect(hidden.sessionDetails.contains(hidden.reason))
         let unknown = state(console: nil, onConsole: nil)
-        #expect(unknown.sessionDetails.contains("Console session: Unavailable"))
+        #expect(unknown.sessionDetails.contains("Console owner session (device): Unavailable"))
         #expect(unknown.sessionDetails.contains("Worker session on console: Unknown"))
         #expect(unknown.description.contains("unconfirmed"))
     }

@@ -430,7 +430,7 @@ final class RFBClientSession: @unchecked Sendable {
     private var appleAutoPasteboard = false
     private var appleClipboardNoticeAfter: Date?
     private var appleClipboardNoticeLogged = false
-    private var appleInitialClipboardNotification = false
+    private var appleInitialClipboardRequest = false
     private var appleClipboardGeneration: UInt64 = 0
     private var appleAutomaticUpdate: FramebufferUpdateRequest?
     private var applePushInterval: TimeInterval = 0
@@ -1842,7 +1842,7 @@ final class RFBClientSession: @unchecked Sendable {
         // old text, including when the viewer's new copy is an unsupported image.
         if changed {
             appleAutoPasteboard = enabled
-            appleInitialClipboardNotification = enabled
+            appleInitialClipboardRequest = enabled
             appleClipboardGeneration &+= 1
             state.signal(); wake.signal()
         }
@@ -1903,7 +1903,7 @@ final class RFBClientSession: @unchecked Sendable {
                 applePromisedContent = nil
                 state.lock()
                 appleClipboardGeneration &+= 1
-                appleInitialClipboardNotification = false
+                appleInitialClipboardRequest = false
                 state.unlock()
                 try socket.writeAll(AppleRFB.status(3))
                 logAppleClipboard("Apple ClipboardSend requesting promised contents: images=\(content.hasImages)")
@@ -1924,7 +1924,7 @@ final class RFBClientSession: @unchecked Sendable {
         applePromisedContent = nil
         state.lock()
         appleClipboardGeneration &+= 1
-        appleInitialClipboardNotification = false
+        appleInitialClipboardRequest = false
         state.unlock()
         logAppleClipboard("Apple ClipboardSend applied: payload_bytes=\(content.payloadBytes) images=\(content.hasImages)")
         let fetches = appleDeferredFetches
@@ -1998,8 +1998,8 @@ final class RFBClientSession: @unchecked Sendable {
         let watching = appleControlMode && appleAutoPasteboard
             && AppleRFB.supports(0x14, bitmap: appleViewerCapabilities)
             && AppleRFB.supports(0x1f, bitmap: appleViewerCapabilities)
-        let initial = appleInitialClipboardNotification
-        if watching { appleInitialClipboardNotification = false }
+        let initial = appleInitialClipboardRequest
+        if watching { appleInitialClipboardRequest = false }
         let clipboardDisabled = appleControlMode && hasSentFramebufferUpdate && !appleAutoPasteboard
             && !appleClipboardNoticeLogged && (appleClipboardNoticeAfter.map { Date() >= $0 } ?? false)
         if clipboardDisabled { appleClipboardNoticeLogged = true }
@@ -2008,6 +2008,16 @@ final class RFBClientSession: @unchecked Sendable {
             logAppleClipboard("Apple shared clipboard: available but disabled by viewer; Use Shared Clipboard is a client setting")
         }
         guard watching else { return }
+        if initial && !appleIncomingPromise {
+            // The connecting viewer supplies the initial clipboard. Advertising
+            // our existing pasteboard here can overwrite its more recent copy.
+            // Establish a baseline so only subsequent local copies notify it.
+            _ = clipboard.localContentIfChanged()
+            applePromisedContent = nil
+            try socket.writeAll(AppleRFB.status(3))
+            logAppleClipboard("Apple MiscStatus: requesting initial client clipboard")
+            return
+        }
         let changed = clipboard.localContentIfChanged() != nil
         if changed {
             if appleIncomingPromise { appleCancelledPromise = true }
@@ -2018,10 +2028,10 @@ final class RFBClientSession: @unchecked Sendable {
             appleDeferredFetches.removeAll()
             for fetch in fetches { try sendWriterCommand(fetch) }
         }
-        if changed || (initial && !appleIncomingPromise) {
+        if changed {
             applePromisedContent = nil
             try socket.writeAll(AppleRFB.status(2))
-            logAppleClipboard("Apple MiscStatus: pasteboard changed initial=\(initial) local_change=\(changed)")
+            logAppleClipboard("Apple MiscStatus: pasteboard changed local_change=true")
         }
     }
 

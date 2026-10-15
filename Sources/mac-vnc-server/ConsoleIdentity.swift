@@ -13,5 +13,11 @@ struct ConsoleIdentity: Codable, Hashable, Sendable {
         guard VNCConsoleCurrent(&value) == 0 else { return nil }
         return ConsoleIdentity(uid: value.uid, auditID: value.audit_id)
     }
+    /// Status-only owner candidate; graphics-session agreement is not implied.
+    static func physicalOwner() -> ConsoleIdentity? {
+        var value = VNCConsoleIdentity()
+        guard VNCConsoleOwner(&value) == 0 else { return nil }
+        return ConsoleIdentity(uid: value.uid, auditID: value.audit_id)
+    }
     func verifyWorker() -> Bool { VNCConsoleVerify(native) == 0 }
 }

@@ -15,7 +15,7 @@ final class ConsoleCaptureService {
     }
 
     init(identity: ConsoleIdentity) throws {
-        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath()
+        let executable = try CurrentExecutable.url()
         var error: Int32 = 0
         guard let handle = VNCConsoleCaptureServiceCreate(identity.native, executable.path, &error) else {
             throw RFBError.captureFailed("console capture service unavailable: \(String(cString: strerror(error))) (\(error))")

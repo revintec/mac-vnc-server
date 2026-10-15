@@ -93,12 +93,12 @@ struct SessionWorkerOptions: Codable, Sendable {
     func attachAndExec() throws -> Never {
         try validate()
         try SessionChannel.validateInheritedSocket()
-        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
+        let executable = try CurrentExecutable.url().path
         let encoded = String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
         let error = VNCSessionPrepare(identity.native)
         guard error == 0 else { throw CLIError.commandFailed("session attachment failed (\(error))") }
         let result = VNCSessionExecWorker(executable, encoded)
-        throw CLIError.commandFailed("session worker exec failed (\(result))")
+        throw CLIError.commandFailed("session worker exec failed at \(executable): \(String(cString: strerror(result))) (\(result))")
     }
 
     func verifyAttachment() throws {

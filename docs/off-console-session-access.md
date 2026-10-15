@@ -2,7 +2,12 @@
 
 Implementation and platform validation: 2026-10-12, macOS Tahoe 26.6.2
 (25G83). This covers a user who is already logged in, with the server running
-in that user's GUI session.
+in that user's GUI session. It does not establish Ventura behavior. On the
+macOS 13 Mac mini, a probe found loginwindow covering the still-on-console user
+session. Native VNC can access a genuinely switched-out Ventura user when
+another regular user owns the monitor, according to the user; our server still
+needs that comparison. See the
+[current Ventura investigation](macos13-server-compatibility.md#ventura-capture-and-session-findings).
 
 ## Behavior
 
@@ -12,8 +17,9 @@ goes to that desktop. The physical console stays at loginwindow until someone
 logs in there. Use the ordinary `vnc://HOST:PORT/` URL; there is no new client
 option or server flag.
 
-The server's `VNC_PASSWORD` authenticates access to that existing desktop. It
-does not authenticate a macOS account or unlock the physical console. An Aqua
+The current account listener authenticates a macOS username/password and selects
+that account's existing GUI audit session. It does not unlock the physical console.
+The runtime probe below predates that listener architecture. An Aqua
 LaunchAgent runs in the correct user session; a system daemon or an arbitrary
 SSH process is not equivalent.
 

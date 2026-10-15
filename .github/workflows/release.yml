@@ -24,8 +24,13 @@ jobs:
 
       - name: Set release version
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          /usr/bin/sed -i '' "s/0\\.0\\.0-development/${VERSION}/" Sources/mac-vnc-server/AppVersion.swift
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          /usr/bin/sed -i '' -E "s/(static let current = )\"[^\"]*\"/\1\"${VERSION}\"/" Sources/mac-vnc-server/AppVersion.swift
           grep "static let current" Sources/mac-vnc-server/AppVersion.swift
 
       - name: Test

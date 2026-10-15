@@ -9,6 +9,12 @@ enum AccountSessionWorker {
         let config = options.config
         let logger = ServerLogger(verbose: config.verbose)
         logger.verbose("Session worker attached: uid=\(options.identity.uid) audit=\(options.identity.auditID) pid=\(getpid())")
+        if options.identity.uid != 0 {
+            let session = PhysicalSessionSnapshot.read()
+            if session.identity == options.identity, session.onConsole == true, session.locked == true {
+                logger.warning("Selected user session is still locked on console; VNC may show loginwindow in that same session. Account authentication has not moved this desktop off console or unlocked it.")
+            }
+        }
         // Both identities use the same capture, cursor and delivery pipeline.
         // The listener has already installed loginwindow's capture service in
         // user/0; the attached worker must never fall back to another desktop.

@@ -146,8 +146,8 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         let needed = recoveryNeeded
         recoveryLock.unlock()
 
-        let blank = stateLock.withLock { outputs.contains { $0.isBlank } }
-        guard needed || blank else {
+        let unavailable = stateLock.withLock { outputs.contains { $0.needsRecoveryAfterInput } }
+        guard needed || unavailable else {
             return
         }
         scheduleDisplayWakeup()
@@ -378,7 +378,8 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 
                 let delegate = ScreenCaptureStreamDelegate(eventSink: eventSink)
                 let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
-                let output = ScreenCaptureStreamOutput(displayID: display.displayID, width: width, height: height, store: store)
+                let output = ScreenCaptureStreamOutput(displayID: display.displayID, width: width, height: height,
+                    store: store, logger: logger)
                 try stream.addStreamOutput(
                     output,
                     type: .screen,
@@ -389,6 +390,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                 outputs.append(output)
                 delegates.append(delegate)
                 logger.verbose("ScreenCaptureKit: starting display \(display.displayID) (\(width)x\(height))")
+                logger.verbose("ScreenCaptureKit geometry: display=\(display.displayID) sck_size=\(display.width)x\(display.height) cg_bounds=\(bounds) cg_asleep=\(CGDisplayIsAsleep(display.displayID) != 0)")
                 try await CaptureOperation.run("start display \(display.displayID)") { complete in
                     stream.startCapture { error in
                         complete(error.map { .failure($0) } ?? .success(()))
@@ -896,23 +898,28 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Send
     private let displayID: CGDirectDisplayID
     private let width: Int, height: Int
     private let store: StreamingFrameStore
+    private let logger: ServerLogger?
     private struct Delivery {
         let pixelBuffer: CVPixelBuffer
         var dirtyRects: [Rect]?
-        let presentationTime: TimeInterval?
+        var presentationTime: TimeInterval?
     }
     private let deliveryLock = NSLock()
     private let deliveryQueue: DispatchQueue
     private var pending: Delivery?
     private var copying = false
     private var blank = false
+    private var recoveryRequired = false
+    private var lastDiagnosticStatus: SCFrameStatus?
     var isBlank: Bool { deliveryLock.withLock { blank } }
+    var needsRecoveryAfterInput: Bool { deliveryLock.withLock { recoveryRequired } }
 
-    init(displayID: CGDirectDisplayID, width: Int, height: Int, store: StreamingFrameStore,
+    init(displayID: CGDirectDisplayID, width: Int, height: Int, store: StreamingFrameStore, logger: ServerLogger? = nil,
          deliveryQueue: DispatchQueue = DispatchQueue(label: "mac-vnc.capture-copy", qos: .userInteractive)) {
         self.displayID = displayID
         self.width = width; self.height = height
         self.store = store
+        self.logger = logger
         self.deliveryQueue = deliveryQueue
     }
 
@@ -936,9 +943,21 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Send
 
     func receive(status: SCFrameStatus, pixelBuffer: CVPixelBuffer?, dirtyRects: [Rect]?,
                  presentationTime: TimeInterval?) {
-        guard status == .complete || status == .blank else { return }
+        logCaptureState(status: status, pixelBuffer: pixelBuffer)
+        // Suspended updates need the same input-triggered wake/recovery as
+        // blank output. An idle sample is not evidence that capture resumed;
+        // retain this state until a real image arrives. These status-only
+        // samples must not overwrite the last frame with their image buffer.
+        if status == .suspended || status == .stopped {
+            deliveryLock.withLock { recoveryRequired = true }
+            return
+        }
+        // `started` is the first frame after stream startup/resumption. Its
+        // valid image must replace an earlier blank even with no dirty hint.
+        guard status == .complete || status == .started || status == .blank else { return }
         var buffer = pixelBuffer
         if status == .blank {
+            deliveryLock.withLock { recoveryRequired = true }
             if isBlank { return }
             // Blank samples can have no image. Preserve the former console
             // backend's black-frame behavior instead of retaining stale pixels.
@@ -948,18 +967,64 @@ final class ScreenCaptureStreamOutput: NSObject, SCStreamOutput, @unchecked Send
             CVPixelBufferUnlockBaseAddress(buffer, [])
         }
         guard let buffer else { return }
-        let delivery = Delivery(pixelBuffer: buffer, dirtyRects: status == .blank ? nil : dirtyRects,
-            presentationTime: status == .blank ? nil : presentationTime)
+        let delivery = Delivery(pixelBuffer: buffer, dirtyRects: status == .complete ? dirtyRects : nil,
+            presentationTime: status == .complete ? presentationTime : nil)
         deliveryLock.lock()
-        let wasBlank = blank
+        let wasUnavailable = recoveryRequired
         blank = status == .blank
+        recoveryRequired = blank
         var newest = delivery
-        if pending != nil || wasBlank { newest.dirtyRects = nil }
+        if pending != nil || wasUnavailable { newest.dirtyRects = nil }
+        // Resume with a full image even if timestamps or dirty hints still
+        // refer to the capture cadence before the display stopped updating.
+        if wasUnavailable { newest.presentationTime = nil }
         pending = newest
         let start = !copying
         copying = true
         deliveryLock.unlock()
         if start { deliveryQueue.async { [self] in drain() } }
+    }
+
+    private func logCaptureState(status: SCFrameStatus, pixelBuffer: CVPixelBuffer?) {
+        guard let logger, logger.isVerbose else { return }
+        // Idle/complete alternate during ordinary capture; log only meaningful
+        // transitions, not every frame. Sampling runs only on these log events.
+        let category: SCFrameStatus = status == .idle ? .complete : status
+        let changed = deliveryLock.withLock {
+            guard category != lastDiagnosticStatus else { return false }
+            lastDiagnosticStatus = category
+            return true
+        }
+        guard changed else { return }
+        let name: String
+        switch status {
+        case .complete: name = "complete"
+        case .idle: name = "idle"
+        case .blank: name = "blank"
+        case .suspended: name = "suspended"
+        case .started: name = "started"
+        case .stopped: name = "stopped"
+        @unknown default: name = "unknown(\(status.rawValue))"
+        }
+        let geometry = pixelBuffer.map { "\(CVPixelBufferGetWidth($0))x\(CVPixelBufferGetHeight($0))" } ?? "none"
+        var sample = ""
+        if (status == .complete || status == .started), let buffer = pixelBuffer,
+           CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA,
+           CVPixelBufferGetWidth(buffer) > 0, CVPixelBufferGetHeight(buffer) > 0,
+           CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess {
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            if let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) {
+                let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+                let stride = CVPixelBufferGetBytesPerRow(buffer)
+                var nonzero = 0
+                for row in 0..<8 { for column in 0..<8 {
+                    let offset = (row * (height - 1) / 7) * stride + (column * (width - 1) / 7) * 4
+                    if base[offset] != 0 || base[offset + 1] != 0 || base[offset + 2] != 0 { nonzero += 1 }
+                } }
+                sample = " sampled_rgb_nonzero=\(nonzero)/64"
+            }
+        }
+        logger.verbose("ScreenCaptureKit state: display=\(displayID) status=\(name) image=\(geometry) cg_asleep=\(CGDisplayIsAsleep(displayID) != 0)\(sample)")
     }
 
     private func drain() {

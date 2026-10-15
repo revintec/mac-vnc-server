@@ -18,6 +18,7 @@ let package = Package(
         .target(name: "CVNCSession", publicHeadersPath: "include",
                 linkerSettings: [.linkedFramework("CoreGraphics"), .linkedFramework("Foundation"),
                                  .linkedFramework("IOKit"),
+                                 .linkedFramework("SystemConfiguration"),
                                  .linkedFramework("Carbon")]),
         .target(
             name: "CVNCZlib",

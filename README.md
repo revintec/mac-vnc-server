@@ -23,6 +23,11 @@ and file transfers flow directly between that worker and its clients, without a
 listener relay. User sessions retain their capture, zlib-ng, RichCursor, clipboard,
 and file-transfer features while off console.
 
+Off-console capture/input have been exercised on Tahoe. On a Ventura Mac mini,
+display sleep produced black output, and after waking the monitor a user login
+showed loginwindow instead of its off-console desktop. That Ventura case remains
+under investigation; see [macOS 13 validation](docs/macos13-server-compatibility.md).
+
 Startup checks listener privileges before binding. Non-root startup warns about
 the own-account restriction; root startup reports broader account access.
 
@@ -48,8 +53,8 @@ service remain experimental outside the tested Tahoe host.
 
 ## Requirements
 
-- macOS 13 or newer
-- Xcode / Swift toolchain compatible with `swift-tools-version: 6.3`
+- macOS 13 or newer as the deployment target; see the [server compatibility verification](docs/macos13-server-compatibility.md) for what has been checked and what still needs a Ventura runtime test
+- To build from source: a compatible SDK and Swift 6.1 or newer (`swift-tools-version: 6.1`); the destination Mac does not need a Swift compiler
 - Screen Recording permission
 - Accessibility / Post Event permission for keyboard and mouse injection
 
@@ -83,13 +88,14 @@ Local SwiftPM builds use the `mac-vnc-server-dev` name. The release workflow sta
 
 ## Versioning
 
-Development builds always report:
+Local builds report the version recorded in `Sources/mac-vnc-server/AppVersion.swift`:
 
 ```text
-0.0.0-development
+1.0
 ```
 
 The release workflow replaces that value with the Git tag being released, stripping a leading `v`. For example, release tag `v1.2.3` builds a binary that reports `1.2.3`.
+The updater treats a two-component version such as `1.0` as `1.0.0` when comparing releases.
 
 Show the version:
 
@@ -247,7 +253,7 @@ mac-vnc-server --help
 ```
 
 `run` is optional when the first argument is a flag.
-`wakeup` sends a short user-activity assertion with `caffeinate` to wake the display when ScreenCaptureKit cannot see any displays.
+`wakeup` sends a short user-activity assertion with `caffeinate` to wake the display when capture is unavailable. This can light the physical monitor; it does not unlock or switch sessions.
 
 Options:
 
@@ -351,7 +357,7 @@ initialization, mode handling, encrypted input, cursor, clipboard and file trans
 
 Screen capture uses `ScreenCaptureKit` with one stream per selected display. Captured frames are stored in BGRA format and composed into a virtual framebuffer. The virtual framebuffer supports multiple displays and maps VNC coordinates back to macOS global coordinates for mouse input.
 
-Capture streams are rebuilt after screen wake, when the user session moves off or back onto the console, when an active `SCStream` reports `didStopWithError`, or when input arrives after a failed recovery. Fast User Switching can replace display IDs even when a stream reports no error. Recovery refreshes the shareable content and retries up to three times without closing the existing VNC session. A transition during recovery queues another rebuild so it cannot leave capture attached to obsolete displays.
+Capture streams are rebuilt after screen wake, when the user session moves off or back onto the console, when an active `SCStream` reports `didStopWithError`, or when input arrives after a failed recovery or blank/suspended/stopped capture. Fast User Switching can replace display IDs even when a stream reports no error. Recovery refreshes the shareable content and retries up to three times without closing the existing VNC session. A transition during recovery queues another rebuild so it cannot leave capture attached to obsolete displays. The first valid image after blank/suspended output is delivered in full, including `started` frames. Verbose logs show capture status, geometry, and the display's reported sleep state.
 
 When a client or network cannot consume updates quickly enough, the server keeps only the newest captured frame and drops stale frames before sending their RFB update header. Persistent Zlib/ZRLE state is transactional, so a dropped frame cannot desynchronize the stream. Client sockets use non-blocking writes with a three-second no-progress timeout; a connection that makes no write progress is closed instead of blocking the capture pipeline indefinitely. Adaptive sessions lower the output target from 60 to 45 to 30 FPS under sustained pressure and recover after sustained headroom; shared capture streams use the highest rate requested by their active clients.
 
@@ -390,7 +396,7 @@ Viewers routed to the same session share its desktop, keyboard, and system curso
 
 With `--clipboard-sync`, server clipboard changes reach every client with sharing enabled. Text or images copied by one Apple viewer can propagate to the others through the Mac's clipboard; the originating viewer is not notified of its own write, and identical content echoes do not produce another clipboard change. Different account sessions have separate workers and clipboard state. Concurrent screen encoding and network traffic grow with the number of viewers.
 
-For an already logged-in user, the server stays attached to that user's desktop when Fast User Switching moves the physical console to loginwindow. Input targets the user's WindowServer session and capture follows its replacement displays. Connect using that account's credentials and the ordinary VNC URL. Account authentication does not create a GUI session before login. Authenticating as root selects the current physical console owner instead. See [off-console session access](docs/off-console-session-access.md) for validation and remaining limitations.
+For an already logged-in user, the server stays attached to that user's desktop when Fast User Switching moves the physical console to loginwindow. Input targets the user's WindowServer session and capture follows its replacement displays. Connect using that account's credentials and the ordinary VNC URL. Account authentication does not create a GUI session before login. Authenticating as root selects the current physical console owner instead. This has been verified on Tahoe; the [Ventura loginwindow case](docs/macos13-server-compatibility.md#ventura-capture-and-session-findings) remains unresolved. See [off-console session access](docs/off-console-session-access.md) for validation and remaining limitations.
 
 ### Input
 
@@ -480,7 +486,7 @@ Runs on pull requests and pushes to `main`:
 
 Runs when a GitHub Release is published:
 
-- replaces `0.0.0-development` in `AppVersion.swift` with the release tag
+- sets the version in `AppVersion.swift` from the release tag
 - runs tests
 - builds the `mac-vnc-server-dev` product for arm64
 - stages it as `mac-vnc-server` and signs it with the persistent self-signed macOS certificate
@@ -514,6 +520,17 @@ The self-signed certificate provides a stable signing identity for macOS permiss
 ### Apple Screen Sharing keeps asking for a password
 
 Use the selected macOS account username and password. Confirm that its GUI session already exists. Root requires a root listener and an enabled root account; it selects the current console owner, whether loginwindow or a user desktop.
+
+### `posix_spawn(): 2` after account authentication
+
+Older builds derived the session worker's executable path from the command name.
+Starting a relocated binary through `PATH`, such as `sudo mac-vnc-server-dev`,
+could therefore start the listener successfully but make `launchctl asuser` look
+in the wrong directory when the first worker was needed. Current builds resolve
+the loaded executable through dyld for worker launch, re-exec and the root capture
+helper. An absolute executable path is a workaround for older builds. Keep the
+binary at its launch location while its listener is running, since new workers
+must execute it again.
 
 ### Startup stops after the cursor message
 

@@ -48,11 +48,11 @@ struct PhysicalDisplayState: Equatable {
     let reason: String
 
     static func read(uid: UInt32 = getuid()) -> Self {
-        let consoleBefore = ConsoleIdentity.current()
+        let consoleBefore = ConsoleIdentity.physicalOwner()
         let before = PhysicalSessionSnapshot.read()
         let verified = before.identity.map { VNCSessionVerify($0.native) == 0 } ?? false
         let session = PhysicalSessionSnapshot.read()
-        let console = ConsoleIdentity.current()
+        let console = ConsoleIdentity.physicalOwner()
         return resolve(uid: uid, session: session, console: console,
             observationsStable: before == session && consoleBefore == console, sessionVerified: verified)
     }
@@ -79,7 +79,12 @@ struct PhysicalDisplayState: Equatable {
                 ? "Lock reported; this session still owns the console."
                 : "This session owns the console; its screen-lock state is unavailable.", canSwitch: canSwitch)
         }
-        guard !onConsole else { return state(.unknown, "Another console owner is reported while this session also reports on-console.") }
+        guard !onConsole else {
+            if console.uid == 0, session.locked == true {
+                return state(.unknown, "Loginwindow owns the console device, but this user session is still on console and locked. Off-console desktop access is not established.")
+            }
+            return state(.unknown, "Another console owner is reported while this session also reports on-console.")
+        }
         guard uid != 0, console.uid != uid else { return state(.unknown, "The reported console and worker session identities conflict.") }
         return state(.hidden, console.uid == 0
             ? "Loginwindow owns the console; this user session is confirmed off console."
@@ -92,7 +97,11 @@ struct PhysicalDisplayState: Equatable {
         switch visibility {
         case .visible: return "Physical display: this desktop is visible"
         case .hidden: return "Physical display: this desktop is hidden"
-        case .unknown: return "Physical display: visibility unconfirmed"
+        case .unknown:
+            if session.onConsole == true, session.locked == true {
+                return "Physical display: session reports locked on console"
+            }
+            return "Physical display: visibility unconfirmed"
         }
     }
 
@@ -103,7 +112,7 @@ struct PhysicalDisplayState: Equatable {
         }
         func flag(_ value: Bool?) -> String { value.map { $0 ? "Yes" : "No" } ?? "Unknown" }
         return ["Worker session: \(identity(session.identity))",
-                "Console session: \(identity(console))",
+                "Console owner session (device): \(identity(console))",
                 "Worker session on console: \(flag(session.onConsole))",
                 "Worker session lock flag: \(flag(session.locked))",
                 reason]

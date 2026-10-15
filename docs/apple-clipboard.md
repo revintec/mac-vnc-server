@@ -10,6 +10,13 @@ AutoPasteboard start/stop and logs a single verbose diagnostic when a connected
 Control session leaves sharing off; it does not send unsolicited clipboard data
 to bypass that choice.
 
+Once a new connection is in Control mode and shared clipboard monitoring is
+enabled, the server requests the viewer's current clipboard. Text or supported
+images copied before connecting can then be pasted on the server without
+copying again. The server does not advertise its older clipboard during this
+initial exchange. This pull uses Apple's protocol; standard RFB cut-text has no
+equivalent request message.
+
 ## Scope
 
 Apple's native text and image pasteboard exchange uses the RFB 3.889 profile.
@@ -72,9 +79,11 @@ arbitrary application data and other unsupported flavors remain excluded.
 - When monitoring is enabled and the viewer supports the messages, emit
   MiscStatus (`0x14`) command 2 on a local change. Answer the subsequent fetch
   with ClipboardSend, echoing its request ID.
-- Starting monitoring sends an initial notification. Repeating start while
-  already monitoring does not announce a change or invalidate saved promises.
-  A stop followed by start still sends an initial notification.
+- Starting monitoring sends MiscStatus command 3 to request the current client
+  contents, once the viewer supports clipboard/status messages and Control is
+  enabled. Repeating start while already monitoring does not request it again
+  or invalidate saved promises. A stop followed by start requests fresh client
+  contents again. Subsequent server copies still send command 2 notifications.
 - A promises-only fetch returns the flavor with no data; the later full fetch
   retrieves the saved content. For incoming promised text or images, MiscStatus command 3
   requests the full contents before applying them to NSPasteboard.
@@ -121,7 +130,7 @@ an independent change cursor per viewer and suppression of identical text/image 
 Disconnect cleanup waits for the connection's writer to stop, releases only its
 owned controls, and removes only its capture-rate subscription.
 Verbose clipboard logging records message types, sizes, request IDs, the socket
-descriptor and a Unix timestamp in seconds. It distinguishes initial notifications
+descriptor and a Unix timestamp in seconds. It distinguishes initial client pulls
 from local pasteboard changes, repeat start commands from state transitions, and
 fetches served from a saved promise from reads of the current pasteboard. It never
 records clipboard text or authentication credentials.

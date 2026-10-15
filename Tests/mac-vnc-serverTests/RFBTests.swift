@@ -390,6 +390,18 @@ import zlib
     #expect(release == sameRelease)
 }
 
+@Test func semanticVersionsAcceptReleaseWithoutPatchComponent() throws {
+    let release = try #require(SemanticVersion("1.0"))
+    #expect(release == SemanticVersion("1.0.0"))
+    #expect(release == SemanticVersion("v1.0"))
+    #expect(release < (try #require(SemanticVersion("1.0.1"))))
+    #expect((try #require(SemanticVersion("1.0-rc.1"))) < release)
+    #expect(SemanticVersion("1") == nil)
+    #expect(SemanticVersion("1.") == nil)
+    #expect(SemanticVersion("1.0.") == nil)
+    #expect(SemanticVersion("1.0.0.0") == nil)
+}
+
 @Test func noDisplaysErrorSuggestsWakeupCommand() {
     let message = CLI.errorMessage(for: RFBError.captureFailed("ScreenCaptureKit found no displays"))
 

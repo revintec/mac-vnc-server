@@ -77,10 +77,49 @@ struct ConsolePipelineTests {
         output.receive(status: .blank, pixelBuffer: nil, dirtyRects: nil, presentationTime: 4)
         queue.sync {}
         #expect(try store.currentSequence() == 2) // Repeated blank samples are idle.
-        output.receive(status: .complete, pixelBuffer: latest, dirtyRects: [], presentationTime: 5)
+        // A started image resumes capture even when its timestamp falls inside
+        // the former stream's throttle interval and its dirty list is empty.
+        output.receive(status: .started, pixelBuffer: latest, dirtyRects: [], presentationTime: 2.001)
         queue.sync {}
         #expect(!output.isBlank)
         #expect(try store.snapshot().bgra.first == 87)
+        #expect(try store.snapshot().dirtyRects == nil)
+    }
+
+    @Test(arguments: [SCFrameStatus.blank, .suspended, .stopped])
+    func inputRecoverySurvivesStatusOnlySamplesUntilAnImageResumes(_ status: SCFrameStatus) throws {
+        let store = StreamingFrameStore(layout: VirtualDisplayLayout(displays: [display], scaleOverride: 1),
+            expectedDisplayIDs: [1], acceptedFrameRate: 60)
+        let queue = DispatchQueue(label: "test.capture.resume")
+        let output = ScreenCaptureStreamOutput(displayID: 1, width: 4, height: 2, store: store, deliveryQueue: queue)
+        var buffer: CVPixelBuffer?
+        try #require(CVPixelBufferCreate(nil, 4, 2, kCVPixelFormatType_32BGRA, nil, &buffer) == kCVReturnSuccess)
+        let image = try #require(buffer)
+        try #require(CVPixelBufferLockBaseAddress(image, []) == kCVReturnSuccess)
+        memset(CVPixelBufferGetBaseAddress(image), 87, CVPixelBufferGetBytesPerRow(image) * 2)
+        CVPixelBufferUnlockBaseAddress(image, [])
+        output.receive(status: .complete, pixelBuffer: image, dirtyRects: nil, presentationTime: 1)
+        queue.sync {}
+        #expect(!output.needsRecoveryAfterInput)
+
+        output.receive(status: status, pixelBuffer: nil, dirtyRects: nil, presentationTime: nil)
+        output.receive(status: .idle, pixelBuffer: image, dirtyRects: [], presentationTime: nil)
+        output.receive(status: .started, pixelBuffer: nil, dirtyRects: [], presentationTime: nil)
+        output.receive(status: .complete, pixelBuffer: nil, dirtyRects: [], presentationTime: nil)
+        queue.sync {}
+        #expect(output.needsRecoveryAfterInput)
+        #expect(try store.snapshot().bgra.first == (status == .blank ? 0 : 87))
+        let sequenceBeforeResume = try store.currentSequence()
+
+        // The resumed complete frame must be delivered even with an empty
+        // dirty list and a timestamp that would normally be rate-limited.
+        output.receive(status: .complete, pixelBuffer: image, dirtyRects: [], presentationTime: 1.001)
+        queue.sync {}
+        #expect(!output.needsRecoveryAfterInput)
+        #expect(!output.isBlank)
+        #expect(try store.snapshot().bgra.first == 87)
+        #expect(try store.snapshot().dirtyRects == nil)
+        #expect(try store.currentSequence() != sequenceBeforeResume)
     }
 
 }

@@ -49,6 +49,20 @@ the existing worker. Workers stay alive between client connections until logout,
 worker failure, or listener shutdown. Separate independently started listeners
 do not share a worker registry.
 
+For a root listener, `launchctl asuser` establishes the child's per-user Mach
+bootstrap environment. It replaces itself with the executable rather than
+remaining as an extra parent. The worker then selects/verifies its GUI audit
+session and drops UID/GID before its final exec. `setuid` alone changes Unix
+credentials without selecting the desktop's service namespace. A listener
+already running as its own user starts that user's worker directly.
+
+Separately, loginwindow's auxiliary capture service uses `launchctl bootstrap`
+and `bootout` to register/remove the isolated root job and its Mach services.
+These calls manage the service's lifetime; ordinary ScreenCaptureKit stream
+start/stop and frame delivery do not invoke launchctl. Replacing these commands
+would require equivalent launchd/bootstrap integration, not just starting a
+process with UID 0.
+
 The listener transfers the authenticated TCP descriptor using `SCM_RIGHTS` over
 an inherited anonymous Unix socket. Its metadata contains only the selected
 session identity, negotiated RFB version, and credential-exchange wrapping key.
@@ -89,7 +103,10 @@ non-root listener rejects root even when its own user currently owns the console
 User sessions must already exist. Authenticating does not log a user into macOS,
 unlock their physical screen, create a virtual login session, or switch the
 console. Locked/off-console user sessions continue using their ordinary capture,
-input, RichCursor, zlib-ng, clipboard, and file-transfer paths.
+input, RichCursor, zlib-ng, clipboard, and file-transfer paths. Existing-user
+off-console capture/input have been verified on Tahoe; [the Ventura Mac mini
+case](macos13-server-compatibility.md#ventura-capture-and-session-findings) still
+shows loginwindow and remains unresolved.
 
 Each root login selects the physical console owner after password verification.
 If loginwindow owns the console, the target is its UID 0/audit session. If a user
@@ -132,6 +149,16 @@ Session Details shows the worker account/PID/UID, worker and console audit-sessi
 identities, the reported on-console and lock flags (including unavailable values),
 and the reason for the indicator. The files item is disabled when receiving is
 disabled.
+
+Device-owner reporting uses `State:/Users/ConsoleUser` and `/dev/console`, with
+a unique matching UID/audit row. It is separate from capture authorization:
+root routing also requires the session's OnConsole flags to agree. Ventura can
+report root device ownership while keeping the user marked OnConsole; the
+Ventura probe found loginwindow in that same locked user session. The menu
+shows the device-owner candidate, reports when the session remains locked on
+console, and retains the red eye for this disagreement. A newly started user
+worker also warns about a locked/on-console session.
+The account worker's user-session selection is not changed by that status query.
 
 The two red eye images contain their own color rather than relying on status-bar
 template tinting, which Tahoe can ignore. They are cached and alternate every

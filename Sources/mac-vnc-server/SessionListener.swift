@@ -161,11 +161,11 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
     init(identity: ConsoleIdentity, config: ServerConfig) throws {
         let session = try AccountAuthentication.session(uid: identity.uid)
         guard session == identity else { throw RFBError.authenticationFailed }
+        let executable = try CurrentExecutable.url()
         let service = identity.uid == 0 ? try ConsoleCaptureService(identity: identity) : nil
         do {
             let (channel, childInput) = try SessionChannel.pair()
             defer { try? childInput.close() }
-            let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath()
             var workerConfig = config
             if identity.uid == 0 { workerConfig.clipboardSync = false; workerConfig.fileTransfer = false }
             let options = SessionWorkerOptions(identity: identity, config: workerConfig)
@@ -185,7 +185,11 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
             process.standardInput = childInput
             process.standardOutput = FileHandle.standardError
             process.standardError = FileHandle.standardError
-            try process.run()
+            ServerLogger(verbose: config.verbose).verbose("Starting session worker: uid=\(identity.uid) audit=\(identity.auditID) executable=\(executable.path)")
+            do { try process.run() }
+            catch {
+                throw RFBError.socketError("could not launch session worker at \(executable.path): \(error.localizedDescription)")
+            }
             let token = ProcessShutdown.shared.register(process)
             try? childInput.close()
             do { try channel.waitUntilReady() }
@@ -193,7 +197,7 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
                 channel.shutdown()
                 Self.terminate(process)
                 ProcessShutdown.shared.unregister(token)
-                throw error
+                throw RFBError.socketError("session worker startup failed at \(executable.path): \(error.localizedDescription)")
             }
             self.process = process; self.channel = channel; self.service = service; self.token = token
             ServerLogger(verbose: config.verbose).info("Session worker ready: uid=\(identity.uid) audit=\(identity.auditID) pid=\(process.processIdentifier)")

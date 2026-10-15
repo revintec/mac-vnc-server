@@ -522,6 +522,26 @@ struct MultiClientTests {
         #expect(try framePayload(first, encoding: 0).count == 8)
     }
 
+    @Test func newClientPullsItsClipboardIntoAnExistingSession() throws {
+        let server = try MultiClientServer()
+        defer { server.finish() }
+        let first = try server.connect()
+        defer { first.finish() }
+        _ = try first.handshake(version: AppleRFB.version)
+        try first.enableAppleClipboard(initialContent: .text("first client's clipboard"))
+        for text in ["second client's clipboard", "clipboard on reconnect"] {
+            let next = try server.connect()
+            defer { next.finish() }
+            _ = try next.handshake(version: AppleRFB.version)
+            try next.enableAppleClipboard(initialContent: .text(text))
+            #expect(server.clipboard.currentText() == text)
+            #expect(try first.read(8) == changedStatus)
+            try fetch(first)
+            #expect(try first.readClipboard().1 == .text(text))
+            #expect(!next.hasData(timeout: 0.15))
+        }
+    }
+
     @Test func clipboardChangesReachBothAppleClientsAndRemoteEchoesStop() throws {
         let server = try MultiClientServer()
         defer { server.finish() }

@@ -41,10 +41,11 @@ struct SemanticVersion: Comparable, Equatable, CustomStringConvertible {
         }
 
         let components = core.split(separator: ".", omittingEmptySubsequences: false)
-        guard components.count == 3,
+        // Release names may omit a zero patch component (for example, 1.0).
+        guard (2...3).contains(components.count),
               let major = Int(components[0]),
               let minor = Int(components[1]),
-              let patch = Int(components[2]),
+              let patch = components.count == 3 ? Int(components[2]) : 0,
               major >= 0,
               minor >= 0,
               patch >= 0 else {

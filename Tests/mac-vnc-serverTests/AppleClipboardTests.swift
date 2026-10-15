@@ -125,6 +125,47 @@ struct AppleClipboardTests {
     #expect(try peer.readClipboard().1 == .text(""))
 }
 
+@Test func connectingViewerSuppliesCurrentTextOrImageWithoutAnotherCopy() throws {
+    let image = ClipboardContent(items: [[.init(type: "com.compuserve.gif", data: Data("GIF89a".utf8))]])
+    for content in [ClipboardContent.text("copied before connecting"), image, .empty] {
+        let peer = try ClipboardTestPeer()
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        // A stale server change must not be announced over the initial pull.
+        peer.clipboard.copyLocal("old server clipboard")
+        try peer.enableAppleClipboard(initialContent: content)
+        #expect(peer.clipboard.currentContent() == content)
+        #expect(!peer.hasData(timeout: 0.2))
+    }
+}
+
+@Test func initialClipboardPullWaitsForControlAndSharedClipboard() throws {
+    let peer = try ClipboardTestPeer()
+    defer { peer.finish() }
+    _ = try peer.handshake(version: AppleRFB.version)
+    try peer.advertiseAppleClipboard()
+    #expect(!peer.hasData(timeout: 0.15)) // no shared clipboard subscription
+    try peer.write([0x0a, 0, 0, 0, 0x15, 0, 0, 1, 0, 0, 0, 0])
+    #expect(!peer.hasData(timeout: 0.15)) // Observe mode
+    try peer.write([0x0a, 0, 0, 1])
+    #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 3])
+    try peer.write(AppleClipboard.message(text: "client copy", requestID: 0))
+    try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 71])
+    #expect(try peer.readClipboard().1 == .text("client copy"))
+    try peer.write([0x15, 0, 0, 1, 0, 0, 0, 0])
+    #expect(!peer.hasData(timeout: 0.15)) // repeated start is not another pull
+}
+
+@Test func disabledServerClipboardDoesNotRequestInitialClientContent() throws {
+    let peer = try ClipboardTestPeer(clipboardSync: false)
+    defer { peer.finish() }
+    _ = try peer.handshake(version: AppleRFB.version)
+    try peer.advertiseAppleClipboard()
+    try peer.write([0x0a, 0, 0, 1, 0x15, 0, 0, 1, 0, 0, 0, 0])
+    #expect(!peer.hasData(timeout: 0.2))
+    #expect(peer.clipboard.currentText() == "initial")
+}
+
 @Test func appleClipboardHandlesPromisesAndStoppedMonitoring() throws {
     let peer = try ClipboardTestPeer()
     defer { peer.finish() }
@@ -149,7 +190,7 @@ struct AppleClipboardTests {
     peer.clipboard.copyLocal("changed while stopped")
     #expect(!peer.hasData(timeout: 0.25))
     try peer.write([0x15, 0, 0, 1, 0, 0, 0, 0])
-    #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 2])
+    #expect(try peer.read(8) == [0x14, 0, 0, 4, 0, 1, 0, 3])
 }
 
 @Test func appleClipboardRepeatedStartDoesNotAnnounceUnchangedServerText() throws {
@@ -448,7 +489,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
     }
 
     init(password: String = "testpass", includesCursor: Bool = false, fileTransfer: Bool = false,
-         messageTimeout: TimeInterval = 5, allowEncryption: Bool = true) throws {
+         messageTimeout: TimeInterval = 5, allowEncryption: Bool = true, clipboardSync: Bool = true) throws {
         self.password = password
         var fds = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else {
@@ -462,7 +503,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
         let server = try ClientSocket(fd: fds[0])
         let session = try RFBClientSession(socket: server, fps: 30,
             encodingPreference: .raw, capture: ClipboardTestScreen(includesCursor: includesCursor), input: ClipboardTestInput(),
-            clipboard: clipboard, clipboardSync: true, adaptiveStreaming: false,
+            clipboard: clipboard, clipboardSync: clipboardSync, adaptiveStreaming: false,
             adaptiveFrameRate: false, logger: ServerLogger(verbose: false), messageTimeout: messageTimeout,
             fileTransfer: fileTransfer, allowEncryption: allowEncryption)
         DispatchQueue.global().async { [self] in
@@ -531,7 +572,7 @@ final class ClipboardTestPeer: @unchecked Sendable {
         return try AppleEncryption.ecb(credentials, key: key, encrypt: true) + exchange.publicKey
     }
 
-    func enableAppleClipboard() throws {
+    func advertiseAppleClipboard() throws {
         var viewer = [UInt8](repeating: 0, count: 66)
         viewer[0] = 0x21
         viewer[3] = 62
@@ -542,8 +583,17 @@ final class ClipboardTestPeer: @unchecked Sendable {
         viewer[29] = 1
         viewer[36] = 0x08 // server message 20: MiscStatus
         viewer[37] = 0x01 // server message 31: ClipboardSend
-        try write(viewer + [0x0a, 0, 0, 1, 0x15, 0, 0, 1, 0, 0, 0, 0])
-        #expect(try read(8) == [0x14, 0, 0, 4, 0, 1, 0, 2])
+        try write(viewer)
+    }
+
+    func enableAppleClipboard(initialContent: ClipboardContent = .text("initial")) throws {
+        try advertiseAppleClipboard()
+        try write([0x0a, 0, 0, 1, 0x15, 0, 0, 1, 0, 0, 0, 0])
+        #expect(try read(8) == [0x14, 0, 0, 4, 0, 1, 0, 3])
+        try write(AppleClipboard.message(content: initialContent, requestID: 0))
+        // A fetch provides a barrier after the initial remote copy is applied.
+        try write([0x0b, 0, 0, 0, 0, 0, 0, 70])
+        #expect(try readClipboard().1.supportedContent == initialContent)
     }
 
     func readClipboard() throws -> (AppleClipboard.Header, AppleClipboard.Contents) {

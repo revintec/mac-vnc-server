@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CGEvent.h>
 #include <IOKit/hidsystem/IOLLEvent.h>
 
@@ -11,6 +12,15 @@ typedef struct {
 
 // Return zero on success. No function changes which session owns the monitor.
 int VNCConsoleCurrent(VNCConsoleIdentity *identity);
+// Device-owner candidate for status only, even when graphics flags disagree.
+// Do not use this to authorize capture/input or select a console worker.
+int VNCConsoleOwner(VNCConsoleIdentity *identity);
+// Resolve a copied State:/Users/ConsoleUser snapshot against /dev/console.
+// Graphics OnConsole flags can disagree during Fast User Switching on Ventura.
+// Ambiguous/missing audit identities or owner disagreement fail explicitly.
+int VNCConsoleResolveIdentity(CFDictionaryRef state, uint32_t device_owner, VNCConsoleIdentity *identity);
+// Additionally require consistent OnConsole flags before routing capture/input.
+int VNCConsoleResolveCaptureIdentity(CFDictionaryRef state, uint32_t device_owner, VNCConsoleIdentity *identity);
 // Prepare audit membership and credentials, without opening a graphics connection.
 // Follow with exec before calling Verify or any AppKit/ScreenCaptureKit API.
 int VNCConsolePrepare(VNCConsoleIdentity identity);

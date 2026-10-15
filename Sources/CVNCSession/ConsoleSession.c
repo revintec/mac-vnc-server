@@ -1,5 +1,6 @@
 #include "CVNCSession.h"
 #include <CoreGraphics/CoreGraphics.h>
+#include <SystemConfiguration/SystemConfiguration.h>
 #include <bsm/audit.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -7,6 +8,7 @@
 #include <grp.h>
 #include <mach/mach.h>
 #include <pwd.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -20,21 +22,13 @@ static int number(CFDictionaryRef dict, CFStringRef key, int64_t *out) {
         CFNumberGetValue(value, kCFNumberSInt64Type, out);
 }
 
-static int decodeSession(CFDictionaryRef dict, VNCConsoleIdentity *out, int requireConsole) {
+static int decodeSession(CFDictionaryRef dict, VNCConsoleIdentity *out) {
     int64_t uid = -1, asid = 0;
-    CFTypeRef on = CFDictionaryGetValue(dict, CFSTR("kCGSSessionOnConsoleKey"));
-    int64_t onNumber = 0;
-    int onConsole = on && ((CFGetTypeID(on) == CFBooleanGetTypeID() && CFBooleanGetValue(on)) ||
-        (number(dict, CFSTR("kCGSSessionOnConsoleKey"), &onNumber) && onNumber == 1));
-    if ((requireConsole && !onConsole) || !number(dict, CFSTR("kCGSSessionUserIDKey"), &uid) ||
+    if (!number(dict, CFSTR("kCGSSessionUserIDKey"), &uid) ||
         !number(dict, CFSTR("kCGSSessionAuditIDKey"), &asid) || uid < 0 || uid > UINT32_MAX ||
         asid <= 0 || asid > INT32_MAX) return EINVAL;
     *out = (VNCConsoleIdentity){(uint32_t)uid, (int32_t)asid};
     return 0;
-}
-
-static int decode(CFDictionaryRef dict, VNCConsoleIdentity *out) {
-    return decodeSession(dict, out, 1);
 }
 
 int VNCSessionForUser(uint32_t uid, VNCConsoleIdentity *identity) {
@@ -51,7 +45,7 @@ int VNCSessionForUser(uint32_t uid, VNCConsoleIdentity *identity) {
         CFTypeRef item = CFArrayGetValueAtIndex(list, i);
         VNCConsoleIdentity candidate;
         if (CFGetTypeID(item) == CFDictionaryGetTypeID() &&
-            !decodeSession(item, &candidate, 0) && candidate.uid == uid) {
+            !decodeSession(item, &candidate) && candidate.uid == uid) {
             if (found && identity->audit_id == candidate.audit_id) continue;
             *identity = candidate;
             found++;
@@ -71,42 +65,132 @@ int VNCSessionVerify(VNCConsoleIdentity identity) {
     CFDictionaryRef session = CGSessionCopyCurrentDictionary();
     if (!session) return ENXIO;
     VNCConsoleIdentity actual;
-    int error = decodeSession(session, &actual, 0);
+    int error = decodeSession(session, &actual);
     CFRelease(session);
     return error ? error : (actual.uid == identity.uid && actual.audit_id == identity.audit_id ? 0 : ESTALE);
 }
 
-static int consoleOwner(uint32_t uid) {
+static int readConsoleOwner(uint32_t *uid) {
     struct stat info;
     if (stat("/dev/console", &info)) return errno;
-    return info.st_uid == uid ? 0 : ESTALE;
+    *uid = info.st_uid;
+    return 0;
 }
 
-int VNCConsoleCurrent(VNCConsoleIdentity *identity) {
-    // Read-only private query, resolved at runtime so unsupported macOS builds
-    // fail explicitly. It neither creates nor switches a graphics session.
-    CFArrayRef (*copySessions)(void) = dlsym(RTLD_DEFAULT, "CGSCopySessionList");
-    if (!copySessions) return ENOTSUP;
-    CFArrayRef list = copySessions();
-    if (!list) return ENXIO;
+int VNCConsoleResolveIdentity(CFDictionaryRef state, uint32_t device_owner, VNCConsoleIdentity *identity) {
+    if (!identity || !state || CFGetTypeID(state) != CFDictionaryGetTypeID()) return EINVAL;
+    int64_t owner = -1;
+    if (!number(state, CFSTR("UID"), &owner) || owner < 0 || owner > UINT32_MAX) return EINVAL;
+    if (owner != device_owner) return ESTALE;
+    CFTypeRef name = CFDictionaryGetValue(state, CFSTR("Name"));
+    if (!name || CFGetTypeID(name) != CFStringGetTypeID() || !CFStringGetLength(name) ||
+        (CFEqual(name, CFSTR("loginwindow")) && owner != 0)) return EINVAL;
+    CFTypeRef list = CFDictionaryGetValue(state, CFSTR("SessionInfo"));
+    if (!list || CFGetTypeID(list) != CFArrayGetTypeID()) return ENXIO;
+
+    // The top-level owner and /dev/console describe device ownership. On Ventura
+    // these can report loginwindow while the user's graphics session remains
+    // OnConsole. Resolve the owner's candidate identity for status reporting;
+    // this alone does NOT verify which graphical desktop is on the monitor.
+    // Never choose among two audit sessions for the same owner.
     int found = 0;
     VNCConsoleIdentity candidate = {0};
     for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
         CFTypeRef item = CFArrayGetValueAtIndex(list, i);
-        if (CFGetTypeID(item) == CFDictionaryGetTypeID() && !decode(item, &candidate)) {
-            *identity = candidate;
-            found++;
+        int64_t uid = -1;
+        if (CFGetTypeID(item) != CFDictionaryGetTypeID() ||
+            !number(item, CFSTR("kCGSSessionUserIDKey"), &uid) || uid != owner) continue;
+        VNCConsoleIdentity decoded = {0};
+        if (decodeSession(item, &decoded)) return EINVAL;
+        if (CFDictionaryContainsKey(item, CFSTR("kSCSecuritySessionID"))) {
+            int64_t security = 0;
+            if (!number(item, CFSTR("kSCSecuritySessionID"), &security) || security != decoded.audit_id) return EINVAL;
+        }
+        if (found && candidate.audit_id != decoded.audit_id) return EEXIST;
+        candidate = decoded;
+        found = 1;
+    }
+    if (!found) return ENXIO;
+    *identity = candidate;
+    return 0;
+}
+
+int VNCConsoleResolveCaptureIdentity(CFDictionaryRef state, uint32_t device_owner, VNCConsoleIdentity *identity) {
+    if (!identity) return EINVAL;
+    VNCConsoleIdentity candidate = {0};
+    int error = VNCConsoleResolveIdentity(state, device_owner, &candidate);
+    if (error) return error;
+    CFArrayRef list = CFDictionaryGetValue(state, CFSTR("SessionInfo"));
+    int confirmed = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+        CFTypeRef item = CFArrayGetValueAtIndex(list, i);
+        if (CFGetTypeID(item) != CFDictionaryGetTypeID()) continue;
+        CFTypeRef value = CFDictionaryGetValue(item, CFSTR("kCGSSessionOnConsoleKey"));
+        int64_t flag = -1;
+        if (value && CFGetTypeID(value) == CFBooleanGetTypeID()) flag = CFBooleanGetValue(value);
+        else if (!number(item, CFSTR("kCGSSessionOnConsoleKey"), &flag)) flag = -1;
+        VNCConsoleIdentity row = {0};
+        int decoded = decodeSession(item, &row);
+        if (flag == 1) {
+            if (decoded || row.uid != candidate.uid || row.audit_id != candidate.audit_id) return ESTALE;
+            confirmed = 1;
+        } else if (!decoded && row.uid == candidate.uid && row.audit_id == candidate.audit_id) {
+            return ESTALE;
         }
     }
-    CFRelease(list);
-    if (found != 1) return ENXIO;
-    return consoleOwner(identity->uid);
+    if (!confirmed) return ESTALE;
+    *identity = candidate;
+    return 0;
+}
+
+static CFDictionaryRef copyConsoleState(void) {
+    // Reuse the configd connection, never a cached ownership value. Serialize
+    // access because capture, input and the menu can query concurrently.
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    static SCDynamicStoreRef store = NULL;
+    pthread_mutex_lock(&lock);
+    if (!store) store = SCDynamicStoreCreate(NULL, CFSTR("mac-vnc-server console ownership"), NULL, NULL);
+    CFPropertyListRef value = store ? SCDynamicStoreCopyValue(store, CFSTR("State:/Users/ConsoleUser")) : NULL;
+    if (!value && store) { CFRelease(store); store = NULL; }
+    pthread_mutex_unlock(&lock);
+    if (value && CFGetTypeID(value) == CFDictionaryGetTypeID()) return value;
+    if (value) CFRelease(value);
+    return NULL;
+}
+
+static int currentConsoleIdentity(VNCConsoleIdentity *identity, int require_graphics_agreement) {
+    if (!identity) return EINVAL;
+    uint32_t before = 0, after = 0;
+    int error = readConsoleOwner(&before);
+    if (error) return error;
+    CFDictionaryRef state = copyConsoleState();
+    if (!state) return ENXIO;
+    VNCConsoleIdentity candidate = {0};
+    error = require_graphics_agreement
+        ? VNCConsoleResolveCaptureIdentity(state, before, &candidate)
+        : VNCConsoleResolveIdentity(state, before, &candidate);
+    CFRelease(state);
+    if (error) return error;
+    error = readConsoleOwner(&after);
+    if (error) return error;
+    if (before != after) return ESTALE;
+    *identity = candidate;
+    return 0;
+}
+
+int VNCConsoleCurrent(VNCConsoleIdentity *identity) { return currentConsoleIdentity(identity, 1); }
+int VNCConsoleOwner(VNCConsoleIdentity *identity) { return currentConsoleIdentity(identity, 0); }
+
+static int verifyConsoleOwner(VNCConsoleIdentity identity) {
+    VNCConsoleIdentity current = {0};
+    int error = VNCConsoleCurrent(&current);
+    return error ? error : (current.uid == identity.uid && current.audit_id == identity.audit_id ? 0 : ESTALE);
 }
 
 int VNCConsoleVerify(VNCConsoleIdentity identity) {
     if (getuid() != identity.uid || geteuid() != identity.uid ||
         getgid() != getegid() || issetugid()) return EPERM;
-    int error = consoleOwner(identity.uid);
+    int error = verifyConsoleOwner(identity);
     if (error) return error;
     auditinfo_addr_t audit = {0};
     if (getaudit_addr(&audit, sizeof(audit))) return errno;
@@ -114,7 +198,9 @@ int VNCConsoleVerify(VNCConsoleIdentity identity) {
     CFDictionaryRef session = CGSessionCopyCurrentDictionary();
     if (!session) return ENXIO;
     VNCConsoleIdentity current = {0};
-    error = decode(session, &current);
+    // Check process session metadata as well as the device/graphics agreement
+    // above. Audit membership alone does not verify capture/input destination.
+    error = decodeSession(session, &current);
     CFRelease(session);
     if (error) return error;
     return current.uid == identity.uid && current.audit_id == identity.audit_id ? 0 : ESTALE;
@@ -122,7 +208,8 @@ int VNCConsoleVerify(VNCConsoleIdentity identity) {
 
 int VNCConsolePrepare(VNCConsoleIdentity identity) {
     if (getuid() != 0 || geteuid() != 0 || identity.audit_id <= 0) return EPERM;
-    int error = consoleOwner(identity.uid);
+    // SystemConfiguration inspection does not create a WindowServer connection.
+    int error = verifyConsoleOwner(identity);
     if (error) return error;
     mach_port_name_t port = MACH_PORT_NULL;
     if (audit_session_port(identity.audit_id, &port)) return errno;
@@ -145,7 +232,7 @@ int VNCConsolePrepare(VNCConsoleIdentity identity) {
     auditinfo_addr_t audit = {0};
     if (getaudit_addr(&audit, sizeof(audit))) return errno;
     if (audit.ai_asid != identity.audit_id) return ESTALE;
-    return consoleOwner(identity.uid);
+    return verifyConsoleOwner(identity);
 }
 
 int VNCSessionPrepare(VNCConsoleIdentity identity) {
