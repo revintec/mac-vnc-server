@@ -155,6 +155,7 @@ final class RFBServer: @unchecked Sendable {
     /// listener has authenticated and passed ownership through SCM_RIGHTS.
     @discardableResult
     func serve(client: ClientSocket, admission: SessionAdmission) -> Bool {
+        let logger = self.logger.forClient(client)
         let id = ObjectIdentifier(client)
         let admitted = lock.withLock {
             guard !stopped, clients.count < maximumClients else { return false }
@@ -167,6 +168,7 @@ final class RFBServer: @unchecked Sendable {
             logger.warning("connection rejected: server stopping or client limit reached")
             return false
         }
+        logger.info("client admitted: client_fd=\(client.fd) rfb=\(admission.version.trimmingCharacters(in: .whitespacesAndNewlines))")
         do {
             // A peer closing during socket setup must only fail its own session.
             try client.configureTCP()
@@ -188,8 +190,8 @@ final class RFBServer: @unchecked Sendable {
                     lock.withLock { clients[id] = nil }
                     workers.leave()
                 }
-                do { try session.run(admission: admission) }
-                catch { logger.warning("client disconnected: \(error.localizedDescription)") }
+                // run logs the original failure and session summary after cleanup.
+                try? session.run(admission: admission)
             }
             return true
         } catch {
@@ -403,6 +405,9 @@ final class RFBClientSession: @unchecked Sendable {
     private var updateRequestsReceived = 0
     private var activeUpdateRequest: FramebufferUpdateRequest?
     private var writerError: Error?
+    // Reader-owned diagnostics; the final summary is emitted after the writer joins.
+    private var failureSource = "initial_capture"
+    private var lastClientMessage: UInt8?
     private var captureRateConsumer: ObjectIdentifier?
     private var networkStallNotifications = 0
     private var networkStalls = 0
@@ -498,10 +503,23 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     func run(admission: SessionAdmission) throws {
+        let started = DispatchTime.now().uptimeNanoseconds
+        do {
+            try runSession(admission: admission)
+        } catch {
+            let duration = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
+            let lastMessage = lastClientMessage.map { String(format: "0x%02x", Int($0)) } ?? "none"
+            logger.warning("client disconnected: \(error.localizedDescription) source=\(failureSource) duration_s=\(String(format: "%.3f", duration)) last_client_message=\(lastMessage) updates=\(updatesSent) total_bytes=\(bytesSent) network_stalls=\(networkStalls) client_fd=\(socket.fd)")
+            throw error
+        }
+    }
+
+    private func runSession(admission: SessionAdmission) throws {
         let initialFrame = try capture.capture()
         currentLayout = initialFrame.layout
         previousFramebuffer = initialFrame
 
+        failureSource = "initialization"
         try socket.withReadTimeout(handshakeTimeout, operation: "RFB handshake") {
             appleWrappingKey = admission.wrappingKey
             try socket.writeAll(UInt32(0).beBytes)
@@ -537,16 +555,30 @@ final class RFBClientSession: @unchecked Sendable {
             }
         }
 
-        while true {
-            if let writerError = consumeWriterError() {
-                throw writerError
+        failureSource = "reader"
+        do {
+            while true {
+                if let writerError = state.withLock({ writerError }) {
+                    throw writerError
+                }
+                // A healthy viewer may stay idle indefinitely. Once a message
+                // starts, all of its fields must arrive within one total deadline.
+                let messageType = try socket.readExact(1)[0]
+                lastClientMessage = messageType
+                try socket.withReadTimeout(messageTimeout, operation: "RFB client message") {
+                    try handleClientMessage(messageType)
+                }
             }
-            // A healthy viewer may stay idle indefinitely. Once a message
-            // starts, all of its fields must arrive within one total deadline.
-            let messageType = try socket.readExact(1)[0]
-            try socket.withReadTimeout(messageTimeout, operation: "RFB client message") {
-                try handleClientMessage(messageType)
+        } catch {
+            // A writer failure closes the socket to wake a blocked reader. Read
+            // its stored cause before cleanup can produce a secondary I/O error.
+            let original = state.withLock {
+                stopped = true
+                state.broadcast(); wake.signal()
+                return writerError
             }
+            if original != nil { failureSource = "framebuffer_writer" }
+            throw original ?? error
         }
     }
 
@@ -761,12 +793,14 @@ final class RFBClientSession: @unchecked Sendable {
             do {
                 try framebufferWriterLoop()
             } catch {
-                socket.shutdown()
                 state.lock()
-                writerError = error
+                // Publish the cause before shutdown wakes the reader. Errors
+                // caused by reader-initiated cleanup must not replace its cause.
+                if !stopped { writerError = error }
                 stopped = true
                 state.broadcast(); wake.signal()
                 state.unlock()
+                socket.shutdown()
             }
         }
     }
@@ -1297,14 +1331,6 @@ final class RFBClientSession: @unchecked Sendable {
             + UInt16(framebuffer.width).beBytes
             + UInt16(framebuffer.height).beBytes
             + UInt32(bitPattern: RFBPseudoEncoding.desktopSize).beBytes
-    }
-
-    private func consumeWriterError() -> Error? {
-        state.lock()
-        defer { state.unlock() }
-        let error = writerError
-        writerError = nil
-        return error
     }
 
     private func selectedEncoding() -> RFBEncoding {
