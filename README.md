@@ -448,7 +448,9 @@ untrusted networks. Display negotiation prefers Apple's modern layout format (11
 state and explicit scale, retaining format 1101 for older viewers.
 
 The backend uses the system's private `SSFileCopySender` and
-`SSFileCopyReceiver` executables as the logged-in user. Server-to-client drags also use `SSDragHelper`; incoming staged drags use AppKit.
+`SSFileCopyReceiver` executables as the logged-in user. Both outgoing drag handoff
+and incoming staged drags use AppKit; the outgoing receiver finishes the source
+application's drag before publishing its file archive.
 Tests cover native file/folder helpers, drag initialization and authorization,
 completion staging, collision handling and cancellation. An unshown Tahoe native
 Screen Sharing view also verifies that a real connection registers Finder drops

@@ -281,20 +281,20 @@ struct FileTransferTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("source.txt")
         try Data("file transferred through negotiated drag ✓".utf8).write(to: source)
-        let helper = try DragTestHelper()
+        let helper = DragTestHelper()
         let result = FileTransferTestResult()
         let dragResult = FileTransferTestResult()
         let upload = try RecordTestLink(encrypted: encrypted)
         let download = try RecordTestLink(encrypted: encrypted)
         let store = try TransferStore(options: .init(root: root.appendingPathComponent("inbox")))
         let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(), inbox: TransferInbox(store: store),
-            makeDragHelper: { helper }) { bytes in
+            makeOutgoingDrag: { helper }) { bytes in
                 let bytes = try download.transfer([bytes])
                 if bytes.first == 0x1e { dragResult.receive(bytes) }
                 else { result.receive(bytes) }
             }
         let sender = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(),
-            makeDragHelper: { helper }) { bytes in
+            makeOutgoingDrag: { helper }) { bytes in
                 let bytes = try upload.transfer([Array(bytes.prefix(6)), Array(bytes.dropFirst(6))])
                 if bytes.first == 0x20 { dragResult.receive(bytes) }
                 else { try receiver.handle(AppleFileTransfer.Message(body: Array(bytes.dropFirst(6)))) }
@@ -304,7 +304,6 @@ struct FileTransferTests {
             .init(type: "public.file-url", data: Data(source.absoluteString.utf8))
         ]]))
         let compressed = try AppleClipboard.compress(archive)
-        try helper.events.writeAll([15])
         if toServer {
             try receiver.startDrag(sessionID: 77, compressed: compressed, archiveSize: archive.count)
             let batch = try #require(store.snapshot().first)
@@ -324,9 +323,7 @@ struct FileTransferTests {
             #expect(receiver.pointer(mask: 0, x: 0, y: 0, layout: layout))
             #expect(dragResult.ready.wait(timeout: .now() + 2) == .success)
             try sender.startDrag(sessionID: 77, compressed: [], archiveSize: 0)
-            _ = try helper.readCommands(12)
-            try helper.events.writeAll([11] + UInt32(77).nativeBytes + UInt32(compressed.count).nativeBytes
-                + UInt32(archive.count).nativeBytes + compressed)
+            helper.complete(.success([source]))
             #expect(dragResult.ready.wait(timeout: .now() + 2) == .success)
             try receiver.startReceiver(session: 88, directory: directory, name: "source.txt")
             let path = Array(source.path.utf8)
@@ -339,42 +336,113 @@ struct FileTransferTests {
         let received = try #require(urls.first)
         #expect(try Data(contentsOf: received) == Data(contentsOf: source))
     }
+
+    @Test func cancelledOutgoingDragCannotAuthorizeALateFileResult() throws {
+        let helper = DragTestHelper(), sent = FileTransferTestResult()
+        let transfer = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(),
+            makeOutgoingDrag: { helper }, send: { sent.receive($0) })
+        defer { transfer.stop() }
+        try transfer.startDrag(sessionID: 91, compressed: [], archiveSize: 0)
+        transfer.cancelDrag()
+        let source = URL(fileURLWithPath: "/tmp/cancelled-vnc-drag-fixture")
+        helper.complete(.success([source]))
+        #expect(sent.ready.wait(timeout: .now() + 0.2) == .timedOut)
+        let request = AppleFileTransfer.Message(command: 1, sessionID: 92,
+            payload: [UInt8](repeating: 0, count: 8) + UInt16(source.path.utf8.count).beBytes + Array(source.path.utf8))
+        #expect(throws: (any Error).self) { try transfer.handle(request) }
+    }
+
+    @Test func replacedOutgoingDragCannotPublishOrCancelItsReplacement() throws {
+        let first = DragTestHelper(), second = DragTestHelper(), sent = FileTransferTestResult()
+        let queue = DragTestFactory([first, second])
+        let input = DragTestInput()
+        let transfer = MacFileTransfer(logger: ServerLogger(verbose: false), input: input,
+            makeOutgoingDrag: { queue.next() }, send: { sent.receive($0) })
+        defer { transfer.stop() }
+        try transfer.startDrag(sessionID: 93, compressed: [], archiveSize: 0)
+        try transfer.startDrag(sessionID: 94, compressed: [], archiveSize: 0)
+        first.nudge()
+        first.release()
+        first.complete(.success([URL(fileURLWithPath: "/tmp/obsolete-vnc-drag-fixture")]))
+        #expect(sent.ready.wait(timeout: .now() + 0.2) == .timedOut)
+        #expect(input.masks.isEmpty)
+        let source = URL(fileURLWithPath: "/tmp/current-vnc-drag-fixture")
+        second.complete(.success([source]))
+        #expect(sent.ready.wait(timeout: .now() + 2) == .success)
+        let wire = try #require(sent.bytes)
+        #expect(Array(wire[4..<8]) == UInt32(94).beBytes)
+        let size = Int(UInt32.be(wire[8], wire[9], wire[10], wire[11]))
+        #expect(try AppleFileTransfer.dragFiles(compressed: Array(wire.dropFirst(16)), archiveSize: size) == [source])
+    }
+
+    @Test func outgoingReceiverCannotPressAgainAfterRemoteRelease() throws {
+        let helper = DragTestHelper(), input = DragTestInput()
+        let transfer = MacFileTransfer(logger: ServerLogger(verbose: false), input: input,
+            makeOutgoingDrag: { helper }, send: { _ in })
+        defer { transfer.stop() }
+        let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 100, height: 100)
+        _ = transfer.pointer(mask: 1, x: 20, y: 20, layout: layout)
+        try transfer.startDrag(sessionID: 95, compressed: [], archiveSize: 0)
+        // The destination becomes ready after the viewer has already let go.
+        _ = transfer.pointer(mask: 0, x: 20, y: 20, layout: layout)
+        helper.nudge()
+        #expect(input.masks.isEmpty)
+    }
+
+    @Test func outgoingCompletionDoesNotReleaseANewerOrdinaryClick() throws {
+        let helper = DragTestHelper(), input = DragTestInput(), sent = FileTransferTestResult()
+        let transfer = MacFileTransfer(logger: ServerLogger(verbose: false), input: input,
+            makeOutgoingDrag: { helper }, send: { sent.receive($0) })
+        defer { transfer.stop() }
+        let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 100, height: 100)
+        try transfer.startDrag(sessionID: 96, compressed: [], archiveSize: 0)
+        helper.release()
+        #expect(input.releases.wait(timeout: .now() + 1) == .success)
+        // A new regular click can arrive during AppKit's delayed destination
+        // teardown, before the archive is sent and drag ownership is cleared.
+        _ = transfer.pointer(mask: 1, x: 40, y: 40, layout: layout)
+        input.pointer(buttonMask: 1, x: 40, y: 40, layout: layout)
+        helper.complete(.success([URL(fileURLWithPath: "/tmp/outgoing-vnc-drag-fixture")]))
+        #expect(sent.ready.wait(timeout: .now() + 2) == .success)
+        #expect(input.releases.wait(timeout: .now() + 0.2) == .timedOut)
+        #expect(input.masks.last == 1)
+    }
 }
 
-private final class DragTestHelper: NativeDragHelper, @unchecked Sendable {
-    let input: ClientSocket
-    let commands: ClientSocket
-    let events: ClientSocket
-    private let output: ClientSocket
-    init() throws {
-        func pair() throws -> (ClientSocket, ClientSocket) {
-            var fds = [Int32](repeating: -1, count: 2)
-            guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else { throw RFBError.socketError("socketpair") }
-            for fd in fds {
-                var one: Int32 = 1
-                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
-            }
-            return (try ClientSocket(fd: fds[0]), try ClientSocket(fd: fds[1]))
+private final class DragTestFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var helpers: [DragTestHelper]
+    init(_ helpers: [DragTestHelper]) { self.helpers = helpers }
+    func next() -> DragTestHelper { lock.withLock { helpers.removeFirst() } }
+}
+
+private final class DragTestHelper: OutgoingFileDrag, @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: (@Sendable (Result<[URL], Error>) -> Void)?
+    private var nudgeCallback: (@Sendable () -> Void)?
+    private var releaseCallback: (@Sendable () -> Void)?
+    func start(nudge: @escaping @Sendable () -> Void, release: @escaping @Sendable () -> Void,
+               completion: @escaping @Sendable (Result<[URL], Error>) -> Void) {
+        lock.withLock {
+            self.completion = completion
+            nudgeCallback = nudge; releaseCallback = release
         }
-        (input, commands) = try pair()
-        (output, events) = try pair()
     }
-    func read(_ count: Int, timeout: TimeInterval) throws -> [UInt8] {
-        try output.withReadTimeout(timeout, operation: "test drag helper") { try output.readExact(count) }
-    }
-    func readCommands(_ count: Int) throws -> [UInt8] {
-        try commands.withReadTimeout(2, operation: "test drag commands") { try commands.readExact(count) }
-    }
-    func cancel() { input.shutdown(); output.shutdown() }
+    func complete(_ result: Result<[URL], Error>) { lock.withLock { completion }?(result) }
+    func nudge() { lock.withLock { nudgeCallback }?() }
+    func release() { lock.withLock { releaseCallback }?() }
+    func cancel() {}
 }
 
 private final class DragTestInput: InputController {
     private let lock = NSLock()
+    let releases = DispatchSemaphore(value: 0)
     private var values: [UInt8] = []
     var masks: [UInt8] { lock.withLock { values } }
     func key(down: Bool, keysym: UInt32, mapAltToCommand: Bool) {}
     func pointer(buttonMask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) {
         lock.withLock { values.append(buttonMask) }
+        if buttonMask == 0 { releases.signal() }
     }
     func releaseKeys() {}
 }

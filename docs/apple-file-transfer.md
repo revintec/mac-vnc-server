@@ -25,6 +25,15 @@ is separate and is not required. [Application drop research](session-access-and-
 explains target-app differences. Client originals are retained; Finder drops can
 move the staged server copy, with status shown in the Received Files panel.
 
+Outgoing drags now use an AppKit destination inside the user worker. It accepts
+only the active drag's local file URLs and Copy operation, finishes that source
+gesture, then sends its archive to the viewer. The short-lived destination
+remains alive while AppKit completes its reply. This replaces `SSDragHelper`,
+whose Carbon receiver could leave an AppKit source (including Finder) stuck with
+“Cannot start a new drag. A previous drag has not finished.” Once Finder is in
+that state, it may need a one-time relaunch; the corrected receiver prevents the
+failed handoff from being repeated. File contents still use the native sender.
+
 Every connection authenticates the actual macOS account through security type
 30 (Apple DH/AES), regardless of `--encryption`. The resulting wrapping key also
 decodes Screen Sharing's individually encrypted keyboard/mouse events. The
@@ -421,7 +430,6 @@ compatibility guarantees.
 
 `MacFileTransfer` runs the installed system helpers as the server's user:
 
-- `SSDragHelper` negotiates Finder drag promises and the drop destination.
 - `SSFileCopySender` reads files/folders and produces native transfer records.
 - `SSFileCopyReceiver` restores contents and macOS metadata into a private staging
   directory under the selected destination.
@@ -434,23 +442,22 @@ command 2 and u32 body length; common fields use host endian and item data retai
 network byte order. Its stdout uses native u16 command 1 for a 1,284-byte final
 status/name record, or command 2 for an eight-byte progress record.
 
-The drag helper reads native u32 session, compressed size and archive size, then
-the archive. A zero compressed size requests the existing local drag. Output codes
-15/20 initialize/acknowledge an incoming drag, 10 requests a file transfer to a
-destination, 11 supplies a drag archive, 12/13 request mouse-up/drag, and 14 finishes.
-The RFB reader waits for code 15 before accepting later pointer packets. Incoming
-drags post a fresh mouse-down and acknowledge with 20. Synthetic buttons pass
-through the connection's shared input controller, so a quick drop, cancellation
-or disconnect releases the button while preserving other viewers' button state.
+Outgoing drag negotiation uses `OutgoingFileDrag` and AppKit drag destination
+callbacks. Its temporary windows time out after three seconds if no file drag
+arrives. Mouse nudges and releases use the connection's shared input controller
+and its last remote coordinates. Completed or cancelled old receivers cannot
+authorize files or release a replacement drag. Incoming drags use the staging
+inbox and `TransferDragSource`.
 
 ## Bounds and lifecycle
 
 Only control-mode Apple viewers with the required capabilities can transfer files.
 Each connection tracks its selected source paths, accepted drop directories, and
 up to eight active transfers. A viewer cannot request an unselected source file or
-a destination outside its own drop negotiation. Only one native drag helper can
-own the shared desktop at a time. Changing to observe mode, disconnecting, or
-cancelling terminates that connection's helpers and removes partial staging.
+a destination outside its own drop negotiation. Only one file drag can own the
+shared desktop at a time. Changing to observe mode, disconnecting, or cancelling
+stops that connection's drag receiver and file-copy helpers. Explicit Cancel in
+Received Files retains partially transferred data as described in the staging guide.
 
 Drag archives are capped at 5 MiB and FileCopy bodies at 1 MiB. The helper stream
 uses bounded pipe reads, and the framebuffer writer applies backpressure to
@@ -460,7 +467,8 @@ archive are separate from general clipboard images.
 
 Completion publishes the staged root item using an atomic exclusive rename.
 Existing destination items remain intact; collisions get a numbered filename.
-The feature copies files and folders and does not delete source files.
+Client originals are preserved. Finder drops move the received server copy out
+of staging; server-to-client transfers preserve their server originals.
 
 ## Validation and remaining manual checks
 
@@ -468,11 +476,28 @@ Automated tests use real system sender/receiver helpers with temporary files.
 They cover nested folders, a 2 MB binary payload, Unicode names, empty files,
 version 1/2 receive framing, collisions, cancellation cleanup, malformed records,
 capability opt-in and rejection of an unrelated connection's file request.
-Additional tests replace only the desktop drag helper with bounded socket pairs
-and verify readiness ordering, button release, and negotiated source/destination
-authorization before transferring contents through the real file-copy helpers.
+Additional tests substitute the outgoing drag receiver and verify cancellation,
+replacement, and negotiated source/destination authorization before transferring
+contents through the real file-copy helpers.
 These tests do not interact with Finder, move the pointer, or alter the general
 pasteboard.
+
+The opt-in desktop probe `scripts/probe-outgoing-file-drag.swift` uses the real
+AppKit receiver and mouse input engine. It verifies that an outgoing handoff
+ends its source drag, then performs a second ordinary drag in the same source
+app. It fails if an archive arrives but the source remains stuck. Build/run
+instructions are at the top of the script. It only uses its own temporary file
+and test window; it does not connect to or restart a VNC server.
+
+On macOS 26.6.2, the old `SSDragHelper` returned its archive but left the AppKit
+source without a drag-ended callback. Adding event numbers, mouse deltas, or a
+private mouse event source did not resolve it. The replacement passed both
+source-ended callbacks and the second drop. Separate Finder tests verified
+outgoing URL collection, a subsequent Finder-to-Finder move, and release of a
+staged incoming file into Finder (operation 16, Move, with the source file gone
+and matching destination contents). This validates the server-side desktop
+handoff; a full remote macOS 13.1 client round trip still needs a reconnect to
+the corrected build.
 
 The native-client control and registration test is opt-in because it loads a private AppKit
 framework. Build `scripts/probe-native-screen-sharing.m` as described at its top,

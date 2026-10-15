@@ -2,25 +2,13 @@ import AppKit
 import Darwin
 import Foundation
 
-/// The drag bridge can be exercised with pipes without opening a desktop drag.
-protocol NativeDragHelper: AnyObject, Sendable {
-    var input: ClientSocket { get }
-    func read(_ count: Int, timeout: TimeInterval) throws -> [UInt8]
-    func cancel()
-}
-
-extension NativeDragHelper {
-    func read(_ count: Int) throws -> [UInt8] { try read(count, timeout: 30) }
-}
-
 /// One unprivileged helper, with bounded pipe I/O and deterministic cancellation.
-final class NativeTransferProcess: NativeDragHelper, @unchecked Sendable {
+final class NativeTransferProcess: @unchecked Sendable {
     static let support = "/System/Library/CoreServices/RemoteManagement/screensharingd.bundle/Contents/Support/"
     static let senderPath = support + "SSFileCopySender.bundle/Contents/MacOS/SSFileCopySender"
     static let receiverPath = support + "SSFileCopyReceiver.bundle/Contents/MacOS/SSFileCopyReceiver"
-    static let dragPath = "/System/Library/CoreServices/RemoteManagement/AppleVNCServer.bundle/Contents/Support/SSDragHelper.app/Contents/MacOS/SSDragHelper"
     static var available: Bool {
-        [senderPath, receiverPath, dragPath].allSatisfy { FileManager.default.isExecutableFile(atPath: $0) }
+        [senderPath, receiverPath].allSatisfy { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     private let process: Process
@@ -34,7 +22,7 @@ final class NativeTransferProcess: NativeDragHelper, @unchecked Sendable {
         let process = Process()
         let inputPipe = Pipe(), outputPipe = Pipe()
         process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = path == Self.dragPath ? [] : [String(getuid()), String(getgid())]
+        process.arguments = [String(getuid()), String(getgid())]
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = FileHandle.nullDevice
@@ -102,7 +90,8 @@ final class MacFileTransfer: @unchecked Sendable {
     private let logger: ServerLogger
     private let input: InputController
     private let pointerLock = NSLock()
-    private let makeDragHelper: @Sendable () throws -> any NativeDragHelper
+    private var lastPointer: (point: CGPoint, mask: UInt8, layout: VirtualDisplayLayout)?
+    private let makeOutgoingDrag: @Sendable () throws -> any OutgoingFileDrag
     private let inbox: TransferInbox?
     private var stagedBatches: [String: UUID] = [:]
     private var stagedReceives: [UInt32: TransferStore.Receive] = [:]
@@ -111,7 +100,7 @@ final class MacFileTransfer: @unchecked Sendable {
     private var cancelledReceives = Set<UInt32>()
     private var gesture: TransferGesture?
     private var stopped = false
-    private var drag: (any NativeDragHelper)?
+    private var drag: (any OutgoingFileDrag)?
     private var dragToken: UUID?
     private var sourceFiles: Set<String> = []
     private var dropDirectories: Set<String> = []
@@ -119,14 +108,12 @@ final class MacFileTransfer: @unchecked Sendable {
     private var receivers: [UInt32: NativeTransferProcess] = [:]
 
     init(logger: ServerLogger, input: InputController = MacInputController(), inbox: TransferInbox? = nil,
-         makeDragHelper: @escaping @Sendable () throws -> any NativeDragHelper = {
-             try NativeTransferProcess(path: NativeTransferProcess.dragPath)
-         },
+         makeOutgoingDrag: @escaping @Sendable () throws -> any OutgoingFileDrag = { AppKitOutgoingFileDrag() },
          send: @escaping @Sendable ([UInt8]) throws -> Void) {
         self.logger = logger
         self.inbox = inbox
         self.input = input
-        self.makeDragHelper = makeDragHelper
+        self.makeOutgoingDrag = makeOutgoingDrag
         self.send = send
     }
 
@@ -135,9 +122,8 @@ final class MacFileTransfer: @unchecked Sendable {
     func cancelAll(permanently: Bool = false) {
         lock.lock()
         stopped = stopped || permanently
-        var helpers: [any NativeDragHelper] = senders.values.map { $0 }
-        helpers.append(contentsOf: receivers.values.map { $0 as any NativeDragHelper })
-        if let drag { helpers.append(drag) }
+        let helpers = Array(senders.values) + Array(receivers.values)
+        let outgoing = drag
         let token = dragToken
         let gesture = self.gesture; self.gesture = nil
         let batches = Array(stagedBatches.values); stagedBatches.removeAll()
@@ -147,17 +133,18 @@ final class MacFileTransfer: @unchecked Sendable {
         sourceFiles.removeAll(); dropDirectories.removeAll()
         lock.unlock()
         helpers.forEach { $0.cancel() }
+        outgoing?.cancel()
         gesture?.cancel()
         for id in batches { try? inbox?.store.finishWaiting(id, reason: "Connection ended or transfer cancelled") }
         releaseDrag(token: token)
     }
 
-    private func releaseDrag(token: UUID?) {
+    private func releaseDrag(token: UUID?, releaseMouse: Bool = true) {
         Self.dragLock.withLock {
             if let token, Self.dragOwner?.client == identity, Self.dragOwner?.token == token {
-                // The native agent also posts mouse-up when tearing down its
-                // helper. A cancelled promise must not leave our synthetic down held.
-                postMouse(.leftMouseUp)
+                // Releasing this connection's drag must not leave its
+                // synthetic button down held in the user session.
+                if releaseMouse { postMouse(.leftMouseUp) }
                 Self.dragOwner = nil
             }
         }
@@ -182,7 +169,7 @@ final class MacFileTransfer: @unchecked Sendable {
             return true
         }
         guard acquired else {
-            logger.verbose("Apple drag ignored: session=\(sessionID) another connection owns the drag helper")
+            logger.verbose("Apple drag ignored: session=\(sessionID) another connection owns the file drag")
             return
         }
         do {
@@ -229,31 +216,21 @@ final class MacFileTransfer: @unchecked Sendable {
                 scheduleWaitingTimeout(batch.id)
                 return
             }
-            let helper = try makeDragHelper()
+            let helper = try makeOutgoingDrag()
             lock.lock()
             guard !stopped else { lock.unlock(); helper.cancel(); releaseDrag(token: token); return }
             drag = helper
             lock.unlock()
-            try helper.input.writeAll(sessionID.nativeBytes + UInt32(compressed.count).nativeBytes
-                + UInt32(archiveSize).nativeBytes + compressed)
-            // Match ScreensharingAgent: wait for the shield to exist before
-            // processing the viewer's next pointer packet (which may be up).
-            guard try helper.read(1, timeout: 5) == [15] else {
-                throw RFBError.protocolError("native drag helper did not initialize")
-            }
-            logger.verbose("Apple drag ready: session=\(sessionID)")
-            DispatchQueue.global(qos: .userInitiated).async { [self, helper] in
-                defer {
-                    helper.cancel()
-                    lock.lock()
-                    let current = drag === helper
-                    if current { drag = nil; dragToken = nil }
-                    lock.unlock()
-                    // Completion of an old helper must not release a newer drag.
-                    if current { releaseDrag(token: token) }
+            logger.verbose("Apple outgoing drag: session=\(sessionID) receiver=AppKit")
+            helper.start(nudge: { [weak self, weak helper] in
+                self?.postOutgoingMouse(.leftMouseDragged, helper: helper, offset: 1)
+            }, release: { [weak self, weak helper] in
+                self?.postOutgoingMouse(.leftMouseUp, helper: helper)
+            }) { [weak self, weak helper] result in
+                guard let self, let helper else { return }
+                DispatchQueue.global(qos: .userInitiated).async { [self, helper] in
+                    finishOutgoingDrag(helper, token: token, sessionID: sessionID, result: result)
                 }
-                do { try readDrag(helper) }
-                catch { logger.verbose("Apple drag ended: \(error)") }
             }
         } catch {
             cancelDrag()
@@ -287,7 +264,10 @@ final class MacFileTransfer: @unchecked Sendable {
 
     /// Returns true when staging consumed the event (no click on the target).
     func pointer(mask: UInt8, x: UInt16, y: UInt16, layout: VirtualDisplayLayout) -> Bool {
-        lock.withLock { gesture }?.pointer(mask: mask, x: x, y: y, layout: layout) ?? false
+        pointerLock.withLock {
+            lastPointer = (layout.globalPoint(framebufferX: Int(x), framebufferY: Int(y)), mask, layout)
+        }
+        return lock.withLock { gesture }?.pointer(mask: mask, x: x, y: y, layout: layout) ?? false
     }
 
     private func endStagedGesture(token: UUID) {
@@ -328,8 +308,13 @@ final class MacFileTransfer: @unchecked Sendable {
     private func postMouse(_ type: CGEventType, offset: CGFloat = 0) {
         pointerLock.lock()
         defer { pointerLock.unlock() }
-        guard var point = CGEvent(source: nil)?.location else { return }
+        if type == .leftMouseDragged, let lastPointer, lastPointer.mask & 1 == 0 { return }
+        guard var point = lastPointer?.point ?? CGEvent(source: nil)?.location else { return }
         point.x += offset; point.y += offset
+        if let layout = lastPointer?.layout {
+            point.x = min(max(point.x, layout.origin.x), layout.origin.x + CGFloat(max(0, layout.width - 1)) / layout.scale)
+            point.y = min(max(point.y, layout.origin.y), layout.origin.y + CGFloat(max(0, layout.height - 1)) / layout.scale)
+        }
         // Use the same input bridge as RFB pointer packets, so the synthetic
         // button belongs to this client and subsequent up/disconnect releases it.
         // An origin at the current point also supports negative monitor positions.
@@ -337,35 +322,41 @@ final class MacFileTransfer: @unchecked Sendable {
         input.pointer(buttonMask: type == .leftMouseUp ? 0 : 1, x: 0, y: 0, layout: layout)
     }
 
-    private func readDrag(_ helper: any NativeDragHelper) throws {
-        while true {
-            let code = try helper.read(1, timeout: 60)[0]
-            guard lock.withLock({ !stopped && drag === helper }) else { return }
-            switch code {
-            case 12, 13:
-                lock.withLock {
-                    guard !stopped && drag === helper else { return }
-                    postMouse(code == 12 ? .leftMouseUp : .leftMouseDragged, offset: code == 13 ? 1 : 0)
-                }
-            case 14: return
-            case 11:
-                let header = try helper.read(12)
-                let session = UInt32(littleEndianBytes: header, at: 0)
-                let length = Int(UInt32(littleEndianBytes: header, at: 4))
-                let size = Int(UInt32(littleEndianBytes: header, at: 8))
-                guard length > 0, length <= AppleFileTransfer.maxDragBytes else { throw RFBError.protocolError("invalid outgoing drag size") }
-                let compressed = try helper.read(length)
-                let files = try AppleFileTransfer.dragFiles(compressed: compressed, archiveSize: size)
-                guard !files.isEmpty else { return }
-                guard lock.withLock({ () -> Bool in
-                    guard !stopped && drag === helper else { return false }
-                    sourceFiles = Set(files.map(\.path))
-                    return true
-                }) else { return }
-                try send(AppleFileTransfer.dragMessage(sessionID: session, compressed: compressed, archiveSize: UInt32(size)))
-            default: throw RFBError.protocolError("unknown native drag helper command \(code)")
-            }
+    private func postOutgoingMouse(_ type: CGEventType, helper: (any OutgoingFileDrag)?, offset: CGFloat = 0) {
+        lock.withLock {
+            guard let helper, !stopped, drag === helper else { return }
+            postMouse(type, offset: offset)
         }
+    }
+
+    private func finishOutgoingDrag(_ helper: any OutgoingFileDrag, token: UUID, sessionID: UInt32,
+                                    result: Result<[URL], Error>) {
+        defer {
+            let current = lock.withLock {
+                guard drag === helper else { return false }
+                drag = nil; dragToken = nil
+                return true
+            }
+            // The AppKit receiver released the source before completing. A
+            // delayed network send must not release a newer ordinary click.
+            if current { releaseDrag(token: token, releaseMouse: false) }
+        }
+        do {
+            let files = try result.get()
+            let content = ClipboardContent(items: files.map {
+                [.init(type: "public.file-url", data: Data($0.absoluteString.utf8))]
+            })
+            let archive = try AppleClipboard.archive(content: content)
+            let compressed = try AppleClipboard.compress(archive)
+            let validated = try AppleFileTransfer.dragFiles(compressed: compressed, archiveSize: archive.count)
+            guard !validated.isEmpty else { return }
+            guard lock.withLock({
+                guard !stopped, drag === helper else { return false }
+                sourceFiles = Set(validated.map(\.path)); return true
+            }) else { return }
+            try send(AppleFileTransfer.dragMessage(sessionID: sessionID, compressed: compressed, archiveSize: UInt32(archive.count)))
+            logger.verbose("Apple outgoing drag completed: session=\(sessionID) files=\(validated.count) receiver=AppKit")
+        } catch { logger.verbose("Apple outgoing drag ended: \(error)") }
     }
 
     func handle(_ message: AppleFileTransfer.Message) throws {

@@ -421,7 +421,7 @@ extension FileTransferTests {
         let store = try TransferStore(options: .init(root: root.appendingPathComponent("inbox")))
         let inbox = TransferInbox(store: store, present: { state.setGesture($0) })
         let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), input: state, inbox: inbox,
-            makeDragHelper: { throw CLIError.commandFailed("Staged transfers must not start the promise helper") }) { bytes in
+            makeOutgoingDrag: { throw CLIError.commandFailed("Staged transfers must not start an outgoing drag") }) { bytes in
             if bytes.first == 0x1e { state.request.signal() }
             else { state.completed.signal() }
         }

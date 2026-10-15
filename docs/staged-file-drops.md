@@ -28,8 +28,10 @@ copies, but cannot cancel another process's active native receivers.
 
 The staged path avoids dependence on the target app implementing file promises;
 it does not force an app to accept an otherwise unsupported file type.
-Server-to-client drops still use Apple's native helper and the client's own
-drag implementation. That direction is unchanged.
+Server-to-client drops use an AppKit receiver in the user worker to finish the
+local source drag, followed by Apple's file sender and the client's own drag
+implementation. The obsolete `SSDragHelper` receiver is no longer used: on
+Tahoe it could return an archive while leaving Finder's source drag unfinished.
 
 ## Storage and lifetime
 
