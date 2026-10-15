@@ -16,11 +16,13 @@ int VNCConsoleCurrent(VNCConsoleIdentity *identity);
 // Do not use this to authorize capture/input or select a console worker.
 int VNCConsoleOwner(VNCConsoleIdentity *identity);
 // Resolve a copied State:/Users/ConsoleUser snapshot against /dev/console.
-// Graphics OnConsole flags can disagree during Fast User Switching on Ventura.
+// SessionInfo OnConsole flags can remain stale after Fast User Switching.
 // Ambiguous/missing audit identities or owner disagreement fail explicitly.
 int VNCConsoleResolveIdentity(CFDictionaryRef state, uint32_t device_owner, VNCConsoleIdentity *identity);
-// Additionally require consistent OnConsole flags before routing capture/input.
-int VNCConsoleResolveCaptureIdentity(CFDictionaryRef state, uint32_t device_owner, VNCConsoleIdentity *identity);
+// Additionally require IORegistry's IOConsoleUsers to confirm the same UID/audit
+// as the unique OnConsole session before routing capture/input.
+int VNCConsoleResolveCaptureIdentity(CFDictionaryRef state, CFArrayRef console_users,
+                                    uint32_t device_owner, VNCConsoleIdentity *identity);
 // Prepare audit membership and credentials, without opening a graphics connection.
 // Follow with exec before calling Verify or any AppKit/ScreenCaptureKit API.
 int VNCConsolePrepare(VNCConsoleIdentity identity);

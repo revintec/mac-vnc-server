@@ -78,7 +78,7 @@ enum AccountSessionError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .consoleUnavailable:
-            return "The password was accepted, but the physical console session is temporarily unavailable. Try reconnecting after the Mac finishes switching users."
+            return "The password was accepted, but the physical console session could not be verified. If the Mac is switching users, wait for that to finish before reconnecting."
         case .sessionUnavailable:
             return "The password was accepted, but the requested user has no available graphical session. Sign in as that user at the Mac first, then reconnect."
         }

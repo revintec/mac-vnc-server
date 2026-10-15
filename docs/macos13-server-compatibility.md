@@ -175,7 +175,7 @@ to the user's existing session, as detailed below.
   This lets the menu report the device-owner candidate despite contradictory
   graphics flags. Missing/ambiguous identities and device-owner changes fail
   explicitly. Root capture/input selection additionally requires matching
-  OnConsole flags; the reported Ventura contradiction remains unavailable for
+  OnConsole flags from IORegistry's `IOConsoleUsers`; the reported Ventura contradiction remains unavailable for
   that route instead of silently overriding the graphics evidence. Ordinary
   user attachment is unchanged, and the menu remains a red eye while visibility
   is unconfirmed.
@@ -189,6 +189,25 @@ The isolated ARM64 investigation build was produced at
 These corrections are included in the 1.0 source. The investigation directory
 contains earlier build manifests as well; it is not the release artifact record.
 No running server was restarted or replaced.
+
+### Subsequent Tahoe console-selection regression
+
+After using the VNC menu's **Switch to Login Window**, the local Tahoe listener
+rejected a valid root password because version 1.0 checked the nested
+SystemConfiguration `SessionInfo` console flags. `/dev/console` and the
+top-level state correctly selected root/audit 100907, while the nested rows still
+marked root off-console and UID 501/audit 100021 on-console. IORegistry already
+reported root on-console and the user off-console. This was a stale configd
+snapshot after the switch, not proof that loginwindow was unavailable.
+
+The resolver now checks the device-owner candidate against IORegistry's current
+UID/audit/OnConsole metadata. A metadata-only probe reproduced the old resolver's
+`ESTALE` result and verified the corrected root/audit selection as both the user
+and root, without capture, input, session changes, or service management. Tests
+cover stale configd flags in both switch directions and continue to reject the
+earlier Ventura case, where IORegistry itself still identifies the user's
+graphics session. The error message no longer assumes every verification failure
+is temporary. This correction does not establish Ventura off-console capture.
 
 ### User-session attachment result
 

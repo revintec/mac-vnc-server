@@ -35,13 +35,13 @@ struct ConsoleOwnershipTests {
                 == ConsoleIdentity(uid: 0, auditID: 100154))
         var output = VNCConsoleIdentity(uid: 999, audit_id: 999)
         #expect(VNCConsoleResolveCaptureIdentity(state(uid: 0, sessions: rows) as CFDictionary,
-            0, &output) == ESTALE)
+            rows as CFArray, 0, &output) == ESTALE)
         #expect(output.uid == 999 && output.audit_id == 999)
         // Once ownership agrees with graphics, the user route is valid again.
         #expect(resolve(state(uid: 501, sessions: rows), deviceOwner: 501)
                 == ConsoleIdentity(uid: 501, auditID: 100005))
         #expect(VNCConsoleResolveCaptureIdentity(state(uid: 501, sessions: rows) as CFDictionary,
-            501, &output) == 0)
+            rows as CFArray, 501, &output) == 0)
         #expect(output.uid == 501 && output.audit_id == 100005)
     }
 
@@ -50,14 +50,52 @@ struct ConsoleOwnershipTests {
         let user = session(uid: 501, audit: 8, onConsole: false)
         var output = VNCConsoleIdentity()
         #expect(VNCConsoleResolveCaptureIdentity(state(uid: 0, sessions: [root, user]) as CFDictionary,
-            0, &output) == 0)
+            [root, user] as CFArray, 0, &output) == 0)
         #expect(output.uid == 0 && output.audit_id == 7)
         for rows in [[root, session(uid: 501, audit: 8, onConsole: true)],
                      [session(uid: 0, audit: 7, onConsole: false), user],
                      [root, session(uid: 0, audit: 7, onConsole: false)]] {
             output = VNCConsoleIdentity(uid: 999, audit_id: 999)
             #expect(VNCConsoleResolveCaptureIdentity(state(uid: 0, sessions: rows) as CFDictionary,
-                0, &output) == ESTALE)
+                rows as CFArray, 0, &output) == ESTALE)
+            #expect(output.uid == 999 && output.audit_id == 999)
+        }
+    }
+
+    @Test func staleConfigdFlagsDoNotRejectTheVerifiedGraphicsConsole() {
+        // Reproduced on Tahoe after switching to loginwindow: configd still
+        // marks the user on-console while IORegistry correctly marks root.
+        let staleRows = [session(uid: 0, audit: 100907, onConsole: false),
+                         session(uid: 501, audit: 100021, onConsole: true)]
+        let liveRows = [session(uid: 0, audit: 100907, onConsole: true),
+                        session(uid: 501, audit: 100021, onConsole: false)]
+        var output = VNCConsoleIdentity()
+        #expect(VNCConsoleResolveCaptureIdentity(state(uid: 0, sessions: staleRows) as CFDictionary,
+            liveRows as CFArray, 0, &output) == 0)
+        #expect(output.uid == 0 && output.audit_id == 100907)
+        // The reverse transition also follows live graphics flags, preserving
+        // root login's ability to select the ordinary user's desktop.
+        #expect(VNCConsoleResolveCaptureIdentity(state(uid: 501, sessions: liveRows) as CFDictionary,
+            staleRows as CFArray, 501, &output) == 0)
+        #expect(output.uid == 501 && output.audit_id == 100021)
+    }
+
+    @Test func registryEvidenceMustMatchTheOwnerAndAuditAndBeComplete() {
+        let root = session(uid: 0, audit: 7, onConsole: true)
+        let snapshot = state(uid: 0, sessions: [root]) as CFDictionary
+        var output = VNCConsoleIdentity(uid: 999, audit_id: 999)
+        #expect(VNCConsoleResolveCaptureIdentity(snapshot, nil, 0, &output) == ENXIO)
+        #expect(output.uid == 999 && output.audit_id == 999)
+        for rows in [[], [session(uid: 0, audit: 8, onConsole: true)],
+                     [session(uid: 501, audit: 7, onConsole: true)]] {
+            #expect(VNCConsoleResolveCaptureIdentity(snapshot, rows as CFArray, 0, &output) == ESTALE)
+            #expect(output.uid == 999 && output.audit_id == 999)
+        }
+        var missingFlag = root; missingFlag.removeValue(forKey: "kCGSSessionOnConsoleKey")
+        var invalidFlag = root; invalidFlag["kCGSSessionOnConsoleKey"] = 2
+        var inconsistentAudit = root; inconsistentAudit["kSCSecuritySessionID"] = 8
+        for row in [missingFlag, invalidFlag, inconsistentAudit] {
+            #expect(VNCConsoleResolveCaptureIdentity(snapshot, [row] as CFArray, 0, &output) == EINVAL)
             #expect(output.uid == 999 && output.audit_id == 999)
         }
     }

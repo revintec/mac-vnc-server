@@ -1,5 +1,6 @@
 #include "CVNCSession.h"
 #include <CoreGraphics/CoreGraphics.h>
+#include <IOKit/IOKitLib.h>
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <bsm/audit.h>
 #include <dlfcn.h>
@@ -115,26 +116,34 @@ int VNCConsoleResolveIdentity(CFDictionaryRef state, uint32_t device_owner, VNCC
     return 0;
 }
 
-int VNCConsoleResolveCaptureIdentity(CFDictionaryRef state, uint32_t device_owner, VNCConsoleIdentity *identity) {
+int VNCConsoleResolveCaptureIdentity(CFDictionaryRef state, CFArrayRef console_users,
+                                    uint32_t device_owner, VNCConsoleIdentity *identity) {
     if (!identity) return EINVAL;
     VNCConsoleIdentity candidate = {0};
     int error = VNCConsoleResolveIdentity(state, device_owner, &candidate);
     if (error) return error;
-    CFArrayRef list = CFDictionaryGetValue(state, CFSTR("SessionInfo"));
+    // configd's SessionInfo OnConsole flags can remain stale after a completed
+    // user switch. IOConsoleUsers supplies the current graphics-console flags;
+    // its selected UID/audit must still agree with configd and /dev/console.
+    if (!console_users || CFGetTypeID(console_users) != CFArrayGetTypeID()) return ENXIO;
     int confirmed = 0;
-    for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
-        CFTypeRef item = CFArrayGetValueAtIndex(list, i);
-        if (CFGetTypeID(item) != CFDictionaryGetTypeID()) continue;
+    for (CFIndex i = 0; i < CFArrayGetCount(console_users); i++) {
+        CFTypeRef item = CFArrayGetValueAtIndex(console_users, i);
+        if (CFGetTypeID(item) != CFDictionaryGetTypeID()) return EINVAL;
         CFTypeRef value = CFDictionaryGetValue(item, CFSTR("kCGSSessionOnConsoleKey"));
         int64_t flag = -1;
         if (value && CFGetTypeID(value) == CFBooleanGetTypeID()) flag = CFBooleanGetValue(value);
         else if (!number(item, CFSTR("kCGSSessionOnConsoleKey"), &flag)) flag = -1;
         VNCConsoleIdentity row = {0};
-        int decoded = decodeSession(item, &row);
+        if ((flag != 0 && flag != 1) || decodeSession(item, &row)) return EINVAL;
+        if (CFDictionaryContainsKey(item, CFSTR("kSCSecuritySessionID"))) {
+            int64_t security = 0;
+            if (!number(item, CFSTR("kSCSecuritySessionID"), &security) || security != row.audit_id) return EINVAL;
+        }
         if (flag == 1) {
-            if (decoded || row.uid != candidate.uid || row.audit_id != candidate.audit_id) return ESTALE;
+            if (row.uid != candidate.uid || row.audit_id != candidate.audit_id) return ESTALE;
             confirmed = 1;
-        } else if (!decoded && row.uid == candidate.uid && row.audit_id == candidate.audit_id) {
+        } else if (row.uid == candidate.uid && row.audit_id == candidate.audit_id) {
             return ESTALE;
         }
     }
@@ -158,6 +167,16 @@ static CFDictionaryRef copyConsoleState(void) {
     return NULL;
 }
 
+static CFArrayRef copyConsoleUsers(void) {
+    io_registry_entry_t root = IORegistryGetRootEntry(kIOMainPortDefault);
+    if (!root) return NULL;
+    CFTypeRef users = IORegistryEntryCreateCFProperty(root, CFSTR("IOConsoleUsers"), kCFAllocatorDefault, 0);
+    IOObjectRelease(root);
+    if (users && CFGetTypeID(users) == CFArrayGetTypeID()) return users;
+    if (users) CFRelease(users);
+    return NULL;
+}
+
 static int currentConsoleIdentity(VNCConsoleIdentity *identity, int require_graphics_agreement) {
     if (!identity) return EINVAL;
     uint32_t before = 0, after = 0;
@@ -166,9 +185,13 @@ static int currentConsoleIdentity(VNCConsoleIdentity *identity, int require_grap
     CFDictionaryRef state = copyConsoleState();
     if (!state) return ENXIO;
     VNCConsoleIdentity candidate = {0};
-    error = require_graphics_agreement
-        ? VNCConsoleResolveCaptureIdentity(state, before, &candidate)
-        : VNCConsoleResolveIdentity(state, before, &candidate);
+    if (require_graphics_agreement) {
+        CFArrayRef users = copyConsoleUsers();
+        error = VNCConsoleResolveCaptureIdentity(state, users, before, &candidate);
+        if (users) CFRelease(users);
+    } else {
+        error = VNCConsoleResolveIdentity(state, before, &candidate);
+    }
     CFRelease(state);
     if (error) return error;
     error = readConsoleOwner(&after);

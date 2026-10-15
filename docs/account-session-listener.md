@@ -152,8 +152,12 @@ disabled.
 
 Device-owner reporting uses `State:/Users/ConsoleUser` and `/dev/console`, with
 a unique matching UID/audit row. It is separate from capture authorization:
-root routing also requires the session's OnConsole flags to agree. Ventura can
-report root device ownership while keeping the user marked OnConsole; the
+root routing also requires IORegistry's `IOConsoleUsers` to confirm that same
+UID/audit as the on-console graphics session. SystemConfiguration's nested
+`SessionInfo` flags can remain stale after Fast User Switching, including on
+Tahoe; those flags do not authorize or veto routing. Missing, ambiguous, or
+conflicting live registry evidence still rejects the connection. Ventura can
+report root device ownership while IORegistry keeps the user marked OnConsole; the
 Ventura probe found loginwindow in that same locked user session. The menu
 shows the device-owner candidate, reports when the session remains locked on
 console, and retains the red eye for this disagreement. A newly started user
