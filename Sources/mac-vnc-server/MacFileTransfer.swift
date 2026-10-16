@@ -117,9 +117,9 @@ final class MacFileTransfer: @unchecked Sendable {
         self.send = send
     }
 
-    func stop() { cancelAll(permanently: true) }
+    func stop(reason: String = "Connection ended") { cancelAll(permanently: true, reason: reason) }
 
-    func cancelAll(permanently: Bool = false) {
+    func cancelAll(permanently: Bool = false, reason: String = "Transfer cancelled") {
         lock.lock()
         stopped = stopped || permanently
         let helpers = Array(senders.values) + Array(receivers.values)
@@ -128,6 +128,9 @@ final class MacFileTransfer: @unchecked Sendable {
         let gesture = self.gesture; self.gesture = nil
         let batches = Array(stagedBatches.values); stagedBatches.removeAll()
         cancelledReceives.formUnion(stagedReceives.keys)
+        for session in stagedReceives.keys where receiveFailures[session] == nil {
+            receiveFailures[session] = reason
+        }
         dragToken = nil
         senders.removeAll(); receivers.removeAll(); drag = nil
         sourceFiles.removeAll(); dropDirectories.removeAll()
@@ -135,7 +138,7 @@ final class MacFileTransfer: @unchecked Sendable {
         helpers.forEach { $0.cancel() }
         outgoing?.cancel()
         gesture?.cancel()
-        for id in batches { try? inbox?.store.finishWaiting(id, reason: "Connection ended or transfer cancelled") }
+        for id in batches { try? inbox?.store.finishWaiting(id, reason: reason) }
         releaseDrag(token: token)
     }
 
@@ -291,7 +294,7 @@ final class MacFileTransfer: @unchecked Sendable {
             cancelledBatches.insert(id)
             for (session, receive) in stagedReceives where receive.batch == id {
                 cancelledReceives.insert(session)
-                receiveFailures[session] = reason
+                if receiveFailures[session] == nil { receiveFailures[session] = reason }
                 if let helper = receivers.removeValue(forKey: session) { result.append((session, helper)) }
             }
             for (path, batch) in stagedBatches where batch == id { dropDirectories.remove(path) }
@@ -395,7 +398,12 @@ final class MacFileTransfer: @unchecked Sendable {
             lock.lock()
             let sender = senders.removeValue(forKey: message.sessionID)
             let receiver = receivers.removeValue(forKey: message.sessionID)
-            if stagedReceives[message.sessionID] != nil { cancelledReceives.insert(message.sessionID) }
+            if stagedReceives[message.sessionID] != nil {
+                cancelledReceives.insert(message.sessionID)
+                if receiveFailures[message.sessionID] == nil {
+                    receiveFailures[message.sessionID] = "Client cancelled the file transfer"
+                }
+            }
             lock.unlock()
             sender?.cancel(); receiver?.cancel()
         case 100...104:
@@ -403,8 +411,11 @@ final class MacFileTransfer: @unchecked Sendable {
             guard let helper = lock.withLock({ receivers[message.sessionID] }) else {
                 throw RFBError.protocolError("file data without an active receive session")
             }
-            try message.validateFileData()
-            if let receive = lock.withLock({ stagedReceives[message.sessionID] }), let inbox {
+            guard let receive = lock.withLock({ stagedReceives[message.sessionID] }), let inbox else {
+                throw RFBError.protocolError("file data without an active staging batch")
+            }
+            do {
+                try message.validateFileData()
                 let count: Int64
                 switch message.command {
                 case 101: count = 4096
@@ -412,14 +423,17 @@ final class MacFileTransfer: @unchecked Sendable {
                 case 103: count = Int64(UInt32.be(message.payload[2], message.payload[3], message.payload[4], message.payload[5]))
                 default: count = 0
                 }
-                do { if count > 0 { try inbox.store.accept(receive, bytes: count, dataBytes: message.command == 101 ? 0 : count) } }
-                catch {
-                    logger.warning("Apple staged transfer stopped: \(error.localizedDescription)")
-                    cancelStagedBatch(receive.batch, reason: error.localizedDescription)
-                    return
+                if count > 0 {
+                    try inbox.store.accept(receive, bytes: count, dataBytes: message.command == 101 ? 0 : count)
                 }
+                try helper.input.writeAll(message.receiverInput)
+            } catch {
+                // The complete record has already been consumed. Fail its
+                // transfer and preserve the cause without closing the desktop.
+                let reason = "\(error.localizedDescription) (file-copy command \(message.command))"
+                logger.warning("Apple file receive failed: session=\(message.sessionID) batch=\(receive.batch) \(reason)")
+                cancelStagedBatch(receive.batch, reason: reason)
             }
-            try helper.input.writeAll(message.receiverInput)
         case 200, 201:
             // Viewer receive status/progress. It has already consumed our data.
             if message.command == 200 {
@@ -525,7 +539,11 @@ final class MacFileTransfer: @unchecked Sendable {
                     let receivedName = length == 0 ? (name ?? "")
                         : try AppleFileTransfer.pathString(Array(record[4..<(4 + length)]))
                     guard status == 0 else {
-                        failure = "Client/native receiver reported status \(status)"
+                        failure = "Client/native receiver reported status \(status) for \(String(reflecting: receivedName))"
+                        lock.withLock {
+                            if receiveFailures[session] == nil { receiveFailures[session] = failure }
+                        }
+                        logger.warning("Apple file receive failed: session=\(session) batch=\(receive.batch) \(failure)")
                         try send(AppleFileTransfer.receiverResult(sessionID: session, status: status, name: receivedName))
                         return
                     }
@@ -546,8 +564,12 @@ final class MacFileTransfer: @unchecked Sendable {
                     return
                 }
             } catch {
-                guard lock.withLock({ !stopped && receivers[session] === helper }) else { return }
                 failure = error.localizedDescription
+                guard lock.withLock({
+                    guard !stopped && receivers[session] === helper else { return false }
+                    if receiveFailures[session] == nil { receiveFailures[session] = failure }
+                    return true
+                }) else { return }
                 logger.warning("Apple file receive failed: \(error)")
                 try? send(AppleFileTransfer.receiverResult(sessionID: session, status: UInt16.max, name: name ?? ""))
             }

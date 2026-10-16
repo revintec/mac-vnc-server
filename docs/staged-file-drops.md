@@ -17,7 +17,11 @@ this change. The existing server encryption policy is unchanged.
    Observe, completion cannot start a new drag. Finished copies remain in the
    panel. Drag their completed row into the target app in a second gesture.
 4. Choose **Received Files…** from the remote-VNC menu-bar icon to reopen the panel. Select a row for Reveal in
-   Finder, Save a Copy, or Remove. Multiple completed rows can be dragged
+   Finder, Save a Copy, or Trash. **⌘A** selects all rows in either Received Files
+   or Trash. **Trash** immediately moves selected rows to Trash without confirmation,
+   keeping their files and recording their removal time. **view Trash** beside it opens
+   a separate list with **Restore** and **Delete Permanently…** actions.
+   Multiple completed rows can be dragged
    together. If a batch partly fails, explicitly enable “Use completed items
    from a failed transfer” to use its successful items after reception ends.
    With no row selected, Reveal in Finder opens the transfer storage folder.
@@ -55,9 +59,14 @@ or redirect its receive destination.
 
 Each native receiver writes into its private `.incoming` item directory.
 Publication uses an exclusive atomic rename on the same volume, with numbered
-names for collisions. Incomplete files are never offered as drag URLs. Filename
-and native entry validation continues to reject traversal and symlinks.
+names for collisions. Incomplete files are never offered as drag URLs. Entry
+names still reject traversal. Symbolic links are preserved, including absolute,
+relative and dangling targets, without target containment checks.
 Client originals remain untouched. Edits to staged files do **not** sync back.
+
+An invalid file record fails the affected transfer without disconnecting VNC.
+The manifest and Received Files panel preserve the specific failure reason;
+later cancellation or connection cleanup does not replace it with a generic error.
 
 Cancelling in the panel or dragging back out of the remote view stops reception.
 Releasing over the remote view allows reception to finish for a second drag.
@@ -67,7 +76,7 @@ unfinished output into a clearly named `.partial` container. The row shows
 “Incomplete kept”; **Reveal in Finder** exposes that container without needing
 the completed-items checkbox. Incomplete files can be truncated, sparse, or
 missing folder entries. They are not offered for dragging or Save a Copy, and
-there is no resume support. They remain until explicitly removed and continue
+there is no resume support. They remain until permanently deleted from Trash and continue
 to count toward the storage limit, including after restart.
 
 Leaving the remote view, connection failures, and other receive failures still
@@ -80,7 +89,8 @@ alone rather than used as authority to delete paths.
 
 Unused completed copies become eligible for cleanup after 24 hours. Cleanup
 runs on startup, on new batches, and periodically while the panel is running.
-A batch used in a drag, revealed, or saved is retained until explicitly removed.
+A batch used in a drag, revealed, or saved is retained until permanently deleted
+from Trash. Trashed batches never expire automatically.
 Finder drops **move the server's staged files** into the chosen Finder location,
 including when dragging a completed row from this panel. Other apps are offered
 Copy, and their received sources remain available here. The footer explains the
@@ -95,8 +105,24 @@ makes that copy available again after five minutes and reports that it is still
 here. It continues watching for a slower move to finish. Removing the transfer
 record afterwards does not remove the file at its Finder destination.
 
-Disconnect and restart do not delete retained files. Remove warns
-that apps may still refer to their paths.
+Completed drops match items by filesystem path. A folder or app bundle may
+already have left staging when AppKit reports completion; Foundation's changed
+directory-URL hint must not leave that row stuck at “Ready to drag”.
+
+Disconnect and restart do not delete retained files. Trash preserves files at
+their existing paths and stores `removedAt` in the manifest. Restore clears that
+timestamp and returns the original transfer states to Received Files; it cannot
+recreate data already moved to Finder or lost in a failed transfer. Trash is
+sorted by removal time, newest first, with the local removal date and time on
+each row. Its summary counts top-level received items (including history with no
+remaining copy), transfer rows, and retained payload bytes, excluding quota
+reservations for metadata. Folders/app bundles each count as one top-level item.
+
+Trashed files still count toward the storage limit. **Delete Permanently…**
+requires confirmation and warns that apps may still refer to their paths. It
+deletes only the staged batch, never client originals or Finder destinations.
+Active transfers cannot be removed; cancel them first. A pending Finder move
+must finish before its trashed transfer can be permanently deleted.
 
 Limits are shared across processes using the same root:
 

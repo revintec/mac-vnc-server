@@ -28,11 +28,31 @@ final class TransferStore: @unchecked Sendable {
         var created = Date()
         var updated = Date()
         var retained = false
+        // Nil for older manifests and transfers in Received Files.
+        var removedAt: Date?
         // Optional for manifests written before panel cancellation kept data.
         var keepPartialOnFailure: Bool?
         var items: [Item]
         var isActive: Bool { items.contains { $0.state == .waiting || $0.state == .receiving } }
         var isComplete: Bool { items.allSatisfy { $0.state == .complete } }
+    }
+    struct TrashSummary {
+        let transferCount: Int
+        let itemCount: Int
+        let dataBytes: Int64
+
+        init(batches: [Batch]) {
+            let trash = batches.filter { $0.removedAt != nil }
+            transferCount = trash.count
+            itemCount = trash.reduce(0) { $0 + $1.items.count }
+            // Payload bytes, excluding quota reservations for filesystem metadata.
+            // Moved and failed items have no retained payload.
+            dataBytes = trash.flatMap(\.items).reduce(0) { total, item in
+                guard item.state == .complete || item.state == .partial else { return total }
+                let (sum, overflow) = total.addingReportingOverflow(item.bytes)
+                return overflow ? Int64.max : sum
+            }
+        }
     }
     struct Receive: Sendable { let batch: UUID; let item: UUID; let staging: URL }
     let options: Options
@@ -108,11 +128,13 @@ final class TransferStore: @unchecked Sendable {
                 return try? load(id)
             }
     }
-    func snapshot() throws -> [Batch] {
+    func snapshot(inTrash: Bool = false) throws -> [Batch] {
         try transaction {
             var result = try batches()
             for i in result.indices { try reconcileFinderMoves(&result[i]) }
-            return result.sorted { $0.created > $1.created }
+            return result.filter { ($0.removedAt != nil) == inTrash }.sorted {
+                (inTrash ? $0.removedAt! : $0.created) > (inTrash ? $1.removedAt! : $1.created)
+            }
         }
     }
 
@@ -190,7 +212,7 @@ final class TransferStore: @unchecked Sendable {
             used = sum
         }
         guard extra >= 0, extra <= options.maximumBytes, used <= options.maximumBytes - extra else {
-            throw Self.error("Transfer storage limit reached; remove retained transfers or increase --transfer-limit-gib")
+            throw Self.error("Transfer storage limit reached; delete files permanently from Trash or increase --transfer-limit-gib")
         }
         var fs = statfs()
         guard statfs(options.root.path, &fs) == 0,
@@ -204,10 +226,14 @@ final class TransferStore: @unchecked Sendable {
             var batch = try load(receive.batch)
             guard let index = batch.items.firstIndex(where: { $0.id == receive.item && $0.state == .receiving }) else { throw Self.error("Transfer cancelled") }
             let source = receive.staging.appendingPathComponent(name)
-            // Never publish a symlink or special file produced by a helper.
+            // Inspect the item itself so dangling links can also be published.
             var info = stat()
-            guard lstat(source.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG || info.st_mode & S_IFMT == S_IFDIR else {
-                throw Self.error("Received item is not a regular file or folder")
+            guard lstat(source.path, &info) == 0 else {
+                throw Self.error("Cannot inspect received item \(String(reflecting: name)): \(String(cString: strerror(errno)))")
+            }
+            let type = info.st_mode & S_IFMT
+            guard type == S_IFREG || type == S_IFDIR || type == S_IFLNK else {
+                throw Self.error("Received item \(String(reflecting: name)) is not a regular file, folder, or symbolic link")
             }
             let target = try Self.publish(source: source, directory: destination(receive.batch), name: name)
             batch.items[index].relativePath = target.lastPathComponent
@@ -275,14 +301,19 @@ final class TransferStore: @unchecked Sendable {
     func retain(_ id: UUID) throws {
         try transaction { var batch = try load(id); batch.retained = true; try save(batch) }
     }
+    private func itemExists(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0
+    }
     func urls(_ id: UUID, allowPartial: Bool = false) throws -> [URL] {
         try transaction {
             var batch = try load(id)
             try reconcileFinderMoves(&batch)
+            guard batch.removedAt == nil else { return [] }
             guard batch.items.allSatisfy({ $0.state == .complete || $0.state == .moved }) || (allowPartial && !batch.isActive) else { return [] }
             return batch.items.compactMap { item in
                 guard item.state == .complete, !item.isMoving,
-                      let url = itemURL(item, batch: id), fm.fileExists(atPath: url.path) else { return nil }
+                      let url = itemURL(item, batch: id), itemExists(url) else { return nil }
                 return url
             }
         }
@@ -293,7 +324,7 @@ final class TransferStore: @unchecked Sendable {
             let batch = try load(id)
             return batch.items.compactMap { item in
                 guard item.state == .complete || item.state == .partial,
-                      let url = itemURL(item, batch: id), fm.fileExists(atPath: url.path) else { return nil }
+                      let url = itemURL(item, batch: id), itemExists(url) else { return nil }
                 return url
             }
         }
@@ -301,10 +332,13 @@ final class TransferStore: @unchecked Sendable {
     /// Finder owns the filesystem operation. Never delete a source on drag-end:
     /// its move may still be running, may fail, or may be cancelled in a dialog.
     func finderMoveAccepted(_ id: UUID, urls: [URL]) throws {
+        // Foundation adds a trailing slash for existing directories, but not
+        // after Finder has moved them. Match paths rather than directory hints.
+        let paths = Set(urls.map(\.path))
         try transaction {
             var batch = try load(id)
             for i in batch.items.indices where batch.items[i].state == .complete {
-                if let url = itemURL(batch.items[i], batch: id), urls.contains(url) {
+                if let url = itemURL(batch.items[i], batch: id), paths.contains(url.path) {
                     batch.items[i].finderMoveStarted = Date()
                     batch.items[i].error = nil
                 }
@@ -338,8 +372,31 @@ final class TransferStore: @unchecked Sendable {
     }
     func remove(_ id: UUID) throws {
         try transaction {
-            let batch = try load(id)
+            var batch = try load(id)
             guard !batch.isActive else { throw Self.error("Cancel the transfer before removing it") }
+            guard batch.removedAt == nil else { return }
+            batch.removedAt = Date()
+            batch.retained = true
+            try save(batch)
+        }
+    }
+    func restore(_ id: UUID) throws {
+        try transaction {
+            var batch = try load(id)
+            guard batch.removedAt != nil else { return }
+            batch.removedAt = nil
+            batch.retained = true
+            try save(batch)
+        }
+    }
+    func deletePermanently(_ id: UUID) throws {
+        try transaction {
+            var batch = try load(id)
+            try reconcileFinderMoves(&batch)
+            guard batch.removedAt != nil else { throw Self.error("Move the transfer to Trash before deleting it permanently") }
+            guard !batch.isActive, !batch.items.contains(where: \.isMoving) else {
+                throw Self.error("Wait for the transfer or Finder move to finish before deleting it permanently")
+            }
             try fm.removeItem(at: directory(id))
         }
     }
@@ -373,7 +430,7 @@ final class TransferStore: @unchecked Sendable {
                 try save(batch)
             }
             try? fm.removeItem(at: directory(batch.id).appendingPathComponent(".incoming"))
-            if !batch.retained && Date().timeIntervalSince(batch.updated) > 24 * 3600 {
+            if batch.removedAt == nil && !batch.retained && Date().timeIntervalSince(batch.updated) > 24 * 3600 {
                 try fm.removeItem(at: directory(batch.id))
             }
         }

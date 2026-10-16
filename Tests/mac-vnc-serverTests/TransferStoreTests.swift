@@ -87,6 +87,16 @@ struct TransferStoreTests {
         let nextReceive = try limited.receive(batch: next.id, name: nil)
         #expect(throws: (any Error).self) { try limited.accept(nextReceive, bytes: 2) }
         try recovered.remove(batch.id)
+        #expect(FileManager.default.fileExists(atPath: partial.path))
+        #expect(throws: (any Error).self) { try limited.accept(nextReceive, bytes: 2) }
+        #expect(try recovered.snapshot(inTrash: true).first?.items.map(\.state) == [.complete, .partial, .failed])
+        try recovered.restore(batch.id)
+        let restored = try #require(recovered.snapshot().first { $0.id == batch.id })
+        #expect(restored.items.map(\.state) == saved.items.map(\.state))
+        #expect(restored.items.map(\.error) == saved.items.map(\.error))
+        #expect(try recovered.urls(batch.id, allowPartial: true) == [good])
+        try recovered.remove(batch.id)
+        try recovered.deletePermanently(batch.id)
         #expect(!FileManager.default.fileExists(atPath: partial.path))
         try limited.accept(nextReceive, bytes: 2)
     }
@@ -128,6 +138,7 @@ struct TransferStoreTests {
         #expect(moved.items[0].storageBytes == 0)
         #expect(try store.urls(batch.id) == [left])
         try store.remove(batch.id)
+        try store.deletePermanently(batch.id)
         #expect(try String(contentsOf: destination, encoding: .utf8) == "test")
     }
     @Test func finderMoveCancelledInFinderKeepsReceivedFile() throws {
@@ -150,6 +161,29 @@ struct TransferStoreTests {
         try FileManager.default.moveItem(at: url, to: destination)
         #expect(try store.snapshot().first?.items[0].state == .moved)
         #expect(try store.urls(batch.id).isEmpty)
+    }
+    @Test func folderMovedBeforeDragCompletionIsRecognized() throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = try TransferStore(options: .init(root: root))
+        let batch = try store.begin(names: ["Example.app"])
+        let receive = try store.receive(batch: batch.id, name: "Example.app")
+        let app = receive.staging.appendingPathComponent("Example.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: false)
+        try Data("app content".utf8).write(to: app.appendingPathComponent("payload"))
+        _ = try store.complete(receive, name: "Example.app")
+        let source = try #require(store.urls(batch.id).first)
+        // A fast Finder move can finish before AppKit invokes the source's
+        // drag-ended callback. Foundation then stops adding the directory slash.
+        let destination = root.appendingPathComponent("Moved.app", isDirectory: true)
+        try FileManager.default.moveItem(at: source, to: destination)
+        try store.finderMoveAccepted(batch.id, urls: [source])
+        let item = try #require(store.snapshot().first?.items.first)
+        #expect(item.state == .moved)
+        #expect(item.relativePath == nil)
+        #expect(item.storageBytes == 0)
+        let reopened = try TransferStore(options: .init(root: root))
+        #expect(try reopened.snapshot().first?.items.first?.state == .moved)
+        #expect(try String(contentsOf: destination.appendingPathComponent("payload"), encoding: .utf8) == "app content")
     }
     @Test func recoveryHonorsActiveLeasesAndLivingWriters() throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
@@ -191,6 +225,9 @@ struct TransferStoreTests {
         #expect(FileManager.default.fileExists(atPath: keptURL.path))
         #expect(try reopened.snapshot().map(\.id) == [used.id])
         try reopened.remove(used.id)
+        #expect(FileManager.default.fileExists(atPath: keptURL.path))
+        #expect(try reopened.snapshot().isEmpty)
+        try reopened.deletePermanently(used.id)
         #expect(!FileManager.default.fileExists(atPath: keptURL.path))
     }
     @Test func unsafeRootsNamesAndUnselectedItemsAreRejected() throws {
@@ -202,12 +239,31 @@ struct TransferStoreTests {
         let batch = try store.begin(names: ["chosen"])
         #expect(throws: (any Error).self) { try store.receive(batch: batch.id, name: "not-selected") }
         let receive = try store.receive(batch: batch.id, name: "chosen")
-        try FileManager.default.createSymbolicLink(atPath: receive.staging.appendingPathComponent("chosen").path, withDestinationPath: "/etc/hosts")
+        #expect(mkfifo(receive.staging.appendingPathComponent("chosen").path, 0o600) == 0)
         #expect(throws: (any Error).self) { try store.complete(receive, name: "chosen") }
         #expect(throws: (any Error).self) { try store.remove(batch.id) }
         let link = root.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: root)
         #expect(throws: (any Error).self) { try TransferStore(options: .init(root: link)) }
+    }
+    @Test(arguments: ["missing", "../outside", "/tmp/mac-vnc-missing-link-target"])
+    func danglingSymlinksCanBePublishedRevealedAndMoved(target: String) throws {
+        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = try TransferStore(options: .init(root: root))
+        let batch = try store.begin(names: ["link"])
+        let receive = try store.receive(batch: batch.id, name: "link")
+        try FileManager.default.createSymbolicLink(atPath: receive.staging.appendingPathComponent("link").path,
+            withDestinationPath: target)
+        let published = try store.complete(receive, name: "link")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: published.path) == target)
+        #expect(try store.urls(batch.id) == [published])
+        #expect(try store.revealURLs(batch.id) == [published])
+        let reopened = try TransferStore(options: .init(root: root))
+        #expect(try reopened.urls(batch.id) == [published])
+        try store.finderMoveAccepted(batch.id, urls: [published])
+        #expect(try store.snapshot().first?.items[0].state == .complete)
+        try FileManager.default.moveItem(at: published, to: root.appendingPathComponent("moved"))
+        #expect(try store.snapshot().first?.items[0].state == .moved)
     }
     @Test @MainActor func releaseOrCancellationPreventsLateDragAndHeldGestureStartsOnce() throws {
         let input = StagingTestInput()

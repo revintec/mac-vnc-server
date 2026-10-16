@@ -49,15 +49,21 @@ enum AppleFileTransfer {
             case 100:
                 guard payload.count == 52 else { throw RFBError.protocolError("invalid file item information") }
             case 101:
-                guard payload.count >= 105, payload[0] == 1 || payload[0] == 2 else {
-                    throw RFBError.protocolError("unsupported file item (only regular files and folders are accepted)")
+                guard payload.count >= 105 else {
+                    throw RFBError.protocolError("truncated file item metadata (\(payload.count) bytes; expected at least 105)")
                 }
                 let length = Int(UInt16.be(payload[100], payload[101]))
                 guard length > 0, length < 1_024, payload.count >= 104 + length + 1,
                       payload[104 + length] == 0 else { throw RFBError.protocolError("invalid file item name length") }
                 let name = try AppleFileTransfer.pathString(Array(payload[104..<(104 + length)]))
                 guard name != ".", name != "..", !name.contains("/") else {
-                    throw RFBError.protocolError("invalid file item name")
+                    throw RFBError.protocolError("invalid file item name \(String(reflecting: name))")
+                }
+                // Native kinds: 1 = regular file, 2 = directory, 3 = symlink.
+                // Preserve link targets verbatim; the native receiver restores
+                // them, including absolute, relative and dangling targets.
+                guard (1...3).contains(payload[0]) else {
+                    throw RFBError.protocolError("unsupported file item type \(payload[0]) for \(String(reflecting: name)); expected a regular file, folder, or symbolic link")
                 }
             case 102:
                 guard payload.count >= 4,

@@ -85,51 +85,93 @@ final class TransferInbox: @unchecked Sendable {
 }
 
 @MainActor
+final class TransferListPanel: NSPanel {
+    weak var selectionTable: NSTableView?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if event.type == .keyDown, modifiers == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "a",
+           attachedSheet == nil, let table = selectionTable {
+            makeFirstResponder(table)
+            table.selectAll(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
+@MainActor
 final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
     private let store: TransferStore
     private let logger: ServerLogger
+    private let showingTrash: Bool
+    private var trashPanel: TransferPanel?
     private var inbox: TransferInbox!
     private var batches: [TransferStore.Batch] = []
     private var gestures: [UUID: TransferGesture] = [:]
     private var dragWindows: [UUID: NSWindow] = [:]
-    private let window: NSPanel
+    let window: TransferListPanel
     private let table = TransferTableView()
     private let status = NSTextField(wrappingLabelWithString: "Drag files into Screen Sharing. Keep holding to continue when ready, or drag completed files from this list.")
     private lazy var cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelSelected))
+    private lazy var trashButton = NSButton(title: "Trash", target: self, action: #selector(trashSelected))
+    private lazy var restoreButton = NSButton(title: "Restore", target: self, action: #selector(restoreSelected))
+    private lazy var deleteButton = NSButton(title: "Delete Permanently…", target: self, action: #selector(deleteSelected))
+    private let totals = NSTextField(labelWithString: "")
     private let partial = NSButton(checkboxWithTitle: "Use completed items from a failed transfer", target: nil, action: nil)
     private var timer: Timer?
     private var tableDragging = false
     private var tableDragFiles: [UUID: [URL]] = [:]
     private var nextCleanup = Date().addingTimeInterval(60)
-    init(store: TransferStore, logger: ServerLogger = ServerLogger(verbose: false)) {
-        self.store = store; self.logger = logger
-        window = NSPanel(contentRect: NSRect(x: 100, y: 100, width: 600, height: 340),
+    init(store: TransferStore, logger: ServerLogger = ServerLogger(verbose: false), showingTrash: Bool = false) {
+        self.store = store; self.logger = logger; self.showingTrash = showingTrash
+        window = TransferListPanel(contentRect: NSRect(x: showingTrash ? 140 : 100, y: 100, width: 680, height: 380),
                          styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
         super.init()
         table.dragPolicy.logger = logger
-        window.title = "Received Files — mac-vnc-server"
+        window.title = showingTrash ? "Received Files Trash — mac-vnc-server" : "Received Files — mac-vnc-server"
+        if showingTrash { status.stringValue = "Removed transfers are kept here with their files. Restore returns them to Received Files." }
         window.isReleasedWhenClosed = false; window.hidesOnDeactivate = false; window.delegate = self
         let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 12; stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         window.contentView = stack
         stack.addArrangedSubview(status)
         status.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
-        window.contentMinSize = NSSize(width: 540, height: 320)
+        window.contentMinSize = NSSize(width: 640, height: 340)
         table.addTableColumn(NSTableColumn(identifier: .init("transfers")))
-        table.headerView = nil; table.rowHeight = 52; table.dataSource = self; table.delegate = self
+        table.headerView = nil; table.rowHeight = showingTrash ? 70 : 52; table.dataSource = self; table.delegate = self
         table.allowsMultipleSelection = true
+        window.selectionTable = table
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true
         stack.addArrangedSubview(scroll)
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
-        stack.addArrangedSubview(partial)
+        if showingTrash {
+            totals.font = .systemFont(ofSize: 12, weight: .medium)
+            totals.identifier = .init("trashSummary")
+            totals.toolTip = "Counts top-level received items, including removed history. Data size excludes files already moved to Finder and quota reservations for metadata."
+            stack.addArrangedSubview(totals)
+        } else { stack.addArrangedSubview(partial) }
         let buttons = NSStackView(); buttons.spacing = 8
-        for (title, action) in [("Cancel", #selector(cancelSelected)), ("Reveal in Finder", #selector(reveal)), ("Save a Copy…", #selector(saveCopy)), ("Remove…", #selector(removeSelected))] {
-            buttons.addArrangedSubview(title == "Cancel" ? cancelButton : NSButton(title: title, target: self, action: action))
+        if showingTrash {
+            buttons.addArrangedSubview(restoreButton)
+            buttons.addArrangedSubview(NSButton(title: "Reveal in Finder", target: self, action: #selector(reveal)))
+            buttons.addArrangedSubview(deleteButton)
+        } else {
+            buttons.addArrangedSubview(cancelButton)
+            buttons.addArrangedSubview(NSButton(title: "Reveal in Finder", target: self, action: #selector(reveal)))
+            buttons.addArrangedSubview(NSButton(title: "Save a Copy…", target: self, action: #selector(saveCopy)))
+            buttons.addArrangedSubview(trashButton)
+            buttons.addArrangedSubview(NSButton(title: "view Trash", target: self, action: #selector(showTrash)))
         }
         stack.addArrangedSubview(buttons)
-        let note = NSTextField(wrappingLabelWithString: "Finder drops move received files out of this panel; other apps receive copies. Cancel keeps incomplete data. Client originals are unchanged.")
+        trashButton.toolTip = "Move selected transfers to Trash. Cancel active transfers first."
+        let note = NSTextField(wrappingLabelWithString: showingTrash
+            ? "Files in Trash still count toward the storage limit. Delete Permanently frees that storage. Files moved to Finder and client originals are unaffected."
+            : "Finder drops move received files; other apps receive copies. Cancel keeps incomplete data. Trash keeps files for Restore. Client originals are unchanged.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
         note.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+        window.makeFirstResponder(table)
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
@@ -155,13 +197,19 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
                 nextCleanup = Date().addingTimeInterval(60)
                 DispatchQueue.global(qos: .utility).async { [store] in try? store.clean() }
             }
-            let next = try store.snapshot()
-            if !tableDragging && next.map(\.updated) != batches.map(\.updated) {
+            let next = try store.snapshot(inTrash: showingTrash)
+            if !tableDragging && (next.map(\.id) != batches.map(\.id) || next.map(\.updated) != batches.map(\.updated)) {
                 let selection = Set(selected.map(\.id))
                 batches = next; table.reloadData()
                 table.selectRowIndexes(IndexSet(batches.indices.filter { selection.contains(batches[$0].id) }), byExtendingSelection: false)
             }
-            updateCancelButton()
+            updateButtons()
+            if showingTrash {
+                let summary = TransferStore.TrashSummary(batches: batches)
+                let bytes = summary.dataBytes == 0 ? "0 bytes" : ByteCountFormatter.string(fromByteCount: summary.dataBytes, countStyle: .file)
+                totals.stringValue = "\(summary.itemCount) \(summary.itemCount == 1 ? "item" : "items") in \(summary.transferCount) \(summary.transferCount == 1 ? "transfer" : "transfers") · \(bytes) total data"
+                return
+            }
             for batch in batches where !batch.isActive {
                 inbox?.finished(batch.id)
                 guard let gesture = gestures.removeValue(forKey: batch.id) else { continue }
@@ -218,11 +266,13 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         let detail = moving ? "Moving to Finder… · Client originals unchanged"
             : moved == batch.items.count ? "Moved to Finder · No copy kept here · Client originals unchanged"
             : incomplete > 0 ? "Cancelled · \(incomplete) incomplete kept · \(complete) complete · Reveal in Finder to inspect"
-            : batch.isComplete ? "Ready to drag · \(bytes)\(batch.retained ? " · Kept" : "")\(batch.items.compactMap(\.error).first.map { " · " + $0 } ?? "")"
+            : batch.isComplete ? "\(showingTrash ? "Complete" : "Ready to drag") · \(bytes)\(batch.retained ? " · Kept" : "")\(batch.items.compactMap(\.error).first.map { " · " + $0 } ?? "")"
             : batch.isActive ? "Receiving · \(complete)/\(batch.items.count) complete · \(bytes)"
             : "\(complete) complete · \(moved) moved · \(batch.items.compactMap(\.error).first ?? "Transfer ended")"
-        let label = NSTextField(wrappingLabelWithString: names + "\n" + detail)
-        label.font = .systemFont(ofSize: 12); label.maximumNumberOfLines = 2
+        let removal = batch.removedAt.map { "Removed " + DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .medium) + "\n" } ?? ""
+        let label = NSTextField(wrappingLabelWithString: names + "\n" + removal + detail)
+        label.font = .systemFont(ofSize: 12); label.maximumNumberOfLines = showingTrash ? 3 : 2
+        label.toolTip = label.stringValue
         let icon = NSImageView()
         if let first = batch.items.first, first.state == .complete, let path = first.relativePath {
             icon.image = NSWorkspace.shared.icon(forFile: store.destination(batch.id).appendingPathComponent(path).path)
@@ -241,6 +291,7 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
         }
     }
     func tableView(_ tableView: NSTableView, writeRowsWith rowIndexes: IndexSet, to pasteboard: NSPasteboard) -> Bool {
+        guard !showingTrash else { return false }
         do {
             let rows = rowIndexes.map { batches[$0] }
             let groups = try rows.map { try store.urls($0.id, allowPartial: partial.state == .on) }
@@ -281,8 +332,14 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
             refresh()
         } catch { status.stringValue = error.localizedDescription }
     }
-    func tableViewSelectionDidChange(_ notification: Notification) { updateCancelButton() }
-    private func updateCancelButton() { cancelButton.isEnabled = selected.contains { $0.isActive && inbox?.canCancel($0.id) == true } }
+    func tableViewSelectionDidChange(_ notification: Notification) { updateButtons() }
+    private func updateButtons() {
+        let rows = selected
+        cancelButton.isEnabled = rows.contains { $0.isActive && inbox?.canCancel($0.id) == true }
+        trashButton.isEnabled = !rows.isEmpty && rows.allSatisfy { !$0.isActive }
+        restoreButton.isEnabled = !rows.isEmpty
+        deleteButton.isEnabled = !rows.isEmpty && rows.allSatisfy { !$0.isActive && !$0.items.contains(where: \.isMoving) }
+    }
     @objc private func cancelSelected() {
         for batch in selected where batch.isActive { inbox.cancel(batch.id) }
         status.stringValue = "Cancelling… Data already written will be kept as incomplete files. Use Reveal in Finder to inspect it."
@@ -326,14 +383,37 @@ final class TransferPanel: NSObject, @preconcurrency NSTableViewDataSource, NSTa
             }
         } catch { status.stringValue = error.localizedDescription }
     }
-    @objc private func removeSelected() {
-        let ids = selected.filter { !$0.isActive }.map(\.id); guard !ids.isEmpty else { return }
-        let alert = NSAlert(); alert.messageText = "Remove these received copies?"
-        alert.informativeText = "Apps may still refer to these files. Client originals are unaffected."
-        alert.addButton(withTitle: "Remove"); alert.addButton(withTitle: "Cancel")
+    @objc private func trashSelected() {
+        guard !selected.isEmpty, selected.allSatisfy({ !$0.isActive }) else { return }
+        let ids = selected.map(\.id)
+        do {
+            for id in ids { try store.remove(id) }
+            refresh()
+            status.stringValue = "Moved to Trash. You can restore these transfers from the Trash window."
+        } catch { status.stringValue = error.localizedDescription }
+    }
+    @objc private func showTrash() {
+        if trashPanel == nil { trashPanel = TransferPanel(store: store, logger: logger, showingTrash: true) }
+        trashPanel?.refresh()
+        trashPanel?.window.makeKeyAndOrderFront(nil)
+    }
+    @objc private func restoreSelected() {
+        do {
+            for batch in selected { try store.restore(batch.id) }
+            refresh()
+            status.stringValue = "Restored to Received Files. File paths and transfer history are preserved."
+        } catch { status.stringValue = error.localizedDescription }
+    }
+    @objc private func deleteSelected() {
+        guard !selected.isEmpty, selected.allSatisfy({ !$0.isActive && !$0.items.contains(where: \.isMoving) }) else { return }
+        let ids = selected.map(\.id)
+        let alert = NSAlert(); alert.alertStyle = .warning
+        alert.messageText = "Permanently delete selected transfers?"
+        alert.informativeText = "Their files in Trash and transfer history will be deleted. This cannot be undone. Apps may still refer to these files. Client originals and files moved to Finder are unaffected."
+        alert.addButton(withTitle: "Delete Permanently"); alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }
-            do { for id in ids { try store.remove(id) }; refresh() }
+            do { for id in ids { try store.deletePermanently(id) }; refresh() }
             catch { status.stringValue = error.localizedDescription }
         }
     }

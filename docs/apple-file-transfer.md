@@ -461,8 +461,10 @@ Received Files retains partially transferred data as described in the staging gu
 
 Drag archives are capped at 5 MiB and FileCopy bodies at 1 MiB. The helper stream
 uses bounded pipe reads, and the framebuffer writer applies backpressure to
-outgoing file records. Incoming regular-file/folder records are validated before
-being passed to the receiver. Symbolic-link items are rejected. Images in a drag
+outgoing file records. Incoming regular-file, folder and symbolic-link records
+are validated before being passed to the receiver. Link targets are preserved
+without containment checks. Invalid records fail their transfer and retain the
+specific error in the inbox while the VNC connection continues. Images in a drag
 archive are separate from general clipboard images.
 
 Completion publishes the staged root item using an atomic exclusive rename.

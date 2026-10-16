@@ -545,9 +545,10 @@ final class RFBClientSession: @unchecked Sendable {
         }
         let observer = capture.frameChanges?.observe { [weak self] in self?.wake.signal() }
         startFramebufferWriter()
+        var transferStopReason = "Connection ended"
         defer {
             if let observer { capture.frameChanges?.remove(observer) }
-            fileTransfer?.stop()
+            fileTransfer?.stop(reason: transferStopReason)
             stopFramebufferWriter()
             input.releaseKeys()
             if let captureRateConsumer = self.captureRateConsumer {
@@ -578,6 +579,7 @@ final class RFBClientSession: @unchecked Sendable {
                 return writerError
             }
             if original != nil { failureSource = "framebuffer_writer" }
+            transferStopReason = "Connection ended: \((original ?? error).localizedDescription)"
             throw original ?? error
         }
     }
@@ -1819,7 +1821,7 @@ final class RFBClientSession: @unchecked Sendable {
         state.unlock()
         if changed && !controlling {
             // Cancel an AppKit move before releasing its synthetic button.
-            fileTransfer?.cancelAll()
+            fileTransfer?.cancelAll(reason: "Viewer switched to Observe mode")
             input.releaseKeys()
             try enqueueWriterCommand(.clipboardReset)
         }

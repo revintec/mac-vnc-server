@@ -91,7 +91,7 @@ Local SwiftPM builds use the `mac-vnc-server-dev` name. The release workflow sta
 Local builds report the version recorded in `Sources/mac-vnc-server/AppVersion.swift`:
 
 ```text
-1.0
+1.2
 ```
 
 The release workflow replaces that value with the Git tag being released, stripping a leading `v`. For example, release tag `v1.2.3` builds a binary that reports `1.2.3`.
@@ -433,8 +433,13 @@ view. The server requests the files immediately and shows a Received Files
 panel. Keep holding to let it attempt a drag with completed local files; if you
 release first, drag the completed row from the panel into the target app.
 Copies are stored under `~/Library/Application Support/mac-vnc-server/Transfers`;
-used files remain until explicitly removed. Choose **Received Files…** from the remote-VNC menu-bar icon, or use
-`mac-vnc-server transfers` to reopen them. See [staging, retention, and timing
+used files remain until permanently deleted. Choose **Received Files…** from the remote-VNC menu-bar icon, or use
+`mac-vnc-server transfers` to reopen them. **⌘A** selects all rows. **Trash**
+immediately moves selected transfers to Trash, keeping their files and removal
+timestamps without a confirmation dialog. The **view Trash** button beside it
+opens the list, its total item count and data size,
+and **Restore** / **Delete Permanently…** actions. Trash survives restarts and
+counts toward the storage limit until permanently deleted. See [staging, retention, and timing
 verification](docs/staged-file-drops.md) for limits and remaining client tests.
 Drag a remote Finder item out of Screen Sharing into local Finder to copy in the
 other direction. Existing destinations are preserved with numbered names.

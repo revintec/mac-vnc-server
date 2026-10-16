@@ -265,6 +265,131 @@ struct FileTransferTests {
         #expect(!batch.isComplete)
     }
 
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true])
+    func nativeHelpersPreserveBundleAndStandaloneSymlinks(standalone: Bool) throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("mac-vnc-symlinks-\(UUID())")
+        let app = root.appendingPathComponent("Example.app")
+        let framework = app.appendingPathComponent("Contents/Frameworks/Example.framework")
+        try fm.createDirectory(at: framework.appendingPathComponent("Versions/A"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let payload = Data("framework content".utf8)
+        try payload.write(to: framework.appendingPathComponent("Versions/A/Example"))
+        let links = [
+            "Contents/Frameworks/Example.framework/Versions/Current": "A",
+            "Contents/Frameworks/Example.framework/Example": "Versions/Current/Example",
+            "absolute": root.appendingPathComponent("outside.txt").path,
+            "relative-outside": "../outside.txt",
+            "dangling": "missing-target"
+        ]
+        try Data("outside".utf8).write(to: root.appendingPathComponent("outside.txt"))
+        for (name, target) in links {
+            try fm.createSymbolicLink(atPath: app.appendingPathComponent(name).path, withDestinationPath: target)
+        }
+        let source = standalone ? root.appendingPathComponent("app-link") : app
+        if standalone { try fm.createSymbolicLink(atPath: source.path, withDestinationPath: "Example.app") }
+        let result = FileTransferTestResult()
+        let store = try TransferStore(options: .init(root: root.appendingPathComponent("inbox")))
+        let receiver = MacFileTransfer(logger: ServerLogger(verbose: true), input: DragTestInput(),
+            inbox: TransferInbox(store: store)) { bytes in
+            if bytes.first != 0x1e { result.receive(bytes) }
+        }
+        let sender = MacFileTransfer(logger: ServerLogger(verbose: true)) { bytes in
+            try receiver.handle(AppleFileTransfer.Message(body: Array(bytes.dropFirst(6))))
+        }
+        defer { sender.stop(); receiver.stop() }
+        let directory = try stage(receiver, store: store, source: source, session: 124)
+        try receiver.startReceiver(session: 124, directory: directory, name: source.lastPathComponent)
+        try sender.startSender(session: 124, source: source)
+        try #require(result.ready.wait(timeout: .now() + 15) == .success)
+        let response = try AppleFileTransfer.Message(body: Array(try #require(result.bytes).dropFirst(6)))
+        try #require(response.command == 200 && response.payload.prefix(2) == [0, 0])
+        let batch = try #require(store.snapshot().first)
+        let received = try #require(store.urls(batch.id).first)
+        if standalone {
+            #expect(try fm.destinationOfSymbolicLink(atPath: received.path) == "Example.app")
+            #expect(try store.revealURLs(batch.id) == [received])
+        } else {
+            for (name, target) in links {
+                #expect(try fm.destinationOfSymbolicLink(atPath: received.appendingPathComponent(name).path) == target)
+            }
+            #expect(try Data(contentsOf: received.appendingPathComponent("Contents/Frameworks/Example.framework/Example")) == payload)
+        }
+        try store.clean()
+        #expect(try store.urls(batch.id) == [received])
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available), arguments: [false, true])
+    func invalidFileRecordPreservesReasonAndDesktopConnection(truncated: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-vnc-invalid-item-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try TransferStore(options: .init(root: root))
+        let peer = try ClipboardTestPeer(fileTransfer: true, transferInbox: TransferInbox(store: store))
+        defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.enableAppleClipboard()
+        var viewer = [UInt8](repeating: 0, count: 66)
+        viewer[0] = 0x21; viewer[3] = 62
+        for message in [0x14, 0x1e, 0x1f, 0x20] { viewer[34 + message / 8] |= 0x80 >> (message % 8) }
+        try peer.write(viewer)
+        let archive = try AppleClipboard.archive(content: ClipboardContent(items: [[
+            .init(type: "public.file-url", data: Data("file:///tmp/Example.app".utf8))
+        ]]))
+        try peer.write(AppleFileTransfer.dragMessage(sessionID: 201,
+            compressed: AppleClipboard.compress(archive), archiveSize: UInt32(archive.count)))
+        #expect(try peer.read(8) == [0x1e, 0, 0, 0] + UInt32(201).beBytes)
+        let path = try peer.read(Int(peer.number()))
+        try peer.write(AppleFileTransfer.Message(command: 2, sessionID: 202,
+            payload: [UInt8](repeating: 0, count: 8) + UInt16(path.count).beBytes + path).wire)
+        var item = [UInt8](repeating: 0, count: 104)
+        item[0] = 9; item[101] = 8
+        item += Array("bad-type".utf8) + [0]
+        if truncated { item = [1] }
+        try peer.write(AppleFileTransfer.Message(command: 101, sessionID: 202, payload: item).wire)
+        #expect(try peer.read(2) == [0x22, 0])
+        let response = try AppleFileTransfer.Message(body: peer.read(Int(peer.number())))
+        #expect(response.command == 200 && response.sessionID == 202)
+        #expect(response.payload.prefix(2) == [255, 255])
+        // A clipboard round trip proves that the actual RFB reader survived.
+        try peer.write([0x0b, 0, 0, 0, 0, 0, 0, 73])
+        #expect(try peer.readClipboard().1 == .text("initial"))
+        // Later mode cancellation must not overwrite the original cause.
+        try peer.write([0x0a, 0, 0, 0])
+        let deadline = Date().addingTimeInterval(3)
+        while try store.snapshot().first?.isActive == true && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let batch = try #require(store.snapshot().first)
+        #expect(batch.items[0].state == .failed)
+        let error = try #require(batch.items[0].error)
+        if truncated { #expect(error.contains("truncated file item metadata (1 bytes")) }
+        else { #expect(error.contains("unsupported file item type 9 for \"bad-type\"")) }
+        #expect(error.contains("file-copy command 101"))
+        let reopened = try TransferStore(options: .init(root: root))
+        #expect(try reopened.snapshot().first?.items[0].error == error)
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available))
+    func clientCancellationKeepsItsReasonAfterConnectionCleanup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mac-vnc-cancel-reason-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try TransferStore(options: .init(root: root))
+        let receiver = MacFileTransfer(logger: ServerLogger(verbose: false), input: DragTestInput(),
+            inbox: TransferInbox(store: store)) { _ in }
+        defer { receiver.stop() }
+        let directory = try stage(receiver, store: store, source: root.appendingPathComponent("item"), session: 203)
+        try receiver.startReceiver(session: 203, directory: directory, name: "item")
+        try receiver.handle(.init(command: 5, sessionID: 203))
+        receiver.stop(reason: "Connection ended: test disconnect")
+        let deadline = Date().addingTimeInterval(3)
+        while try store.snapshot().first?.isActive == true && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let item = try #require(store.snapshot().first?.items.first)
+        #expect(item.state == .failed)
+        #expect(item.error == "Client cancelled the file transfer")
+    }
+
     @Test func unrelatedConnectionCannotRequestAFile() throws {
         let transfer = MacFileTransfer(logger: ServerLogger(verbose: false)) { _ in }
         defer { transfer.stop() }
