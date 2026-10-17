@@ -43,7 +43,8 @@ final class ClientSocket: @unchecked Sendable {
         let flags = fcntl(fd, F_GETFL, 0)
         guard flags >= 0, fcntl(fd, F_SETFD, FD_CLOEXEC) == 0,
               fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
-            close(fd)
+            // All stored properties are initialized, so throwing runs deinit.
+            // Closing here too could close another thread's reused descriptor.
             throw RFBError.socketError("failed to configure client socket")
         }
     }
@@ -415,7 +416,6 @@ final class ListeningSocket {
         }
 
         guard fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 else {
-            close(fd)
             throw RFBError.socketError("failed to protect listener descriptor")
         }
 
@@ -427,7 +427,6 @@ final class ListeningSocket {
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         guard inet_pton(AF_INET, self.bindAddress, &address.sin_addr) == 1 else {
-            close(fd)
             throw RFBError.socketError("invalid IPv4 bind address: \(bindAddress)")
         }
 
@@ -439,13 +438,11 @@ final class ListeningSocket {
 
         guard bindResult == 0 else {
             let message = String(cString: strerror(errno))
-            close(fd)
             throw RFBError.socketError("bind \(bindAddress):\(port) failed: \(message)")
         }
 
         let flags = fcntl(fd, F_GETFL, 0)
         guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
-            close(fd)
             throw RFBError.socketError("failed to configure listening socket")
         }
         if startListening { try self.startListening() }

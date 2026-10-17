@@ -37,7 +37,7 @@ final class SessionChannel: @unchecked Sendable {
         }
     }
 
-    func ready() throws { try socket.writeAll([82]) }
+    func ready() throws { try withTaskCancellation { try socket.writeAll([82]) } }
     func waitUntilReady(timeout: TimeInterval = 40) throws {
         try socket.withReadTimeout(timeout, operation: "session worker startup") {
             guard try socket.readExact(1) == [82] else { throw RFBError.protocolError("invalid session worker response") }
@@ -55,6 +55,10 @@ final class SessionChannel: @unchecked Sendable {
     }
 
     func receive(timeout: TimeInterval = 0.25) throws -> (ClientSocket, SessionAdmission)? {
+        try withTaskCancellation { try receiveAdmission(timeout: timeout) }
+    }
+
+    private func receiveAdmission(timeout: TimeInterval) throws -> (ClientSocket, SessionAdmission)? {
         var descriptor = pollfd(fd: socket.fd, events: Int16(POLLIN), revents: 0)
         let count = poll(&descriptor, 1, Int32(timeout * 1000))
         if count == 0 || (count < 0 && errno == EINTR) { return nil }
@@ -62,7 +66,10 @@ final class SessionChannel: @unchecked Sendable {
         var fd: Int32 = -1
         let result = VNCSessionReceiveDescriptor(socket.fd, &fd)
         if result == EAGAIN || result == EWOULDBLOCK { return nil }
-        guard result == 0 else { throw RFBError.socketError("session channel closed or invalid (\(result))") }
+        // The listener owns this worker's lifetime. Closing its channel between
+        // admissions is normal teardown, including when its signal arrives first.
+        if result == VNCSessionChannelClosed { throw CancellationError() }
+        guard result == 0 else { throw RFBError.socketError("session channel receive failed (\(result)): \(String(cString: strerror(result)))") }
         let client = try ClientSocket(fd: fd)
         let admission = try socket.withReadTimeout(5, operation: "session admission") {
             let header = try socket.readExact(4)
@@ -71,6 +78,20 @@ final class SessionChannel: @unchecked Sendable {
             return try JSONDecoder().decode(SessionAdmission.self, from: Data(socket.readExact(size)))
         }
         return (client, admission)
+    }
+
+    private func withTaskCancellation<T>(_ operation: () throws -> T) throws -> T {
+        try Task.checkCancellation()
+        do {
+            let result = try operation()
+            try Task.checkCancellation()
+            return result
+        } catch {
+            // The cancellation handler shuts down the socket to wake blocked
+            // reads/writes. Preserve real protocol/I/O failures otherwise.
+            try Task.checkCancellation()
+            throw error
+        }
     }
 
     func shutdown() { socket.shutdown() }

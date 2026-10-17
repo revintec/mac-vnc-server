@@ -31,7 +31,7 @@ int VNCSessionReceiveDescriptor(int transport, int *descriptor) {
     message.msg_control = control.bytes; message.msg_controllen = sizeof(control.bytes);
     ssize_t count;
     do { count = recvmsg(transport, &message, 0); } while (count < 0 && errno == EINTR);
-    if (count <= 0) return count < 0 ? errno : ECONNRESET;
+    if (count <= 0) return count < 0 ? errno : VNCSessionChannelClosed;
     int descriptors[16], found = 0, invalid = 0;
     for (struct cmsghdr *h = CMSG_FIRSTHDR(&message); h; h = CMSG_NXTHDR(&message, h)) {
         if (h->cmsg_level != SOL_SOCKET || h->cmsg_type != SCM_RIGHTS || h->cmsg_len < CMSG_LEN(0)) {

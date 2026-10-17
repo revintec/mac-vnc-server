@@ -32,7 +32,9 @@ int VNCSessionForUser(uint32_t uid, VNCConsoleIdentity *identity);
 int VNCSessionVerify(VNCConsoleIdentity identity);
 int VNCSessionPrepare(VNCConsoleIdentity identity);
 int VNCSessionExecWorker(const char *executable, const char *options);
-// One marker byte and exactly one SCM_RIGHTS descriptor. Returns errno.
+// One marker byte and exactly one SCM_RIGHTS descriptor. Returns errno, or the
+// distinct closed result when Receive reaches orderly EOF between admissions.
+enum { VNCSessionChannelClosed = -1 };
 int VNCSessionSendDescriptor(int transport, int descriptor);
 int VNCSessionReceiveDescriptor(int transport, int *descriptor);
 // Root listener owns the temporary launchd job and lock in process. Destroy
