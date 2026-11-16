@@ -167,6 +167,8 @@ enum LoginWindowSwitch {
             throw CLIError.commandFailed("Login-window switching is unavailable on this version of macOS.")
         }
         defer { dlclose(library) }
+        // Control Center's Login Window action calls this same entry point
+        // from an async dispatch closure on the inspected macOS 27.2.1 host.
         // macOS's Fast User Switching request. This is distinct from
         // SACLockScreenImmediate; never substitute a lock-screen operation.
         // The inspected C entry point takes no arguments and returns OSStatus.
@@ -304,7 +306,7 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
         item.button?.toolTip = displayItem.title + "\n" + state.reason
         if state != lastDisplayState || count != lastClientCount || eye != lastEye {
             let icon = eye ? (count > 0 ? "blinking-red-eye" : "red-eye") : "remote-display"
-            logger.verbose("VNC menu: \(state.description); clients=\(count) reason=\(state.reason) sessions=\(state.sessionDetails.prefix(2).joined(separator: "; ")) icon=\(icon) visible=\(item.isVisible)")
+            logger.verbose("VNC menu: \(state.description); clients=\(count) reason=\(state.reason) sessions=\(state.sessionDetails.prefix(4).joined(separator: "; ")) icon=\(icon) visible=\(item.isVisible)")
             lastDisplayState = state
             lastClientCount = count
             lastEye = eye

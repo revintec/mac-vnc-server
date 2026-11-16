@@ -48,7 +48,12 @@ dirty-region hints, a bounded queue retaining the newest pending capture,
 capture-driven wakeups, adaptive frame rates, and the same RFB encoders and flow
 control. Loginwindow additionally verifies UID/audit/console ownership and
 requires ScreenCaptureKit display IDs and geometry to agree with CoreGraphics.
-A mismatch fails closed instead of substituting a user's desktop. Clipboard,
+A missing display list or display-ID mismatch sends one display wake signal and
+retries discovery up to three times with fresh ScreenCaptureKit snapshots.
+Console ownership is rechecked before discovery, before wake, and after discovery;
+a changed identity aborts startup. Permissions and invalid geometry do not
+trigger wake/retry. A persistent mismatch reports both offered and active display
+IDs and fails closed instead of substituting a user's desktop. Clipboard,
 file transfer, Received Files and menu UI are disabled for UID 0.
 
 `MacInputController` builds mouse, keyboard, modifier, scroll and release events;

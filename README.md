@@ -37,6 +37,9 @@ desktop is hidden from the physical console, including when no clients are conne
 The VNC menu-bar icon includes **Switch to Login Window**, which uses Fast User
 Switching to hide this desktop on the physical console while keeping its VNC
 session and apps running. It is available while this user owns the console.
+The installed Control Center implementation inspected on macOS 27.2.1 uses the
+same `SACSwitchToLoginWindow` entry point. This does not establish identical
+app-visible behavior on other releases; see [the switching comparison](docs/login-window-switch-comparison.md).
 
 Use the actual `root` account password to select the current console owner:
 loginwindow when it owns the console, or the logged-in user's desktop otherwise.
@@ -135,11 +138,19 @@ Check current status:
 ./.build/release/mac-vnc-server-dev diagnose
 ```
 
-If ScreenCaptureKit reports no displays after the Mac turns the screen off, wake the display and start the server again:
+An authenticated connection that finds no capture displays, or a temporary
+console-display mismatch, now sends a display wake signal and retries discovery
+up to three times. This can light the physical monitor. `caffeinate -i` prevents
+idle system sleep; it neither wakes the display nor prevents display sleep.
+To send a manual wake signal if automatic recovery still fails:
 
 ```sh
 ./.build/release/mac-vnc-server-dev wakeup
 ```
+
+Then reconnect the viewer. Persistent console-display mismatches still reject
+capture and report both sets of display IDs; they never fall back to another
+user's desktop.
 
 ## Run
 
@@ -596,7 +607,7 @@ Use the default encoding first:
 ./.build/release/mac-vnc-server-dev --encoding auto
 ```
 
-If the display slept while the server was running, wait briefly for the automatic ScreenCaptureKit recovery. If the display is still unavailable, the next keyboard or mouse event sends a `caffeinate` wake signal and triggers another asynchronous recovery attempt. The server logs `ScreenCaptureKit: capture recovered` when the streams are available again. If the server was started while the display was already asleep, run `mac-vnc-server wakeup` and start it again.
+If the display slept while the server was running, wait briefly for the automatic ScreenCaptureKit recovery. If the display is still unavailable, the next keyboard or mouse event sends a `caffeinate` wake signal and triggers another asynchronous recovery attempt. The server logs `ScreenCaptureKit: capture recovered` when the streams are available again. Starting capture with no displays or mismatched console display IDs also wakes the display once and retries with fresh snapshots. If those retries fail, run `mac-vnc-server wakeup` and reconnect the viewer; a persistent mismatch needs investigation using the offered/active IDs in the log.
 
 If testing a generic client, try:
 

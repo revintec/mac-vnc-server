@@ -87,7 +87,7 @@ struct MacVNCServerApp {
                 if showsStatus {
                     if panelOnly { panel?.show() }
                     withExtendedLifetime((panel, remoteStatus)) { NSApp.run() }
-                } else { dispatchMain() }
+                } else { MainEventLoop.run() }
             }
         } catch CLIError.helpRequested(let text) {
             print(text)

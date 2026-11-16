@@ -2,7 +2,9 @@
 """Send real signals to the production shutdown controller in disposable processes.
 
 The fixture installs from MainActor, reproducing the original handler-isolation
-bug. It also owns a sleep child to check forced exits leave no worker behind.
+bug. Delayed main-queue/MainActor callbacks must stay on the original OS main
+thread, including without NSApplication. It also owns a sleep child to check
+forced exits leave no worker behind.
 No capture, input injection, credentials or existing server is involved.
 """
 import os
@@ -49,8 +51,16 @@ import Foundation
             }
             shutdown.attach(runner)
         }
-        print("READY")
-        dispatchMain()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+            DispatchQueue.main.async {
+                precondition(pthread_main_np() != 0, "main queue left the main thread")
+                Task { @MainActor in
+                    precondition(pthread_main_np() != 0, "MainActor left the main thread")
+                    print("READY")
+                }
+            }
+        }
+        MainEventLoop.run()
     }
 }
 '''
@@ -119,6 +129,7 @@ def main():
         fixture.write_text(FIXTURE)
         subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-parse-as-library",
                         str(ROOT / "Sources/mac-vnc-server/ProcessShutdown.swift"),
+                        str(ROOT / "Sources/mac-vnc-server/MainEventLoop.swift"),
                         str(fixture), "-o", str(binary)], check=True)
         check(binary, "graceful", [signal.SIGINT], 0, 2)
         check(binary, "graceful", [signal.SIGTERM], 0, 2)

@@ -341,14 +341,19 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     ) async throws -> StartedCapture {
         try verifyConsole(consoleIdentity)
         logger.verbose("ScreenCaptureKit: enumerating displays")
-        let content = try await shareableContent(onScreenWindowsOnly: false)
-        try verifyConsole(consoleIdentity)
-        let offered = orderedDisplays(content.displays)
-        if consoleIdentity != nil {
-            try validateConsoleDisplays(offered.map { display in
-                VirtualDisplay(id: display.displayID, bounds: CGDisplayBounds(display.displayID),
-                    pixelWidth: display.width, pixelHeight: display.height)
-            }, activeDisplayIDs: MacDisplays.activeDisplayIDs(), scale: scale)
+        let offered = try await CaptureDisplayDiscovery.run(logger: logger,
+            verify: { try verifyConsole(consoleIdentity) }) {
+            let content = try await shareableContent(onScreenWindowsOnly: false)
+            try verifyConsole(consoleIdentity)
+            let offered = orderedDisplays(content.displays)
+            guard !offered.isEmpty else { throw CaptureDisplaysUnavailable.empty }
+            if consoleIdentity != nil {
+                try validateConsoleDisplays(offered.map { display in
+                    VirtualDisplay(id: display.displayID, bounds: CGDisplayBounds(display.displayID),
+                        pixelWidth: display.width, pixelHeight: display.height)
+                }, activeDisplayIDs: MacDisplays.activeDisplayIDs(), scale: scale)
+            }
+            return offered
         }
         let selectedDisplays = try selectDisplays(from: offered, displaySelection: displaySelection)
         let displays = selectedDisplays.map { display in
@@ -646,7 +651,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         // displays reported by this attached console's CoreGraphics session.
         guard !activeDisplayIDs.isEmpty, displays.count == activeDisplayIDs.count,
               Set(displays.map(\.id)) == Set(activeDisplayIDs) else {
-            throw RFBError.captureFailed("ScreenCaptureKit displays do not match the attached console; no user-desktop fallback")
+            throw CaptureDisplaysUnavailable.consoleMismatch(offered: displays.map(\.id), active: activeDisplayIDs)
         }
         _ = try consoleLayout(displays: displays, scale: Double(scale))
     }
