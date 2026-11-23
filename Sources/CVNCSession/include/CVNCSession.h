@@ -10,7 +10,7 @@ typedef struct {
     int32_t audit_id;
 } VNCConsoleIdentity;
 
-// Return zero on success. No function changes which session owns the monitor.
+// Return zero on success. These identity queries do not change console ownership.
 int VNCConsoleCurrent(VNCConsoleIdentity *identity);
 // Device-owner candidate for status only, even when graphics flags disagree.
 // Do not use this to authorize capture/input or select a console worker.
@@ -32,6 +32,11 @@ int VNCSessionForUser(uint32_t uid, VNCConsoleIdentity *identity);
 int VNCSessionVerify(VNCConsoleIdentity identity);
 int VNCSessionPrepare(VNCConsoleIdentity identity);
 int VNCSessionExecWorker(const char *executable, const char *options);
+// Explicit root-listener operation; resolves a graphics session ID from the
+// worker's UID + audit identity, never treats an audit ID as a graphics ID.
+int VNCSessionConsoleSwitchAvailable(void);
+int VNCSessionResolveGraphicsID(CFArrayRef sessions, VNCConsoleIdentity identity, int32_t *graphics_id);
+int VNCSessionSwitchToConsole(VNCConsoleIdentity identity);
 // One marker byte and exactly one SCM_RIGHTS descriptor. Returns errno, or the
 // distinct closed result when Receive reaches orderly EOF between admissions.
 enum { VNCSessionChannelClosed = -1 };

@@ -56,7 +56,21 @@ final class ClientSocket: @unchecked Sendable {
         close(fd)
     }
 
+    static func localPair() throws -> (ClientSocket, ClientSocket) {
+        let (first, inherited) = try SessionChannel.pair()
+        defer { try? inherited.close() }
+        let second = try SessionChannel(fd: dup(inherited.fileDescriptor))
+        return (first.socket, second.socket)
+    }
+
     func configureTCP() throws {
+        var address = sockaddr_storage()
+        var size = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        let status = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &size) }
+        }
+        if status == 0, address.ss_family == sa_family_t(AF_UNIX) { return }
+
         // Probe quiet viewers without requiring an RFB extension. Also bound
         // retransmissions when data is buffered in the kernel awaiting an ACK:
         // a successful write alone does not prove that the viewer received it.

@@ -180,6 +180,16 @@ struct RemoteSessionStatusTests {
             session: .init(identity: loginWindow, onConsole: true, locked: false), console: loginWindow,
             observationsStable: true, sessionVerified: true).canSwitchToLoginWindow)
     }
+
+    @Test func consoleControlsRequirePrivilegesAndConfirmedOffConsoleState() {
+        #expect(state(console: other, onConsole: false).canUseConsoleControls(privileged: true))
+        #expect(state(console: loginWindow, onConsole: false).canUseConsoleControls(privileged: true))
+        #expect(!state(console: other, onConsole: false).canUseConsoleControls(privileged: false))
+        #expect(!state(console: own, onConsole: true).canUseConsoleControls(privileged: true))
+        #expect(!state(console: loginWindow, onConsole: true, locked: true).canUseConsoleControls(privileged: true))
+        #expect(!state(console: other, onConsole: false, stable: false).canUseConsoleControls(privileged: true))
+        #expect(!state(console: other, onConsole: false, verified: false).canUseConsoleControls(privileged: true))
+    }
 }
 
 private final class ActivityNotificationCount: @unchecked Sendable {

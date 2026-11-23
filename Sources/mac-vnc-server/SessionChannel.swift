@@ -2,8 +2,8 @@ import CVNCSession
 import Darwin
 import Foundation
 
-/// Private, inherited socketpair. Only admissions and a readiness byte travel
-/// here; framebuffer, clipboard, file bytes, and input never enter this channel.
+/// Private, inherited socketpair. Admissions travel to the worker; bounded
+/// console-control requests travel to its parent. Desktop traffic stays out.
 final class SessionChannel: @unchecked Sendable {
     let socket: ClientSocket
     private let writer = NSLock()
@@ -45,20 +45,32 @@ final class SessionChannel: @unchecked Sendable {
     }
 
     func send(client: ClientSocket, admission: SessionAdmission) throws {
-        let bytes = Array(try JSONEncoder().encode(admission))
+        try send(descriptor: client.fd, metadata: admission)
+    }
+
+    func sendControl(reply: ClientSocket, request: ConsoleControlRequest) throws {
+        try send(descriptor: reply.fd, metadata: request)
+    }
+
+    private func send<T: Encodable>(descriptor: Int32, metadata: T) throws {
+        let bytes = Array(try JSONEncoder().encode(metadata))
         guard bytes.count <= 4096 else { throw RFBError.protocolError("session admission too large") }
         try writer.withLock {
-            let result = VNCSessionSendDescriptor(socket.fd, client.fd)
+            let result = VNCSessionSendDescriptor(socket.fd, descriptor)
             guard result == 0 else { throw RFBError.socketError("session socket handoff failed (\(result))") }
             try socket.writeAll(UInt32(bytes.count).beBytes + bytes)
         }
     }
 
     func receive(timeout: TimeInterval = 0.25) throws -> (ClientSocket, SessionAdmission)? {
-        try withTaskCancellation { try receiveAdmission(timeout: timeout) }
+        try withTaskCancellation { try receiveMessage(timeout: timeout) }
     }
 
-    private func receiveAdmission(timeout: TimeInterval) throws -> (ClientSocket, SessionAdmission)? {
+    func receiveControl(timeout: TimeInterval = 0.25) throws -> (ClientSocket, ConsoleControlRequest)? {
+        try receiveMessage(timeout: timeout)
+    }
+
+    private func receiveMessage<T: Decodable>(timeout: TimeInterval) throws -> (ClientSocket, T)? {
         var descriptor = pollfd(fd: socket.fd, events: Int16(POLLIN), revents: 0)
         let count = poll(&descriptor, 1, Int32(timeout * 1000))
         if count == 0 || (count < 0 && errno == EINTR) { return nil }
@@ -71,13 +83,13 @@ final class SessionChannel: @unchecked Sendable {
         if result == VNCSessionChannelClosed { throw CancellationError() }
         guard result == 0 else { throw RFBError.socketError("session channel receive failed (\(result)): \(String(cString: strerror(result)))") }
         let client = try ClientSocket(fd: fd)
-        let admission = try socket.withReadTimeout(5, operation: "session admission") {
+        let metadata = try socket.withReadTimeout(5, operation: "session channel message") {
             let header = try socket.readExact(4)
             let size = Int(UInt32.be(header[0], header[1], header[2], header[3]))
             guard (1...4096).contains(size) else { throw RFBError.protocolError("invalid session admission length") }
-            return try JSONDecoder().decode(SessionAdmission.self, from: Data(socket.readExact(size)))
+            return try JSONDecoder().decode(T.self, from: Data(socket.readExact(size)))
         }
-        return (client, admission)
+        return (client, metadata)
     }
 
     private func withTaskCancellation<T>(_ operation: () throws -> T) throws -> T {
@@ -100,6 +112,9 @@ final class SessionChannel: @unchecked Sendable {
 struct SessionWorkerOptions: Codable, Sendable {
     let identity: ConsoleIdentity
     let config: ServerConfig
+    // Optional so fixtures/older saved worker arguments default to no privilege.
+    var consoleControls: Bool? = nil
+    var canBringToConsole: Bool? = nil
 
     func validate() throws {
         guard identity.auditID > 0,

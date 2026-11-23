@@ -71,6 +71,53 @@ int VNCSessionVerify(VNCConsoleIdentity identity) {
     return error ? error : (actual.uid == identity.uid && actual.audit_id == identity.audit_id ? 0 : ESTALE);
 }
 
+int VNCSessionConsoleSwitchAvailable(void) {
+    return dlsym(RTLD_DEFAULT, "CGSSwitchConsoleToSession") != NULL;
+}
+
+int VNCSessionResolveGraphicsID(CFArrayRef sessions, VNCConsoleIdentity identity, int32_t *graphics_id) {
+    if (!sessions || CFGetTypeID(sessions) != CFArrayGetTypeID() || !graphics_id ||
+        identity.uid == 0 || identity.audit_id <= 0) return EINVAL;
+    int found = 0;
+    int32_t result = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(sessions); i++) {
+        CFTypeRef item = CFArrayGetValueAtIndex(sessions, i);
+        VNCConsoleIdentity candidate = {0};
+        if (CFGetTypeID(item) != CFDictionaryGetTypeID() || decodeSession(item, &candidate) ||
+            candidate.uid != identity.uid) continue;
+        if (candidate.audit_id != identity.audit_id) return ESTALE;
+        int64_t value = 0;
+        if (!number(item, CFSTR("kCGSSessionIDKey"), &value) || value <= 0 || value > INT32_MAX) return EINVAL;
+        if (found && result != value) return EEXIST;
+        result = (int32_t)value;
+        found = 1;
+    }
+    if (!found) return ENXIO;
+    *graphics_id = result;
+    return 0;
+}
+
+int VNCSessionSwitchToConsole(VNCConsoleIdentity identity) {
+    if (getuid() != 0 || geteuid() != 0 || identity.uid == 0) return EPERM;
+    CFArrayRef (*copySessions)(void) = dlsym(RTLD_DEFAULT, "CGSCopySessionList");
+    int32_t (*switchSession)(int32_t) = dlsym(RTLD_DEFAULT, "CGSSwitchConsoleToSession");
+    if (!copySessions || !switchSession) return ENOTSUP;
+    CFArrayRef sessions = copySessions();
+    int32_t graphics_id = 0;
+    int error = VNCSessionResolveGraphicsID(sessions, identity, &graphics_id);
+    if (sessions) CFRelease(sessions);
+    if (error) return error;
+    VNCConsoleIdentity console = {0}, current = {0};
+    if ((error = VNCConsoleCurrent(&console))) return error;
+    if ((error = VNCSessionForUser(identity.uid, &current))) return error;
+    if (current.audit_id != identity.audit_id) return ESTALE;
+    if (console.uid == identity.uid && console.audit_id == identity.audit_id) return EALREADY;
+    // On the inspected host this takes one 32-bit graphics ID, forwards it
+    // under the "cgsid" key to login.framework, and returns zero immediately.
+    // The caller must independently confirm the resulting console identity.
+    return switchSession(graphics_id);
+}
+
 static int readConsoleOwner(uint32_t *uid) {
     struct stat info;
     if (stat("/dev/console", &info)) return errno;

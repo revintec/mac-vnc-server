@@ -345,7 +345,7 @@ enum CLI {
     Storage: --transfer-directory /absolute/path, --transfer-limit-gib 10, --transfer-free-gib 1.
     The transfers command reopens received files without starting a server.
     Account authentication always verifies both username and password, independently of the session-encryption setting.
-    Use --no-adaptive to disable adaptive FPS, compression, and scale changes.
+    Use --no-adaptive to disable adaptive FPS and compression. Resolution stays at the configured scale.
     Use --service to install and start a per-user LaunchAgent that runs in the UI session.
     The default per-user service needs no password environment and serves only that user. A root listener is started separately.
     Use --service-restart to restart the registered LaunchAgent.

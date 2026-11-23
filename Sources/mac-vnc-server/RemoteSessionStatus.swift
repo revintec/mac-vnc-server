@@ -93,6 +93,10 @@ struct PhysicalDisplayState: Equatable {
 
     var isConfirmedHidden: Bool { visibility == .hidden }
 
+    func canUseConsoleControls(privileged: Bool) -> Bool {
+        privileged && isConfirmedHidden
+    }
+
     var description: String {
         switch visibility {
         case .visible: return "Physical display: this desktop is visible"
@@ -193,6 +197,10 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
     private let detailsMenu = NSMenu(title: "Session Details")
     private let connectionsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let loginWindowItem = NSMenuItem(title: "Switch to Login Window", action: #selector(switchToLoginWindow), keyEquivalent: "")
+    private let bringToConsoleItem = NSMenuItem(title: "Bring This Session to Console", action: #selector(bringToConsole), keyEquivalent: "")
+    private let viewConsoleItem = NSMenuItem(title: "View Console Session", action: #selector(viewConsole), keyEquivalent: "")
+    private let returnToAccountItem = NSMenuItem(title: "Return to Account Session", action: #selector(returnToAccount), keyEquivalent: "")
+    private let returnRemoteItem = NSMenuItem(title: "Return Remote Viewers to Their Accounts", action: #selector(returnRemoteViewers), keyEquivalent: "")
     private let showFiles: (() -> Void)?
     private let logger: ServerLogger
     private var timer: Timer?
@@ -200,6 +208,7 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
     private var indicator = PhysicalDisplayIndicator()
     private var blink = false
     private var switchingToLoginWindow = false
+    private var switchingConsole = false
     private var lastDisplayState: PhysicalDisplayState?
     private var lastClientCount = -1
     private var lastEye: Bool?
@@ -219,6 +228,13 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         loginWindowItem.target = self
         menu.addItem(loginWindowItem)
+        bringToConsoleItem.target = self
+        viewConsoleItem.target = self
+        menu.addItem(bringToConsoleItem)
+        menu.addItem(viewConsoleItem)
+        viewConsoleItem.toolTip = "Keep viewers connected while showing the console. Clipboard and file transfers pause in this view."
+        returnToAccountItem.target = self; menu.addItem(returnToAccountItem)
+        returnRemoteItem.target = self; menu.addItem(returnRemoteItem)
         let files = NSMenuItem(title: "Received Files…", action: #selector(openFiles), keyEquivalent: "")
         files.target = self; files.isEnabled = showFiles != nil
         menu.autoenablesItems = false
@@ -240,7 +256,8 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
     @objc private func openFiles() { showFiles?() }
 
     @objc private func switchToLoginWindow() {
-        guard !switchingToLoginWindow, PhysicalDisplayState.read().canSwitchToLoginWindow else { refresh(); return }
+        guard !switchingToLoginWindow, !switchingConsole,
+              PhysicalDisplayState.read().canSwitchToLoginWindow else { refresh(); return }
         switchingToLoginWindow = true
         refresh()
         Task {
@@ -254,6 +271,43 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
                 logger.warning("Switch to Login Window failed: \(error.localizedDescription)")
                 let alert = NSAlert()
                 alert.messageText = "Couldn’t Switch to Login Window"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
+    }
+
+    @objc private func bringToConsole() { requestConsoleSwitch(.bringToConsole) }
+
+    @objc private func viewConsole() { requestConsoleSwitch(.viewConsole) }
+    @objc private func returnToAccount() { SessionActivity.shared.returnHome(); refresh() }
+    @objc private func returnRemoteViewers() { SessionActivity.shared.returnRemoteViewers(); refresh() }
+
+    private var consoleControlsEnabled: Bool {
+        !switchingConsole && !switchingToLoginWindow
+            && PhysicalDisplayState.read().canUseConsoleControls(privileged: SessionConsoleControl.shared.isAvailable)
+    }
+
+    private func requestConsoleSwitch(_ action: ConsoleControlRequest.Action) {
+        guard consoleControlsEnabled else { refresh(); return }
+        let count = SessionActivity.shared.clientCount
+        guard action != .viewConsole || count > 0 else { refresh(); return }
+        switchingConsole = true
+        refresh()
+        Task {
+            defer { switchingConsole = false; refresh() }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    if let bridge = try SessionConsoleControl.shared.request(action) {
+                        try SessionActivity.shared.install(bridge)
+                    }
+                }.value
+            } catch {
+                logger.warning("Console session switch failed: \(error.localizedDescription)")
+                let alert = NSAlert()
+                alert.messageText = "Couldn’t Switch Console Sessions"
                 alert.informativeText = error.localizedDescription
                 alert.alertStyle = .warning
                 alert.addButton(withTitle: "OK")
@@ -297,7 +351,18 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
         }
         connectionsItem.title = "VNC clients connected: \(count)"
         loginWindowItem.title = switchingToLoginWindow ? "Switching to Login Window…" : "Switch to Login Window"
-        loginWindowItem.isEnabled = state.canSwitchToLoginWindow && !switchingToLoginWindow
+        loginWindowItem.isEnabled = state.canSwitchToLoginWindow && !switchingToLoginWindow && !switchingConsole
+        let controls = SessionConsoleControl.shared
+        bringToConsoleItem.isHidden = !controls.canBringToConsole || !state.isConfirmedHidden
+        viewConsoleItem.isHidden = !controls.isAvailable || !state.isConfirmedHidden
+        let canSwitch = state.canUseConsoleControls(privileged: controls.isAvailable)
+            && !switchingConsole && !switchingToLoginWindow
+        bringToConsoleItem.isEnabled = canSwitch && controls.canBringToConsole
+        viewConsoleItem.isEnabled = canSwitch && count > 0 && !SessionActivity.shared.isViewingConsole
+        returnToAccountItem.isHidden = !SessionActivity.shared.isViewingConsole
+        returnToAccountItem.isEnabled = !switchingConsole
+        returnRemoteItem.isHidden = SessionActivity.shared.consoleBridgeCount == 0
+        returnRemoteItem.isEnabled = !switchingConsole
         if count > 0 { blink.toggle() } else { blink = true }
         item.button?.image = eye
             ? (blink ? RemoteSessionIcon.eyeBright : RemoteSessionIcon.eyeDim)

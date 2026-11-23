@@ -34,6 +34,31 @@ the own-account restriction; root startup reports broader account access.
 The menu-bar icon blinks red unless consistent session checks confirm that this
 desktop is hidden from the physical console, including when no clients are connected.
 **Session Details** explains the console/worker identities and visibility checks.
+When the listener was started with `sudo` and this desktop is confirmed off
+console, the menu also offers:
+
+- **Bring This Session to Console** moves this user's desktop onto the Mac's
+  physical display and keeps its VNC connections. Availability also depends on
+  macOS providing the session-switch API; a refused or unconfirmed switch is
+  reported in the menu's error dialog.
+- **View Console Session** switches this account worker's connected viewers to
+  the current physical console, including loginwindow or another user's desktop,
+  over their existing connections. The viewer keeps its authentication, encryption,
+  compression streams and canvas size. The console image fits inside that canvas;
+  keyboard and mouse input follow the displayed session. Clipboard and file
+  transfers pause until the viewer returns to its account desktop.
+
+Use **Return to Account Session** on the original desktop, or **Return Remote
+Viewers to Their Accounts** in the console desktop's VNC menu. Loginwindow has no
+menu; viewers return automatically if console ownership changes or the private
+desktop connection ends. All viewers on the originating account worker share
+this selection, including viewers that connect while it is active.
+
+These are privileged menu actions authorized by the root listener. The second
+action does not ask for the console owner's password. New viewer connections
+still require account authentication. Non-root listeners do not offer these actions.
+See [console controls and streaming validation](docs/console-controls-and-video-streaming.md).
+
 The VNC menu-bar icon includes **Switch to Login Window**, which uses Fast User
 Switching to hide this desktop on the physical console while keeping its VNC
 session and apps running. It is available while this user owns the console.
@@ -273,7 +298,7 @@ Options:
 | `--bind <ipv4 or interface>` | `utun4` | Listen on an IPv4 address or the first active IPv4 address of an interface such as `utun4`, `en0`, or `lo0`. Resolved at startup; restart after an address change. |
 | `--port <port>` / `-p <port>` | `5900` | The account listener TCP port. |
 | `--fps <auto\|1...120>` | `auto` | Adaptive `60 -> 45 -> 30` target, or a fixed framebuffer update rate when an explicit number is provided. |
-| `--scale <value>` | `1.0` | Base virtual framebuffer scale. Adaptive sessions may temporarily use `0.75` or `0.67` for compatible generic clients that advertise DesktopSize when encoding or network pressure persists. Apple Screen Sharing uses its own display/scaling negotiation and is excluded from these automatic scale changes. |
+| `--scale <value>` | `1.0` | Base virtual framebuffer scale, held stable during video and network pressure. Apple Screen Sharing can explicitly request its own scale. |
 | `--encoding <auto\|zrle\|zlib\|raw>` | `auto` | Framebuffer encoding preference. |
 | `--display <all\|number>` | `all` | All displays in the selected account session, or one 1-based display index. |
 | `--service` | off | Install and start a per-user macOS LaunchAgent in the logged-in Aqua UI session. |
@@ -289,7 +314,7 @@ Options:
 | `--transfer-directory` | `~/Library/Application Support/mac-vnc-server/Transfers` | Persistent storage for received copies. Supply an absolute path. |
 | `--transfer-limit-gib` | 10 | Limit retained files plus active transfer storage reservations. |
 | `--transfer-free-gib` | 1 | Minimum free disk space to preserve while receiving. |
-| `--no-adaptive` | off | Disable adaptive FPS, compression, and automatic scale changes. |
+| `--no-adaptive` | off | Disable adaptive FPS and compression. |
 
 ### Password and storage
 
@@ -374,7 +399,17 @@ Capture starts when the first viewer reaches an account worker. After the last v
 
 When a client or network cannot consume updates quickly enough, the server keeps only the newest captured frame and drops stale frames before sending their RFB update header. Persistent Zlib/ZRLE state is transactional, so a dropped frame cannot desynchronize the stream. Client sockets use non-blocking writes with a three-second no-progress timeout; a connection that makes no write progress is closed instead of blocking the capture pipeline indefinitely. Adaptive sessions lower the output target from 60 to 45 to 30 FPS under sustained pressure and recover after sustained headroom; shared capture streams use the highest rate requested by their active clients.
 
-Clients that advertise the standard `DesktopSize` pseudo-encoding can also enter a per-client scale ladder of `1.0 -> 0.75 -> 0.67` after sustained encoding or network pressure. Frames are resampled with Apple's Accelerate framework using high-quality filtering so the server reduces work and bandwidth only when needed. The session recovers one scale step after five healthy seconds. Clients without standard resize support remain at the configured scale and use FPS/backpressure adaptation instead.
+The native ScreenCaptureKit stream stays at the configured FPS ceiling. Rate
+adaptation happens before copying captured pixels and when sending updates,
+without changing an active stream's configuration during video playback. This
+applies to generic clients such as RealVNC as well as Apple Screen Sharing.
+
+Video or network pressure no longer changes the viewer's resolution. A RealVNC
+iPad trace showed updates stopping immediately after an automatic change to
+`0.75` scale, while mouse control and another macOS viewer continued working.
+Keeping the configured scale avoids that resize path; FPS and compression still
+adapt. Genuine display geometry changes still use negotiated `DesktopSize`, and
+Apple Screen Sharing retains its explicit display/scaling negotiation.
 
 ### Encodings
 

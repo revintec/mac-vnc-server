@@ -251,8 +251,7 @@ protocol CaptureFrameRateController {
     func registerCaptureRateConsumer(_ consumer: ObjectIdentifier, fps: Int)
     func updateCaptureRate(
         _ fps: Int,
-        consumer: ObjectIdentifier,
-        reconfigureCapture: Bool
+        consumer: ObjectIdentifier
     )
     func unregisterCaptureRateConsumer(_ consumer: ObjectIdentifier)
 }

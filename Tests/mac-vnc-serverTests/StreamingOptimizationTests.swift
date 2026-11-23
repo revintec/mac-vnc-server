@@ -160,6 +160,32 @@ private func decodeZRLE(_ bytes: [UInt8], width: Int, height: Int, format: Pixel
     #expect(try store.snapshot().dirtyRects == nil)
 }
 
+@Test func changingAcceptedFrameRateKeepsPublishingFreshVideoFrames() throws {
+    let display = VirtualDisplay(id: 1, bounds: CGRect(x: 0, y: 0, width: 2, height: 1), pixelWidth: 2, pixelHeight: 1)
+    let store = StreamingFrameStore(layout: VirtualDisplayLayout(displays: [display], scaleOverride: 1),
+        expectedDisplayIDs: [1], acceptedFrameRate: 60)
+    var buffer: CVPixelBuffer?
+    #expect(CVPixelBufferCreate(nil, 2, 1, kCVPixelFormatType_32BGRA, nil, &buffer) == kCVReturnSuccess)
+    let pixels = try #require(buffer)
+    var expectedSequence: UInt64 = 0
+    // Thirty seconds of 60-Hz source frames, repeatedly adapting down and up.
+    for second in 0..<30 {
+        let fps = [60, 45, 30, 45, 60][second % 5]
+        store.setAcceptedFrameRate(fps)
+        for frame in 0..<60 {
+            #expect(CVPixelBufferLockBaseAddress(pixels, []) == kCVReturnSuccess)
+            memset(CVPixelBufferGetBaseAddress(pixels), Int32(second + 1), CVPixelBufferGetDataSize(pixels))
+            CVPixelBufferUnlockBaseAddress(pixels, [])
+            store.update(displayID: 1, pixelBuffer: pixels, dirtyRects: nil,
+                presentationTime: Double(second) + Double(frame) / 60)
+        }
+        expectedSequence += UInt64(fps)
+        let snapshot = try store.snapshot()
+        #expect(snapshot.sequence == expectedSequence)
+        #expect(snapshot.bgra[0] == UInt8(second + 1))
+    }
+}
+
 @Test func scaledCacheInvalidatesForCursorScaleLayoutAndMissingSequence() throws {
     let layout = VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: 4, height: 4)
     let frame = Framebuffer(width: 4, height: 4, bgra: [UInt8](repeating: 0, count: 64), layout: layout, sequence: 1)

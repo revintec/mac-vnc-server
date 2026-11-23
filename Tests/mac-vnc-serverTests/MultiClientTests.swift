@@ -135,6 +135,241 @@ struct MultiClientTests {
         #expect(!peer.hasData(timeout: 0.1))
     }
 
+    @Test(arguments: [RFBEncoding.raw, .zlib, .zrle])
+    func consoleSwitchKeepsViewerAndCodecStreamsAlive(encoding: RFBEncoding) throws {
+        let home = try MultiClientServer(encodingPreference: EncodingPreference(rawValue: String(describing: encoding))!)
+        let console = try MultiClientServer(width: 4, height: 2)
+        defer { home.finish(); console.finish() }
+        console.screen.setFrame(solidFrame(61, width: 4, height: 2, sequence: 2))
+        let peer = try home.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: "RFB 003.008\n")
+        try peer.write([2, 0, 0, 1] + UInt32(bitPattern: encoding.rawValue).beBytes)
+        try peer.write(fullUpdate)
+        var payloads = [try framePayload(peer, encoding: UInt32(bitPattern: encoding.rawValue))]
+        try peer.write([4, 1, 0, 0] + UInt32(0x61).beBytes)
+        try waitFor { home.input.snapshot.keyTransitions == [true] }
+        let bridge = try internalBridge(console)
+        try home.router.install(bridge)
+        #expect(home.input.snapshot.keyTransitions == [true, false])
+        try peer.write([3, 1] + fullUpdate.dropFirst(2))
+        payloads.append(try framePayload(peer, encoding: UInt32(bitPattern: encoding.rawValue)))
+        #expect(home.server.activeClientCount == 1)
+        #expect(console.server.consoleBridgeCount == 1)
+        try peer.write([5, 1, 0, 1, 0, 0] + [4, 1, 0, 0] + UInt32(0x62).beBytes)
+        try waitFor { console.input.snapshot.keyTransitions == [true] }
+        #expect(console.input.snapshot.pointer?.x == 2)
+        #expect(console.input.snapshot.pointer?.width == 4)
+        // Console-worker menu action closes only the internal bridge.
+        console.server.disconnectConsoleBridges()
+        try waitFor { !home.router.isRemote }
+        try peer.write([3, 1] + fullUpdate.dropFirst(2))
+        payloads.append(try framePayload(peer, encoding: UInt32(bitPattern: encoding.rawValue)))
+        #expect(home.server.activeClientCount == 1)
+        try peer.write([4, 1, 0, 0] + UInt32(0x63).beBytes)
+        try waitFor { home.input.snapshot.keySymbols.contains(0x63) }
+        if encoding == .zrle {
+            #expect(try inflatePayloads(payloads, outputCounts: [4, 4, 4]) == [1, 0, 0, 0, 1, 61, 0, 0, 1, 0, 0, 0])
+        } else {
+            let decoded = encoding == .zlib ? try inflatePayloads(payloads, outputCounts: [8, 8, 8]) : payloads.flatMap { $0 }
+            #expect(decoded == [UInt8](repeating: 0, count: 8) + [61, 0, 0, 0, 61, 0, 0, 0] + [UInt8](repeating: 0, count: 8))
+        }
+    }
+
+    @Test(.enabled(if: NativeTransferProcess.available))
+    func encryptedViewerSwitchesWithoutRekeyOrReconnect() throws {
+        let home = try MultiClientServer(fileTransfer: true, encodingPreference: .zlib)
+        let console = try MultiClientServer()
+        defer { home.finish(); console.finish() }
+        console.screen.setFrame(solidFrame(73, width: 2, height: 1, sequence: 2))
+        let peer = try home.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: AppleRFB.version)
+        try peer.write([0x12, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1])
+        #expect(try peer.read(20) == [0, 0, 0, 1] + [UInt8](repeating: 0, count: 8)
+            + UInt32(1103).beBytes + UInt32(1).beBytes)
+        let raw = try AppleEncryption.ecb(peer.read(32), key: #require(peer.appleWrappingKey), encrypt: false)
+        let keys = AppleEncryption.Keys(key: Array(raw.prefix(16)), iv: Array(raw.suffix(16)))
+        try peer.socket.prepareAppleRecordReads(keys: keys, timeout: 5)
+        try peer.socket.enableAppleRecordReads(true)
+        try peer.write([0x12, 0, 0, 2, 0, 1, 0, 0])
+        peer.socket.setAppleRecordWrites(try AppleEncryption.Cipher(keys: keys, encrypt: true))
+        try peer.write([2, 0, 0, 2] + UInt32(6).beBytes + UInt32(1011).beBytes + fullUpdate)
+        var payloads = [try framePayload(peer, encoding: 6)]
+        try home.router.install(internalBridge(console))
+        try peer.write(fullUpdate); payloads.append(try framePayload(peer, encoding: 6))
+        home.router.returnHome()
+        try peer.write(fullUpdate); payloads.append(try framePayload(peer, encoding: 6))
+        #expect(try inflatePayloads(payloads, outputCounts: [8, 8, 8]) == [UInt8](repeating: 0, count: 8)
+            + [73, 0, 0, 0, 73, 0, 0, 0] + [UInt8](repeating: 0, count: 8))
+        #expect(home.server.activeClientCount == 1)
+    }
+
+    @Test func consoleViewSuspendsAccountClipboardAndRestoresItOnReturn() throws {
+        let home = try MultiClientServer()
+        let console = try MultiClientServer()
+        defer { home.finish(); console.finish() }
+        home.clipboard.setRemoteText("account clipboard")
+        let routed = home.router.makeClipboard()
+        #expect(routed.currentText() == "account clipboard")
+        try home.router.install(internalBridge(console))
+        routed.setRemoteText("must not reach account clipboard")
+        #expect(routed.currentContent() == nil)
+        #expect(home.clipboard.currentText() == "account clipboard")
+        home.router.returnHome()
+        #expect(routed.currentText() == "account clipboard")
+    }
+
+    @Test func consoleSwitchHidesAndRestoresViewerCursor() throws {
+        let home = try MultiClientServer(clientCursor: true)
+        let console = try MultiClientServer()
+        defer { home.finish(); console.finish() }
+        console.screen.setFrame(solidFrame(44, width: 2, height: 1, sequence: 2))
+        let peer = try home.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: "RFB 003.008\n")
+        try peer.write([2, 0, 0, 2] + UInt32(0).beBytes + UInt32(bitPattern: Int32(-239)).beBytes)
+        func nextPixels(cursorWidth: Int, color: UInt8) throws {
+            try peer.write(fullUpdate)
+            var sawCursor = false
+            for _ in 0..<3 {
+                let header = try peer.read(4)
+                #expect(header[0] == 0)
+                let count = Int(UInt16.be(header[2], header[3]))
+                var sawPixels = false
+                for _ in 0..<count {
+                    let rect = try peer.read(12)
+                    let width = Int(UInt16.be(rect[4], rect[5])), height = Int(UInt16.be(rect[6], rect[7]))
+                    let encoding = Int32(bitPattern: UInt32.be(rect[8], rect[9], rect[10], rect[11]))
+                    if encoding == -239 {
+                        #expect(width == cursorWidth)
+                        _ = try peer.read(width * height * 4 + ((width + 7) / 8) * height)
+                        sawCursor = true
+                    } else {
+                        try #require(encoding == 0)
+                        #expect(sawCursor, "cursor mode must change before the desktop pixels")
+                        let pixels = try peer.read(width * height * 4)
+                        #expect(pixels[0] == color)
+                        sawPixels = true
+                    }
+                }
+                if sawPixels { return }
+            }
+            Issue.record("no desktop pixels after cursor update")
+        }
+        try nextPixels(cursorWidth: 1, color: 0)
+        try home.router.install(internalBridge(console))
+        try nextPixels(cursorWidth: 0, color: 44)
+        home.router.returnHome()
+        try nextPixels(cursorWidth: 1, color: 0)
+        #expect(home.server.activeClientCount == 1)
+    }
+
+    @Test func consoleLetterboxGatesInputAndPreservesMultipleOwners() throws {
+        let home = try MultiClientServer(width: 6, height: 4)
+        let console = try MultiClientServer()
+        defer { home.finish(); console.finish() }
+        console.screen.setFrame(solidFrame(39, width: 2, height: 1, sequence: 2))
+        let first = home.router.makeInput(), second = home.router.makeInput()
+        try home.router.install(internalBridge(console))
+        first.key(down: true, keysym: 0x61, mapAltToCommand: false)
+        let frame = try home.router.capture()
+        #expect(frame.width == 6 && frame.height == 4)
+        #expect(frame.bgra[0] == 0 && frame.bgra[(1 * 6 + 2) * 4] == 39)
+        let generation = home.router.generation
+        home.router.activateInput(first, generation: generation &- 1)
+        first.key(down: true, keysym: 0x61, mapAltToCommand: false)
+        home.router.activateInput(first, generation: generation)
+        home.router.activateInput(second, generation: generation)
+        // A click in the letterbox must not reach either desktop.
+        first.pointer(buttonMask: 1, x: 0, y: 0, layout: frame.layout)
+        first.key(down: true, keysym: 0x62, mapAltToCommand: false)
+        second.key(down: true, keysym: 0x62, mapAltToCommand: false)
+        first.releaseKeys()
+        second.pointer(buttonMask: 1, x: 3, y: 1, layout: frame.layout)
+        try waitFor { console.input.snapshot.pointer?.x == 1 }
+        #expect(console.input.snapshot.keySymbols == [0x62])
+        #expect(home.input.snapshot.pointer == nil)
+        second.pointer(buttonMask: 0, x: 0, y: 0, layout: frame.layout)
+        second.releaseKeys()
+        try waitFor { console.input.snapshot.keyTransitions == [true, false] }
+        #expect(console.input.snapshot.mask == 0)
+        #expect(home.input.snapshot.keySymbols.isEmpty)
+    }
+
+    @Test func consoleControlReplyTransfersThePrivateDesktopSocket() throws {
+        let console = try MultiClientServer()
+        defer { console.finish() }
+        console.screen.setFrame(solidFrame(29, width: 2, height: 1, sequence: 2))
+        let (parent, inherited) = try SessionChannel.pair()
+        let worker = try SessionChannel(fd: dup(inherited.fileDescriptor))
+        try inherited.close()
+        let control = SessionConsoleControl(); control.attach(worker)
+        let done = DispatchSemaphore(value: 0)
+        defer { control.attach(nil); parent.shutdown(); worker.shutdown(); _ = done.wait(timeout: .now() + 5) }
+        DispatchQueue.global().async {
+            defer { done.signal() }
+            do {
+                let (reply, request) = try #require(try parent.receiveControl(timeout: 5))
+                defer { reply.shutdown() }
+                #expect(request.action == .viewConsole)
+                let identity = ConsoleIdentity(uid: 502, auditID: 12346)
+                let (viewerSocket, serverSocket) = try ClientSocket.localPair()
+                var admission = SessionAdmission(identity: identity, version: "RFB 003.008\n", wrappingKey: [UInt8](repeating: 0, count: 16))
+                admission.consoleBridge = true
+                try #require(console.server.serve(client: serverSocket, admission: admission))
+                let bytes = Array(try JSONSerialization.data(withJSONObject: ["identity": ["uid": 502, "auditID": 12346]]))
+                try reply.writeAll(UInt32(bytes.count).beBytes + bytes)
+                let transport = try SessionChannel(fd: dup(reply.fd))
+                try transport.send(client: viewerSocket, admission: admission)
+            } catch { Issue.record(error) }
+        }
+        let bridge = try #require(try control.request(.viewConsole))
+        defer { bridge.stop() }
+        #expect(try bridge.capture().bgra[0] == 29)
+        #expect(console.server.consoleBridgeCount == 1)
+    }
+
+    @Test func ipadRealVNCVideoOverloadKeepsNegotiatedResolutionAndZlibStream() throws {
+        let width = 128, height = 96
+        let home = try MultiClientServer(width: width, height: height, adaptive: true, captureDelay: 0.04)
+        defer { home.finish() }
+        let peer = try home.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: "RFB 003.008\n")
+        let encodings: [Int32] = [6,24,22,21,16,15,5,2,0,1,-314,-239,-223]
+        try peer.write([2, 0] + UInt16(encodings.count).beBytes + encodings.flatMap { UInt32(bitPattern: $0).beBytes })
+        try peer.write([0, 0, 0, 0] + PixelFormat.serverDefault.bytes)
+        var payloads: [[UInt8]] = []
+        for color: UInt8 in 1...24 {
+            home.screen.setFrame(solidFrame(color, width: width, height: height, sequence: UInt64(color) + 1))
+            try peer.write([3, color == 1 ? 0 : 1, 0, 0, 0, 0] + UInt16(width).beBytes + UInt16(height).beBytes)
+            #expect(try peer.read(4) == [0, 0, 0, 1])
+            #expect(try peer.read(8) == [0, 0, 0, 0] + UInt16(width).beBytes + UInt16(height).beBytes)
+            try #require(try peer.number() == 6, "video load must not emit DesktopSize")
+            let length = try peer.number()
+            payloads.append(try length.beBytes + peer.read(Int(length)))
+        }
+        let pixels = try inflatePayloads(payloads, outputCounts: [Int](repeating: width * height * 4, count: 24))
+        for index in 0..<24 { #expect(pixels[index * width * height * 4] == UInt8(index + 1)) }
+        #expect(home.server.activeClientCount == 1)
+    }
+
+    private func internalBridge(_ target: MultiClientServer) throws -> ConsoleFramebufferBridge {
+        let (viewer, server) = try ClientSocket.localPair()
+        let identity = ConsoleIdentity(uid: 502, auditID: 12346)
+        var admission = SessionAdmission(identity: identity, version: "RFB 003.008\n", wrappingKey: [UInt8](repeating: 17, count: 16))
+        admission.consoleBridge = true
+        try #require(target.server.serve(client: server, admission: admission))
+        return try ConsoleFramebufferBridge(socket: viewer, identity: identity)
+    }
+
+    private func solidFrame(_ color: UInt8, width: Int, height: Int, sequence: UInt64) -> Framebuffer {
+        Framebuffer(width: width, height: height, bgra: (0..<(width * height)).flatMap { _ in [color, 0, 0, 255] },
+            layout: VirtualDisplayLayout(displays: [], origin: .zero, scale: 1, width: width, height: height), sequence: sequence)
+    }
+    private func waitFor(_ predicate: () -> Bool) throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !predicate(), ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.005) }
+        try #require(predicate())
+    }
+
     @Test func continuousUpdatesNegotiateBoundOutstandingFramesAndStop() throws {
         let server = try MultiClientServer()
         defer { server.finish() }
@@ -1138,6 +1373,7 @@ private final class MultiClientServer: @unchecked Sendable {
     let port: UInt16
     let input = MultiClientInput()
     let screen: MultiClientScreen
+    let router: SessionDesktopRouter
     private let done = DispatchSemaphore(value: 0)
     private let worker: MultiClientListener
 
@@ -1146,7 +1382,7 @@ private final class MultiClientServer: @unchecked Sendable {
          fileTransfer: Bool = false, width: Int = 2, height: Int = 1, nativePattern: Bool = false,
          clientCursor: Bool = false, allowEncryption: Bool = true, transferInbox: TransferInbox? = nil,
          encodingPreference: EncodingPreference = .auto, detailedPattern: Bool = false,
-         clipboardSync: Bool = true) throws {
+         clipboardSync: Bool = true, adaptive: Bool = false, captureDelay: TimeInterval = 0) throws {
         let name = "mac-vnc-test-\(UUID())"
         board = NSPasteboard(name: .init(name))
         clipboard = MacClipboard(pasteboard: board)
@@ -1158,16 +1394,18 @@ private final class MultiClientServer: @unchecked Sendable {
         }
         guard status == 0 else { throw RFBError.socketError("test getsockname failed") }
         port = UInt16(bigEndian: address.sin_port)
-        let config = ServerConfig(bindAddress: "127.0.0.1", port: port, fps: 30, scale: 1, encodingPreference: encodingPreference,
+        let config = ServerConfig(bindAddress: "127.0.0.1", port: port, fps: adaptive ? 60 : 30, scale: 1, encodingPreference: encodingPreference,
             displaySelection: .all, verbose: false, clipboardSync: clipboardSync,
-            adaptiveStreaming: false, adaptiveFrameRate: false, fileTransfer: fileTransfer,
+            adaptiveStreaming: adaptive, adaptiveFrameRate: adaptive, fileTransfer: fileTransfer,
             allowEncryption: allowEncryption)
         let inputs = SharedInputController(input: input)
         screen = MultiClientScreen(width: width, height: height, nativePattern: nativePattern,
-            clientCursor: clientCursor, detailedPattern: detailedPattern)
-        server = RFBServer(config: config, capture: screen,
-            makeInput: { inputs.makeClient() },
-            makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) },
+            clientCursor: clientCursor, detailedPattern: detailedPattern, captureDelay: captureDelay)
+        let router = SessionDesktopRouter(capture: screen, makeInput: { inputs.makeClient() },
+            makeClipboard: { MacClipboard(pasteboard: NSPasteboard(name: .init(name))) })
+        self.router = router
+        server = RFBServer(config: config, capture: router,
+            makeInput: { router.makeInput() }, makeClipboard: { router.makeClipboard() },
             logger: ServerLogger(verbose: ProcessInfo.processInfo.environment["MAC_VNC_NATIVE_PROBE_DEBUG"] != nil), maximumClients: maximumClients,
             handshakeTimeout: handshakeTimeout, messageTimeout: messageTimeout,
             transferInbox: transferInbox)
@@ -1199,6 +1437,7 @@ private final class MultiClientServer: @unchecked Sendable {
     func stop() { worker.stop() }
 
     func finish() {
+        router.stop()
         worker.stop()
         #expect(done.wait(timeout: .now() + 3) == .success)
         board.releaseGlobally()
@@ -1250,6 +1489,7 @@ private final class MultiClientScreen: FramebufferSource {
     let nativePattern: Bool
     let clientCursor: Bool
     let detailedPattern: Bool
+    let captureDelay: TimeInterval
     private var overrideFrame: Framebuffer?
     let changes = FrameChangeHub()
     var frameChanges: FrameChangeHub? { changes }
@@ -1262,17 +1502,19 @@ private final class MultiClientScreen: FramebufferSource {
     var cursorSnapshot: CursorSnapshot? {
         clientCursor ? CursorSnapshot(image: cursorImage, position: .zero) : nil
     }
-    init(width: Int, height: Int, nativePattern: Bool, clientCursor: Bool, detailedPattern: Bool) {
+    init(width: Int, height: Int, nativePattern: Bool, clientCursor: Bool, detailedPattern: Bool, captureDelay: TimeInterval = 0) {
         size = (width, height)
         self.nativePattern = nativePattern
         self.clientCursor = clientCursor
         self.detailedPattern = detailedPattern
+        self.captureDelay = captureDelay
     }
     func resize(width: Int, height: Int) {
         lock.withLock { size = (width, height) }
     }
     var includesCursor: Bool { nativePattern && !clientCursor }
     func capture() throws -> Framebuffer {
+        if captureDelay > 0 { Thread.sleep(forTimeInterval: captureDelay) }
         if let frame = lock.withLock({ overrideFrame }) { return frame }
         let (width, height) = lock.withLock { size }
         var pixels = [UInt8](repeating: 0, count: width * height * 4)

@@ -21,15 +21,11 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     private let recoveryLock = NSLock()
     private var store: StreamingFrameStore
     private var streams: [SCStream]
-    private var streamConfigurations: [SCStreamConfiguration]
     private var outputs: [ScreenCaptureStreamOutput]
     private var delegates: [ScreenCaptureStreamDelegate]
-    private var streamGeneration: UInt64 = 0
     private let captureRateLock = NSLock()
     private var captureRateRequests: [ObjectIdentifier: Int] = [:]
     private var desiredCaptureFPS: Int
-    private var captureRateTask: Task<Void, Never>?
-    private var captureRateStopped = false
     private var workspaceObservers: [NSObjectProtocol] = []
     private var recoveryScheduled = false
     private var recoveryNeeded = false
@@ -54,7 +50,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         try Self.verifyConsole(consoleIdentity)
         self.logger = logger
         desiredCaptureFPS = fps
-        captureRateTask = nil
 
         let changes = self.changes
         cursorMonitor = cursorMode == .embedded ? nil : await MacCursorMonitor.start(onChange: { changes.signal() })
@@ -92,7 +87,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         streamEventSink = eventSink
         store = started.store
         streams = started.streams
-        streamConfigurations = started.configurations
         outputs = started.outputs
         delegates = started.delegates
         eventSink.attach(owner: self)
@@ -131,13 +125,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
             recoveryTask?.cancel()
             return recoveryTask
         }
-        let rateUpdate = captureRateLock.withLock {
-            captureRateStopped = true
-            captureRateTask?.cancel()
-            return captureRateTask
-        }
         await recovery?.value
-        await rateUpdate?.value
         let retired = retireStreams()
         await Self.stopStreams(retired.streams, outputs: retired.outputs, logger: logger)
         logger.verbose("ScreenCaptureKit: capture stopped")
@@ -167,53 +155,33 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
     }
 
     func registerCaptureRateConsumer(_ consumer: ObjectIdentifier, fps: Int) {
-        captureRateLock.lock()
-        captureRateRequests[consumer] = fps
-        let target = effectiveCaptureFPSLocked()
-        let shouldSchedule = target != desiredCaptureFPS
-        desiredCaptureFPS = target
-        captureRateLock.unlock()
-
-        updateFrameAcceptanceRate()
-        if shouldSchedule {
-            scheduleCaptureRateUpdate()
+        captureRateLock.withLock {
+            captureRateRequests[consumer] = fps
+            updateFrameAcceptanceRateLocked()
         }
     }
 
-    func updateCaptureRate(
-        _ fps: Int,
-        consumer: ObjectIdentifier,
-        reconfigureCapture: Bool
-    ) {
-        captureRateLock.lock()
-        captureRateRequests[consumer] = fps
-        let target = effectiveCaptureFPSLocked()
-        let shouldSchedule = target != desiredCaptureFPS
-        desiredCaptureFPS = target
-        captureRateLock.unlock()
-
-        updateFrameAcceptanceRate()
-        if shouldSchedule, reconfigureCapture {
-            scheduleCaptureRateUpdate()
+    func updateCaptureRate(_ fps: Int, consumer: ObjectIdentifier) {
+        captureRateLock.withLock {
+            captureRateRequests[consumer] = fps
+            updateFrameAcceptanceRateLocked()
         }
     }
 
     func unregisterCaptureRateConsumer(_ consumer: ObjectIdentifier) {
-        captureRateLock.lock()
-        captureRateRequests.removeValue(forKey: consumer)
-        let target = effectiveCaptureFPSLocked()
-        let shouldSchedule = target != desiredCaptureFPS
-        desiredCaptureFPS = target
-        captureRateLock.unlock()
-
-        updateFrameAcceptanceRate()
-        if shouldSchedule {
-            scheduleCaptureRateUpdate()
+        captureRateLock.withLock {
+            captureRateRequests.removeValue(forKey: consumer)
+            updateFrameAcceptanceRateLocked()
         }
     }
 
-    private func updateFrameAcceptanceRate() {
-        captureRateLock.withLock { currentStore().setAcceptedFrameRate(desiredCaptureFPS) }
+    private func updateFrameAcceptanceRateLocked() {
+        // Keep the native SCStream at the configured ceiling. Repeated live
+        // minimumFrameInterval changes under video load can stop its delivery.
+        // Adapt before copying pixels, for every viewer, without reconfiguring
+        // an active stream. Retain the last rate during idle teardown.
+        desiredCaptureFPS = captureRateRequests.values.max() ?? desiredCaptureFPS
+        currentStore().setAcceptedFrameRate(desiredCaptureFPS)
     }
 
     private func scheduleDisplayWakeup() {
@@ -250,70 +218,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         stateLock.lock()
         defer { stateLock.unlock() }
         return store
-    }
-
-    private func effectiveCaptureFPSLocked() -> Int {
-        // The worker retires capture after its last viewer leaves. Do not ramp
-        // back up to the configured maximum while that teardown is pending.
-        captureRateRequests.values.max() ?? desiredCaptureFPS
-    }
-
-    private func scheduleCaptureRateUpdate() {
-        captureRateLock.lock()
-        guard !captureRateStopped, captureRateTask == nil else {
-            captureRateLock.unlock()
-            return
-        }
-        captureRateTask = Task { [weak self] in
-            await self?.applyCaptureRateUpdates()
-        }
-        captureRateLock.unlock()
-    }
-
-    private func applyCaptureRateUpdates() async {
-        while !Task.isCancelled {
-            let target = captureRateTarget()
-            let (currentStreams, currentConfigurations, generation) = streamConfigurationSnapshot()
-
-            for (stream, configuration) in zip(currentStreams, currentConfigurations) {
-                configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(target))
-                do {
-                    try await CaptureOperation.run("update configuration") { complete in
-                        stream.updateConfiguration(configuration) { error in
-                            complete(error.map { .failure($0) } ?? .success(()))
-                        }
-                    }
-                } catch {
-                    logger.warning("ScreenCaptureKit frame-rate update to \(target) FPS failed: \(error.localizedDescription)")
-                }
-            }
-
-            if finishCaptureRateUpdateIfUnchanged(target, generation: generation) {
-                return
-            }
-        }
-    }
-
-    private func captureRateTarget() -> Int {
-        captureRateLock.lock()
-        defer { captureRateLock.unlock() }
-        return desiredCaptureFPS
-    }
-
-    private func streamConfigurationSnapshot() -> ([SCStream], [SCStreamConfiguration], UInt64) {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return (streams, streamConfigurations, streamGeneration)
-    }
-
-    private func finishCaptureRateUpdateIfUnchanged(_ target: Int, generation: UInt64) -> Bool {
-        captureRateLock.lock()
-        defer { captureRateLock.unlock() }
-        guard desiredCaptureFPS == target, stateLock.withLock({ streamGeneration == generation }) else {
-            return false
-        }
-        captureRateTask = nil
-        return true
     }
 
     private static func shareableContent(onScreenWindowsOnly: Bool) async throws -> SCShareableContent {
@@ -376,7 +280,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
             changes: changes
         )
         var streams: [SCStream] = []
-        var configurations: [SCStreamConfiguration] = []
         var outputs: [ScreenCaptureStreamOutput] = []
         var delegates: [ScreenCaptureStreamDelegate] = []
 
@@ -405,7 +308,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
                     sampleHandlerQueue: DispatchQueue(label: "mac-vnc-server.sck.\(display.displayID)")
                 )
                 streams.append(stream)
-                configurations.append(config)
                 outputs.append(output)
                 delegates.append(delegate)
                 logger.verbose("ScreenCaptureKit: starting display \(display.displayID) (\(width)x\(height))")
@@ -425,7 +327,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         return StartedCapture(
             store: store,
             streams: streams,
-            configurations: configurations,
             outputs: outputs,
             delegates: delegates
         )
@@ -486,7 +387,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
             do {
                 let started = try await Self.start(
                     scale: scale,
-                    fps: captureRateTarget(),
+                    fps: fps,
                     displaySelection: displaySelection,
                     includesCursor: includesCursor,
                     consoleIdentity: consoleIdentity,
@@ -525,8 +426,7 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
         stateLock.withLock {
             let retired = (streams, outputs)
             // Ignore expected stop callbacks from a retired generation.
-            streams = []; streamConfigurations = []; outputs = []; delegates = []
-            streamGeneration &+= 1
+            streams = []; outputs = []; delegates = []
             return retired
         }
     }
@@ -548,13 +448,10 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
             stateLock.withLock {
                 store = started.store
                 streams = started.streams
-                streamConfigurations = started.configurations
                 outputs = started.outputs
                 delegates = started.delegates
-                streamGeneration &+= 1
             }
         }
-        scheduleCaptureRateUpdate()
     }
 
     private func finishRecoveryScheduling(requestSerial: UInt64, recovered: Bool) -> Bool {
@@ -660,7 +557,6 @@ final class StreamingScreenCapture: @unchecked Sendable, FramebufferSource, Fram
 private struct StartedCapture {
     let store: StreamingFrameStore
     let streams: [SCStream]
-    let configurations: [SCStreamConfiguration]
     let outputs: [ScreenCaptureStreamOutput]
     let delegates: [ScreenCaptureStreamDelegate]
 }

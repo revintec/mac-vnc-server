@@ -154,6 +154,12 @@ final class RFBServer: @unchecked Sendable {
     var activeClientCount: Int { lock.withLock { clients.count } }
     func waitForClients() { workers.wait() }
 
+    private var consoleClients: [ObjectIdentifier: ClientSocket] = [:]
+    var consoleBridgeCount: Int { lock.withLock { consoleClients.count } }
+    func disconnectConsoleBridges() {
+        lock.withLock { for client in consoleClients.values { client.shutdown() } }
+    }
+
     /// Takes an already-connected socket. Account workers enter here after the
     /// listener has authenticated and passed ownership through SCM_RIGHTS.
     @discardableResult
@@ -163,6 +169,7 @@ final class RFBServer: @unchecked Sendable {
         let admitted = lock.withLock {
             guard !stopped, clients.count < maximumClients else { return false }
             clients[id] = client
+            if admission.consoleBridge == true { consoleClients[id] = client }
             return true
         }
         guard admitted else {
@@ -176,14 +183,18 @@ final class RFBServer: @unchecked Sendable {
         do {
             // A peer closing during socket setup must only fail its own session.
             try client.configureTCP()
+            let internalBridge = admission.consoleBridge == true
+            let localRouter = capture as? SessionDesktopRouter
             let session = try RFBClientSession(
-                socket: client, fps: config.fps,
-                encodingPreference: config.encodingPreference, capture: capture,
-                input: makeInput(), clipboard: makeClipboard(),
-                clipboardSync: config.clipboardSync, adaptiveStreaming: config.adaptiveStreaming,
-                adaptiveFrameRate: config.adaptiveFrameRate, logger: logger,
+                socket: client, fps: internalBridge ? min(config.fps, 30) : config.fps,
+                encodingPreference: internalBridge ? .raw : config.encodingPreference,
+                capture: internalBridge ? (localRouter?.localCapture ?? capture) : capture,
+                input: internalBridge ? (localRouter?.makeLocalInput() ?? makeInput()) : makeInput(),
+                clipboard: internalBridge ? DisabledClipboard() : makeClipboard(),
+                clipboardSync: !internalBridge && config.clipboardSync, adaptiveStreaming: !internalBridge && config.adaptiveStreaming,
+                adaptiveFrameRate: !internalBridge && config.adaptiveFrameRate, logger: logger,
                 handshakeTimeout: handshakeTimeout,
-                messageTimeout: messageTimeout, fileTransfer: config.fileTransfer,
+                messageTimeout: messageTimeout, fileTransfer: !internalBridge && config.fileTransfer,
                 allowEncryption: config.allowEncryption, zlibConfiguration: config.zlibConfiguration,
                 transferInbox: transferInbox
             )
@@ -191,7 +202,7 @@ final class RFBServer: @unchecked Sendable {
             DispatchQueue.global(qos: .userInteractive).async { [self] in
                 defer {
                     session.shutdown()
-                    lock.withLock { clients[id] = nil }
+                    lock.withLock { clients[id] = nil; consoleClients[id] = nil }
                     onClientCountChange()
                     workers.leave()
                 }
@@ -202,7 +213,7 @@ final class RFBServer: @unchecked Sendable {
         } catch {
             try? AccountHandshake.reject(socket: client, version: admission.version)
             client.shutdown()
-            lock.withLock { clients[id] = nil }
+            lock.withLock { clients[id] = nil; consoleClients[id] = nil }
             onClientCountChange()
             logger.warning("could not start client: \(error.localizedDescription)")
             return false
@@ -282,68 +293,6 @@ struct AdaptiveFrameRateController {
     }
 }
 
-struct AdaptiveScaleController {
-    static let scales = [1.0, 0.75, 0.67]
-
-    private(set) var index = 0
-    private var overloadTime: TimeInterval = 0
-    private var healthyTime: TimeInterval = 0
-
-    var scale: Double {
-        Self.scales[index]
-    }
-
-    mutating func update(
-        frameDuration: TimeInterval,
-        encodeDuration: TimeInterval,
-        writeDuration: TimeInterval,
-        frameInterval: TimeInterval,
-        minimumFrameInterval: TimeInterval,
-        staleRetries: Int,
-        hadNetworkStall: Bool
-    ) -> Double? {
-        let encodeBudget = minimumFrameInterval * 1.10
-        let overloaded = hadNetworkStall
-            || frameDuration > frameInterval * 1.25
-            || encodeDuration > encodeBudget
-            || writeDuration > frameInterval * 1.10
-            || staleRetries >= 2
-
-        if overloaded {
-            healthyTime = 0
-            overloadTime += max(frameDuration, frameInterval)
-            guard overloadTime >= 0.5 else {
-                return nil
-            }
-            overloadTime = 0
-            guard index + 1 < Self.scales.count else {
-                return nil
-            }
-            index += 1
-            return scale
-        }
-
-        overloadTime = 0
-        guard index > 0,
-              !hadNetworkStall,
-              staleRetries == 0,
-              frameDuration < frameInterval * 0.85,
-              encodeDuration < encodeBudget * 0.8,
-              writeDuration < frameInterval * 0.8 else {
-            healthyTime = 0
-            return nil
-        }
-
-        healthyTime += max(frameDuration, frameInterval)
-        guard healthyTime >= 5 else {
-            return nil
-        }
-        healthyTime = 0
-        index -= 1
-        return scale
-    }
-}
-
 final class RFBClientSession: @unchecked Sendable {
     private struct FramebufferUpdateRequest {
         let incremental: Bool
@@ -357,6 +306,7 @@ final class RFBClientSession: @unchecked Sendable {
 
     private struct PreparedFramebufferUpdate {
         let framebuffer: Framebuffer
+        let desktopGeneration: UInt64
         let sourceLayout: VirtualDisplayLayout
         let encoding: RFBEncoding
         let pixelFormat: PixelFormat
@@ -402,6 +352,7 @@ final class RFBClientSession: @unchecked Sendable {
     private var pacer = FramePacer()
     private let wake = FrameWakeSignal()
     private var scaledCache = ScaledFramebufferCache()
+    private var desktopGeneration: UInt64 = 0
     private var hasSentFramebufferUpdate = false
     private let zrleEncoder: ZRLEEncoder
     private let zlibEncoder: ZlibEncoder
@@ -421,8 +372,6 @@ final class RFBClientSession: @unchecked Sendable {
     private var updatesSent = 0
     private var bytesSent = 0
     private var adaptiveFrameRateController: AdaptiveFrameRateController
-    private var adaptiveScaleController = AdaptiveScaleController()
-    private var adaptiveScale = 1.0
     private var frameHadNetworkStall = false
     private var forceFullFramebuffer = false
     // Negotiated once before the writer starts. Shared Apple state uses `state`.
@@ -541,7 +490,8 @@ final class RFBClientSession: @unchecked Sendable {
             fps: Int((1.0 / minimumFrameInterval).rounded())
         )
         if fileTransferEnabled && usesAppleExtensions {
-            fileTransfer = MacFileTransfer(logger: logger, input: input, inbox: transferInbox) { [weak self] bytes in
+            let accountInput = (capture as? SessionDesktopRouter)?.accountInput(for: input) ?? input
+            fileTransfer = MacFileTransfer(logger: logger, input: accountInput, inbox: transferInbox) { [weak self] bytes in
                 guard let self else { throw RFBError.socketError("file-transfer session closed") }
                 let completion = DispatchSemaphore(value: 0)
                 try self.enqueueWriterCommand(.fileData(bytes, completion))
@@ -552,11 +502,15 @@ final class RFBClientSession: @unchecked Sendable {
                 }
             }
         }
+        let routeObserver = (capture as? SessionDesktopRouter)?.observeSwitch { [weak self] remote in
+            self?.fileTransfer?.setSuspended(remote)
+        }
         let observer = capture.frameChanges?.observe { [weak self] in self?.wake.signal() }
         startFramebufferWriter()
         var transferStopReason = "Connection ended"
         defer {
             if let observer { capture.frameChanges?.remove(observer) }
+            if let routeObserver { (capture as? SessionDesktopRouter)?.removeSwitchObserver(routeObserver) }
             fileTransfer?.stop(reason: transferStopReason)
             stopFramebufferWriter()
             input.releaseKeys()
@@ -734,6 +688,9 @@ final class RFBClientSession: @unchecked Sendable {
             Int32(bitPattern: UInt32.be(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]))
         }
         let capabilities = RFBClientCapabilities(encodings: encodings)
+        // Route snapshots take the router lock before session state. Do not
+        // invert that order when a viewer renegotiates its capabilities.
+        let hasCursor = capture.includesCursor || capture.cursorSnapshot != nil
         state.lock()
         clientCapabilities = capabilities
         if !usesAppleExtensions {
@@ -752,7 +709,7 @@ final class RFBClientSession: @unchecked Sendable {
         pendingAppleDisplayInfo = usesAppleExtensions && fileTransferEnabled
             && AppleRFB.preferredDisplayEncoding(in: encodings) != nil
         if pendingAppleDisplayInfo { state.signal(); wake.signal() }
-        if capture.includesCursor || capture.cursorSnapshot != nil {
+        if hasCursor {
             pendingCursorEncoding = capabilities.supportsRichCursor ? RFBPseudoEncoding.richCursor
                 : (capabilities.supportsXCursor ? RFBPseudoEncoding.xCursor : nil)
             state.signal(); wake.signal()
@@ -816,8 +773,24 @@ final class RFBClientSession: @unchecked Sendable {
         }
     }
 
+    private func synchronizeDesktopRoute() {
+        guard let router = capture as? SessionDesktopRouter else { return }
+        let generation = router.generation
+        guard generation != desktopGeneration else { return }
+        desktopGeneration = generation
+        state.withLock {
+            forceFullFramebuffer = true
+            previousCoverage = nil
+            pendingCursorEncoding = clientCapabilities.supportsRichCursor ? RFBPseudoEncoding.richCursor
+                : (clientCapabilities.supportsXCursor ? RFBPseudoEncoding.xCursor : nil)
+        }
+        scaledCache = ScaledFramebufferCache()
+        lastCursorImage = nil; lastCursorFormat = nil
+    }
+
     private func framebufferWriterLoop() throws {
         while true {
+            synchronizeDesktopRoute()
             state.lock()
             let automaticUpdateDue = (appleAutomaticUpdate != nil && DispatchTime.now().uptimeNanoseconds >= appleNextPush) || continuousUpdate != nil
             if latestUpdateRequest == nil && activeUpdateRequest == nil && !automaticUpdateDue && writerCommands.isEmpty && !pendingAppleDisplayInfo && pendingAppleFramebufferScale == nil && !stopped {
@@ -877,6 +850,10 @@ final class RFBClientSession: @unchecked Sendable {
                 // the cursor is captured or composited into the framebuffer.
                 try socket.writeAll([0, 0, 0, 1] + [UInt8](repeating: 0, count: 8)
                     + UInt32(bitPattern: cursorEncoding).beBytes)
+                if cursorEncoding == RFBPseudoEncoding.richCursor {
+                    lastCursorImage = .hidden
+                    lastCursorFormat = state.withLock { pixelFormat }
+                }
                 logger.verbose("cursor: embedded in framebuffer; viewer overlay hidden")
             }
             try sendClipboardChangeIfNeeded()
@@ -960,13 +937,17 @@ final class RFBClientSession: @unchecked Sendable {
         logger.verbose("Apple DisplayInfo sent: encoding=\(encoding) \(framebuffer.width)x\(framebuffer.height) unscaled=\(sourceLayout.width)x\(sourceLayout.height) scale=\(appleFramebufferScale) awaiting_frame_request=true [client_fd=\(socket.fd)]")
     }
 
-    private func captureClientFramebuffer() throws -> (framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout) {
-        let captured = try capture.capture()
-        let cursor = !capture.includesCursor && !state.withLock({ usesClientCursorLocked })
-            ? capture.cursorSnapshot : nil
-        let scale = state.withLock { CGFloat(usesAppleExtensions ? appleFramebufferScale : adaptiveScale) }
-        let framebuffer = try scaledCache.frame(captured, factor: scale, rounded: usesAppleExtensions, cursor: cursor)
-        return (framebuffer, captured.layout)
+    private func captureClientFramebuffer() throws -> (framebuffer: Framebuffer, sourceLayout: VirtualDisplayLayout, generation: UInt64) {
+        func snapshot() throws -> (Framebuffer, VirtualDisplayLayout, UInt64) {
+            let captured = try capture.capture()
+            let cursor = !capture.includesCursor && !state.withLock({ usesClientCursorLocked })
+                ? capture.cursorSnapshot : nil
+            let scale = state.withLock { CGFloat(usesAppleExtensions ? appleFramebufferScale : 1) }
+            let framebuffer = try scaledCache.frame(captured, factor: scale, rounded: usesAppleExtensions, cursor: cursor)
+            return (framebuffer, captured.layout, (capture as? SessionDesktopRouter)?.generation ?? 0)
+        }
+        if let router = capture as? SessionDesktopRouter { return try router.withSnapshot(snapshot) }
+        return try snapshot()
     }
 
     private var usesClientCursorLocked: Bool {
@@ -1007,7 +988,7 @@ final class RFBClientSession: @unchecked Sendable {
                 return true
             }
             let candidate = try prepareFramebufferUpdate(request, framebuffer: captured.framebuffer,
-                sourceLayout: captured.sourceLayout, captureDuration: capturedDuration)
+                sourceLayout: captured.sourceLayout, captureDuration: capturedDuration, desktopGeneration: captured.generation)
             if measureTimings {
                 captureDuration += candidate.captureDuration
                 diffDuration += candidate.diffDuration
@@ -1026,6 +1007,9 @@ final class RFBClientSession: @unchecked Sendable {
             break
         }
 
+        if let router = capture as? SessionDesktopRouter,
+           prepared.desktopGeneration != router.generation { return false }
+
         // Include the cursor in a requested update, after display initialization.
         // Sending it during SetEncodings can trigger Screen Sharing's startup race.
         var cursorRectangle: [UInt8]?
@@ -1041,6 +1025,13 @@ final class RFBClientSession: @unchecked Sendable {
                 cursorRectangle = try image.richCursorRectangle(format: cursorFormat)
                 cursorImage = image
             }
+        } else if capture.includesCursor, state.withLock({ clientCapabilities.supportsRichCursor }),
+                  lastCursorImage != .hidden || cursorFormat != lastCursorFormat {
+            // A route can change after this iteration consumed its pending
+            // cursor notification. Hide the overlay with the first console
+            // pixels even in that case.
+            cursorRectangle = try CursorImage.hidden.richCursorRectangle(format: cursorFormat)
+            cursorImage = .hidden
         }
         if (unsolicited || !usesAppleExtensions) && request.incremental && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && cursorRectangle == nil {
             return false
@@ -1091,6 +1082,7 @@ final class RFBClientSession: @unchecked Sendable {
             lastCursorFormat = cursorFormat
         }
 
+        (capture as? SessionDesktopRouter)?.activateInput(input, generation: prepared.desktopGeneration)
         let frameDuration = Date().timeIntervalSince(frameStarted)
         state.lock()
         staleFrameRetries += staleRetries
@@ -1126,19 +1118,11 @@ final class RFBClientSession: @unchecked Sendable {
         networkStallNotifications = 0
         state.unlock()
 
-        let hadNetworkStall = frameHadNetworkStall
         try adaptStreaming(
             frameDuration: frameDuration,
             encodeDuration: prepared.encodeDuration,
             writeDuration: writeDuration,
             encoding: prepared.encoding
-        )
-        adaptScale(
-            frameDuration: frameDuration,
-            encodeDuration: prepared.encodeDuration,
-            writeDuration: writeDuration,
-            staleRetries: staleRetries,
-            hadNetworkStall: hadNetworkStall
         )
         adaptFrameRate(frameDuration: frameDuration)
         return true
@@ -1149,7 +1133,8 @@ final class RFBClientSession: @unchecked Sendable {
         _ request: FramebufferUpdateRequest,
         framebuffer: Framebuffer,
         sourceLayout: VirtualDisplayLayout,
-        captureDuration: TimeInterval
+        captureDuration: TimeInterval,
+        desktopGeneration: UInt64
     ) throws -> PreparedFramebufferUpdate {
         let format: PixelFormat
         let encoding: RFBEncoding
@@ -1165,7 +1150,9 @@ final class RFBClientSession: @unchecked Sendable {
         sentBefore = hasSentFramebufferUpdate
         supportsResize = !usesAppleExtensions && clientCapabilities.supportsDynamicResize
         let supportsCopyRect = clientCapabilities.supportsCopyRect
-        let useEncodingTransaction = !clientCapabilities.isAppleScreenSharingClient
+        // A desktop switch can discard a prepared frame for any viewer.
+        // Only commit its persistent codec state once we will send its bytes.
+        let useEncodingTransaction = capture is SessionDesktopRouter || !clientCapabilities.isAppleScreenSharingClient
         forceFull = forceFullFramebuffer
         state.unlock()
 
@@ -1292,6 +1279,7 @@ final class RFBClientSession: @unchecked Sendable {
 
         return PreparedFramebufferUpdate(
             framebuffer: framebuffer,
+            desktopGeneration: desktopGeneration,
             sourceLayout: sourceLayout,
             encoding: encoding,
             pixelFormat: format,
@@ -1422,35 +1410,6 @@ final class RFBClientSession: @unchecked Sendable {
         }
     }
 
-    private func adaptScale(
-        frameDuration: TimeInterval,
-        encodeDuration: TimeInterval,
-        writeDuration: TimeInterval,
-        staleRetries: Int,
-        hadNetworkStall: Bool
-    ) {
-        guard adaptiveStreaming,
-              supportsDynamicResize(),
-              updatesSent > 3 else {
-            return
-        }
-
-        guard let scale = adaptiveScaleController.update(
-            frameDuration: frameDuration,
-            encodeDuration: encodeDuration,
-            writeDuration: writeDuration,
-            frameInterval: frameInterval,
-            minimumFrameInterval: minimumFrameInterval,
-            staleRetries: staleRetries,
-            hadNetworkStall: hadNetworkStall
-        ) else {
-            return
-        }
-
-        adaptiveScale = scale
-        logger.verbose("adaptive scale changed to \(String(format: "%.2f", scale))")
-    }
-
     private func adaptFrameRate(frameDuration: TimeInterval) {
         guard adaptiveFrameRate else {
             return
@@ -1461,7 +1420,7 @@ final class RFBClientSession: @unchecked Sendable {
         }
 
         frameInterval = 1.0 / Double(frameRate)
-        updateCaptureRateIfSafe(frameRate)
+        updateCaptureRate(frameRate)
         logger.verbose("adaptive fps changed to \(frameRate)")
     }
 
@@ -1482,13 +1441,12 @@ final class RFBClientSession: @unchecked Sendable {
         }
 
         frameInterval = 1.0 / Double(frameRate)
-        updateCaptureRateIfSafe(frameRate)
+        updateCaptureRate(frameRate)
         logger.verbose("adaptive fps changed to \(frameRate) due to network backpressure")
     }
 
-    private func updateCaptureRateIfSafe(_ frameRate: Int) {
+    private func updateCaptureRate(_ frameRate: Int) {
         state.lock()
-        let reconfigureCapture = !clientCapabilities.isAppleScreenSharingClient
         let captureRateConsumer = self.captureRateConsumer
         state.unlock()
 
@@ -1497,8 +1455,7 @@ final class RFBClientSession: @unchecked Sendable {
         }
         (capture as? CaptureFrameRateController)?.updateCaptureRate(
             frameRate,
-            consumer: captureRateConsumer,
-            reconfigureCapture: reconfigureCapture
+            consumer: captureRateConsumer
         )
     }
 
@@ -1515,12 +1472,6 @@ final class RFBClientSession: @unchecked Sendable {
         case .raw:
             return
         }
-    }
-
-    private func supportsDynamicResize() -> Bool {
-        state.lock()
-        defer { state.unlock() }
-        return clientCapabilities.supportsDynamicResize
     }
 
     private func handleKeyEvent() throws {
@@ -1556,7 +1507,7 @@ final class RFBClientSession: @unchecked Sendable {
         guard allowInput else { return }
         requestCaptureRecoveryAfterInput()
         let standardMask = usesAppleExtensions ? AppleRFB.standardButtonMask(mask) : mask
-        if fileTransfer?.pointer(mask: standardMask, x: x, y: y, layout: layout) == true { return }
+        if (capture as? SessionDesktopRouter)?.isRemote != true, fileTransfer?.pointer(mask: standardMask, x: x, y: y, layout: layout) == true { return }
         input.pointer(buttonMask: standardMask, x: x, y: y, layout: layout)
     }
 
@@ -1613,7 +1564,8 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private var appleFileTransferAllowed: Bool {
-        state.withLock {
+        guard (capture as? SessionDesktopRouter)?.isRemote != true else { return false }
+        return state.withLock {
             // Native Screen Sharing omits the FileCopy (0x22) bitmap bit even
             // while enabling and implementing file transfers. Gate on its drag
             // negotiation messages; MacFileTransfer still requires a selected

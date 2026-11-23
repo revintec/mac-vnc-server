@@ -91,6 +91,7 @@ struct SessionAdmission: Codable, Sendable {
     let identity: ConsoleIdentity
     let version: String
     let wrappingKey: [UInt8]
+    var consoleBridge: Bool? = nil
 
     func validate(for identity: ConsoleIdentity) throws {
         guard self.identity == identity, wrappingKey.count == 16,

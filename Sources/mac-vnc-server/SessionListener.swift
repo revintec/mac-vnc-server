@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import CVNCSession
 
 protocol SessionWorkerConnection: AnyObject, Sendable {
     var isRunning: Bool { get }
@@ -80,7 +81,11 @@ final class SessionListener: @unchecked Sendable {
         self.config = config
         logger = ServerLogger(verbose: config.verbose)
         self.verify = verify
-        self.pool = pool ?? SessionWorkerPool { identity in try AccountSessionChild(identity: identity, config: config) }
+        let broker = ConsoleDesktopBroker()
+        self.pool = pool ?? SessionWorkerPool { identity in
+            try AccountSessionChild(identity: identity, config: config, consoleBroker: broker)
+        }
+        broker.pool = self.pool
     }
 
     func run(listener supplied: ListeningSocket? = nil) throws {
@@ -120,14 +125,15 @@ final class SessionListener: @unchecked Sendable {
                 defer { _ = lock.withLock { pending.removeValue(forKey: id) }; authentications.leave() }
                 do {
                     try client.configureTCP()
-                    let admission = try AccountHandshake.authenticate(socket: client, verify: verify)
+                    let authenticated = try AccountHandshake.authenticate(socket: client, verify: verify)
                     do {
+                        let admission = authenticated
                         try pool.handOff(client: client, admission: admission)
                         logger.info("Client handed to session uid=\(admission.identity.uid) audit=\(admission.identity.auditID)")
                         // Drop our reference/descriptor without shutdown(2): that
                         // would also tear down the worker's copy of the socket.
                     } catch {
-                        try? AccountHandshake.reject(socket: client, version: admission.version, error: error)
+                        try? AccountHandshake.reject(socket: client, version: authenticated.version, error: error)
                         throw error
                     }
                 } catch {
@@ -153,12 +159,13 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
     private let process: Process
     private let channel: SessionChannel
     private let service: ConsoleCaptureService?
+    private let consoleControl: ConsoleControlService?
     private let token: UUID
     private var didStop = false
 
     var isRunning: Bool { process.isRunning }
 
-    init(identity: ConsoleIdentity, config: ServerConfig) throws {
+    init(identity: ConsoleIdentity, config: ServerConfig, consoleBroker: ConsoleDesktopBroker) throws {
         let session = try AccountAuthentication.session(uid: identity.uid)
         guard session == identity else { throw RFBError.authenticationFailed }
         let executable = try CurrentExecutable.url()
@@ -168,7 +175,9 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
             defer { try? childInput.close() }
             var workerConfig = config
             if identity.uid == 0 { workerConfig.clipboardSync = false; workerConfig.fileTransfer = false }
-            let options = SessionWorkerOptions(identity: identity, config: workerConfig)
+            let controls = geteuid() == 0 && identity.uid != 0
+            let options = SessionWorkerOptions(identity: identity, config: workerConfig,
+                consoleControls: controls, canBringToConsole: controls && VNCSessionConsoleSwitchAvailable() != 0)
             try options.validate()
             let encoded = String(decoding: try JSONEncoder().encode(options), as: UTF8.self)
             let process = Process()
@@ -200,6 +209,9 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
                 throw RFBError.socketError("session worker startup failed at \(executable.path): \(error.localizedDescription)")
             }
             self.process = process; self.channel = channel; self.service = service; self.token = token
+            consoleControl = controls ? ConsoleControlService(channel: channel, identity: identity,
+                broker: consoleBroker, logger: ServerLogger(verbose: config.verbose)) : nil
+            consoleControl?.start()
             ServerLogger(verbose: config.verbose).info("Session worker ready: uid=\(identity.uid) audit=\(identity.auditID) pid=\(process.processIdentifier)")
         } catch { service?.stop(); throw error }
     }
@@ -214,6 +226,7 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
         didStop = true
         channel.shutdown()
         Self.terminate(process)
+        consoleControl?.stop()
         ProcessShutdown.shared.unregister(token)
         service?.stop()
     }

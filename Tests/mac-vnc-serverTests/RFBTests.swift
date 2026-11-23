@@ -278,51 +278,6 @@ import zlib
     #expect(controller.frameRate == 60)
 }
 
-@Test func adaptiveScaleDropsOnlyAfterSustainedOverloadAndRecovers() {
-    var controller = AdaptiveScaleController()
-    let frameInterval = 1.0 / 60.0
-    var firstScaleChange: Double?
-
-    for _ in 0..<40 {
-        if let scale = controller.update(
-            frameDuration: 0.020,
-            encodeDuration: 0.020,
-            writeDuration: 0,
-            frameInterval: frameInterval,
-            minimumFrameInterval: frameInterval,
-            staleRetries: 0,
-            hadNetworkStall: false
-        ) {
-            firstScaleChange = scale
-            break
-        }
-    }
-
-    #expect(firstScaleChange == 0.75)
-    #expect(controller.scale == 0.75)
-
-    var recovered = false
-    for _ in 0..<400 {
-        if let scale = controller.update(
-            frameDuration: 0.010,
-            encodeDuration: 0.004,
-            writeDuration: 0.002,
-            frameInterval: frameInterval,
-            minimumFrameInterval: frameInterval,
-            staleRetries: 0,
-            hadNetworkStall: false
-        ) {
-            recovered = scale == 1.0
-            if recovered {
-                break
-            }
-        }
-    }
-
-    #expect(recovered)
-    #expect(controller.scale == 1.0)
-}
-
 @Test func framebufferResamplingPreservesLayoutAndScalesDirtyRects() throws {
     let layout = VirtualDisplayLayout(
         displays: [],

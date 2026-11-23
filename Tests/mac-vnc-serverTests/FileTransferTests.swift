@@ -500,6 +500,29 @@ struct FileTransferTests {
         #expect(try AppleFileTransfer.dragFiles(compressed: Array(wire.dropFirst(16)), archiveSize: size) == [source])
     }
 
+    @Test func desktopSwitchCancelsTransfersAndAllowsFreshDragsAfterReturn() throws {
+        let first = DragTestHelper(), second = DragTestHelper(), sent = FileTransferTestResult()
+        let queue = DragTestFactory([first, second])
+        let input = DragTestInput()
+        let transfer = MacFileTransfer(logger: ServerLogger(verbose: false), input: input,
+            makeOutgoingDrag: { queue.next() }, send: { sent.receive($0) })
+        defer { transfer.stop() }
+        try transfer.startDrag(sessionID: 97, compressed: [], archiveSize: 0)
+        transfer.setSuspended(true)
+        let count = input.masks.count
+        first.nudge()
+        first.complete(.success([URL(fileURLWithPath: "/tmp/old-desktop-drag")]))
+        try transfer.startDrag(sessionID: 98, compressed: [], archiveSize: 0)
+        #expect(sent.ready.wait(timeout: .now() + 0.2) == .timedOut)
+        #expect(input.masks.count == count)
+        transfer.setSuspended(false)
+        try transfer.startDrag(sessionID: 99, compressed: [], archiveSize: 0)
+        second.complete(.success([URL(fileURLWithPath: "/tmp/new-desktop-drag")]))
+        #expect(sent.ready.wait(timeout: .now() + 2) == .success)
+        let wire = try #require(sent.bytes)
+        #expect(Array(wire[4..<8]) == UInt32(99).beBytes)
+    }
+
     @Test func outgoingReceiverCannotPressAgainAfterRemoteRelease() throws {
         let helper = DragTestHelper(), input = DragTestInput()
         let transfer = MacFileTransfer(logger: ServerLogger(verbose: false), input: input,

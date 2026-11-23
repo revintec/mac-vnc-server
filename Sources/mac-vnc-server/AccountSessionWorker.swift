@@ -19,13 +19,22 @@ enum AccountSessionWorker {
         do {
             try await withTaskCancellationHandler {
                 try channel.ready()
+                if options.consoleControls == true {
+                    SessionConsoleControl.shared.attach(channel, canBringToConsole: options.canBringToConsole == true)
+                }
+                defer { SessionConsoleControl.shared.attach(nil) }
                 while !Task.isCancelled {
                     try desktop?.rootInput?.checkDelivery()
+                    if let desktop, desktop.server.consoleBridgeCount > 0,
+                       ConsoleIdentity.current() != options.identity { desktop.server.disconnectConsoleBridges() }
                     // A locked/background user session remains alive. A logout,
                     // replacement audit session, or root console change does not.
                     guard (try? AccountAuthentication.session(uid: options.identity.uid)) == options.identity else { break }
                     if let (client, admission) = try channel.receive() {
                         try admission.validate(for: options.identity)
+                        if admission.consoleBridge == true, ConsoleIdentity.current() != options.identity {
+                            client.shutdown(); continue
+                        }
                         guard VNCSessionVerify(options.identity.native) == 0 else {
                             try? AccountHandshake.reject(socket: client, version: admission.version)
                             break
@@ -33,7 +42,7 @@ enum AccountSessionWorker {
                         if desktop == nil {
                             desktop = try await AccountSessionDesktop(options: options,
                                 transferInbox: transferInbox, logger: logger)
-                            SessionActivity.shared.attach(desktop?.server)
+                            SessionActivity.shared.attach(desktop?.server, router: desktop?.router)
                         }
                         try Task.checkCancellation()
                         _ = desktop?.server.serve(client: client, admission: admission)
@@ -66,6 +75,7 @@ enum AccountSessionWorker {
 private final class AccountSessionDesktop {
     let capture: StreamingScreenCapture
     let rootInput: ConsoleRootInput?
+    let router: SessionDesktopRouter
     let server: RFBServer
 
     init(options: SessionWorkerOptions, transferInbox: TransferInbox?, logger: ServerLogger) async throws {
@@ -84,16 +94,18 @@ private final class AccountSessionDesktop {
             inputs = SharedInputController(input: MacInputController(logger: ServerLogger(verbose: false),
                 postEvent: { _, event in rootInput.post(event) }))
         } else { inputs = SharedInputController(input: MacInputController(logger: logger)) }
-        server = RFBServer(config: config, capture: capture, makeInput: { inputs.makeClient() },
-            makeClipboard: {
-                if options.identity.uid == 0 { return DisabledClipboard() }
-                return MacClipboard()
-            },
-            logger: logger, transferInbox: transferInbox,
+        let makeClipboard: @Sendable () -> ClipboardBridge = {
+            options.identity.uid == 0 ? DisabledClipboard() : MacClipboard()
+        }
+        let router = SessionDesktopRouter(capture: capture, makeInput: { inputs.makeClient() }, makeClipboard: makeClipboard)
+        self.router = router
+        server = RFBServer(config: config, capture: router, makeInput: { router.makeInput() },
+            makeClipboard: { router.makeClipboard() }, logger: logger, transferInbox: transferInbox,
             onClientCountChange: { SessionActivity.shared.changed() })
     }
 
     func stop() async {
+        router.stop()
         server.stop(); server.waitForClients()
         await capture.stop()
     }
@@ -104,9 +116,10 @@ final class SessionActivity: @unchecked Sendable {
     static let didChangeNotification = Notification.Name("mac-vnc-server.session-activity-changed")
     private let lock = NSLock()
     private weak var server: RFBServer?
+    private weak var router: SessionDesktopRouter?
     private var notificationPending = false
-    func attach(_ server: RFBServer?) {
-        lock.withLock { self.server = server }
+    func attach(_ server: RFBServer?, router: SessionDesktopRouter? = nil) {
+        lock.withLock { self.server = server; self.router = router }
         changed()
     }
     func changed() {
@@ -125,4 +138,12 @@ final class SessionActivity: @unchecked Sendable {
         }
     }
     var clientCount: Int { lock.withLock { server?.activeClientCount ?? 0 } }
+    var isViewingConsole: Bool { lock.withLock { router }?.isRemote ?? false }
+    var consoleBridgeCount: Int { lock.withLock { server }?.consoleBridgeCount ?? 0 }
+    func install(_ bridge: ConsoleFramebufferBridge) throws {
+        guard let router = lock.withLock({ router }) else { bridge.stop(); throw CancellationError() }
+        do { try router.install(bridge) } catch { bridge.stop(); throw error }
+    }
+    func returnHome() { lock.withLock { router }?.returnHome() }
+    func returnRemoteViewers() { lock.withLock { server }?.disconnectConsoleBridges() }
 }
