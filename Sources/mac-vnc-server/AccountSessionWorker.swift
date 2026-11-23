@@ -33,6 +33,8 @@ enum AccountSessionWorker {
                     if let (client, admission) = try channel.receive() {
                         try admission.validate(for: options.identity)
                         if admission.consoleBridge == true, ConsoleIdentity.current() != options.identity {
+                            try? ConsoleFramebufferBridge.rejectStartup(socket: client,
+                                error: CLIError.commandFailed("The console owner changed before capture started. Try again."))
                             client.shutdown(); continue
                         }
                         guard VNCSessionVerify(options.identity.native) == 0 else {
@@ -40,8 +42,19 @@ enum AccountSessionWorker {
                             break
                         }
                         if desktop == nil {
-                            desktop = try await AccountSessionDesktop(options: options,
-                                transferInbox: transferInbox, logger: logger)
+                            do {
+                                desktop = try await AccountSessionDesktop(options: options,
+                                    transferInbox: transferInbox, logger: logger)
+                            } catch {
+                                guard admission.consoleBridge == true else { throw error }
+                                logger.warning("Console desktop startup failed: uid=\(options.identity.uid) audit=\(options.identity.auditID): \(CLI.errorMessage(for: error))")
+                                try? ConsoleFramebufferBridge.rejectStartup(socket: client, error: error)
+                                client.shutdown()
+                                // Retire the failed target so a retry gets fresh
+                                // framework connections and capture service state.
+                                // The originating viewer and worker remain alive.
+                                throw error
+                            }
                             SessionActivity.shared.attach(desktop?.server, router: desktop?.router)
                         }
                         try Task.checkCancellation()
@@ -73,20 +86,24 @@ enum AccountSessionWorker {
 /// Only the account worker persists between viewers. Releasing this desktop
 /// also releases its frame store, stream outputs, cursor task and observers.
 private final class AccountSessionDesktop {
-    let capture: StreamingScreenCapture
+    let capture: any SessionScreenCapture
     let rootInput: ConsoleRootInput?
     let router: SessionDesktopRouter
     let server: RFBServer
 
     init(options: SessionWorkerOptions, transferInbox: TransferInbox?, logger: ServerLogger) async throws {
         let config = options.config
-        // Both identities use the same capture, cursor and delivery pipeline.
-        // The listener has already installed loginwindow's capture service in
-        // user/0; the attached worker must never fall back to another desktop.
-        capture = try await StreamingScreenCapture(scale: config.scale, fps: config.fps,
-            displaySelection: config.displaySelection,
-            logger: logger, cursorMode: config.cursorMode,
-            consoleIdentity: options.identity.uid == 0 ? options.identity : nil)
+        switch SessionCaptureBackend.select(uid: options.identity.uid) {
+        case .coreGraphics:
+            capture = try await CoreGraphicsConsoleCapture(scale: config.scale, fps: config.fps,
+                displaySelection: config.displaySelection, identity: options.identity,
+                logger: logger, cursorMode: config.cursorMode)
+        case .screenCaptureKit:
+            capture = try await StreamingScreenCapture(scale: config.scale, fps: config.fps,
+                displaySelection: config.displaySelection,
+                logger: logger, cursorMode: config.cursorMode,
+                consoleIdentity: options.identity.uid == 0 ? options.identity : nil)
+        }
         do { rootInput = options.identity.uid == 0 ? try ConsoleRootInput(identity: options.identity) : nil }
         catch { await capture.stop(); throw error }
         let inputs: SharedInputController

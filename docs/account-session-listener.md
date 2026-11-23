@@ -23,16 +23,22 @@ listener (root for multiple accounts; otherwise current user only)
   └─ worker for root's current loginwindow audit session
        └─ client sockets, console capture, coordinated HID input
 
-Root listener also owns lifecycle/cleanup of the isolated root replayd service.
+On macOS 14+, the root listener owns lifecycle/cleanup of the isolated root replayd service.
 ```
 
-Both worker identities use `StreamingScreenCapture`, including RichCursor,
-dirty-region hints, a bounded newest-frame copy queue, capture-driven wakeups,
-and adaptive SCStream frame rates. The loginwindow source additionally checks
+User workers and macOS 14+ loginwindow workers use `StreamingScreenCapture`,
+including RichCursor, dirty-region hints and a bounded newest-frame copy queue.
+Since 1.7.6, Ventura loginwindow workers use public `CGDisplayStream` directly,
+without registering root replayd. Both backends share the frame store, cursor
+delivery, capture-driven wakeups, adaptive frame acceptance and RFB encoders.
+The ScreenCaptureKit loginwindow source additionally checks
 its console identity and requires ScreenCaptureKit's display IDs to match
 CoreGraphics, with valid bounds in that session. A mismatch or session change fails closed;
 it never substitutes the invoking user's display. Clipboard, file transfer and
 menu UI stay disabled for UID 0.
+CoreGraphics also validates UID/audit/console identity and display geometry,
+requests wake for a sleeping physical display, and requires complete frames
+before the console view is installed.
 
 The common `MacInputController` and `SharedInputController` still build and
 coordinate events. The final posting operation differs: loginwindow uses the
@@ -56,8 +62,15 @@ session and drops UID/GID before its final exec. `setuid` alone changes Unix
 credentials without selecting the desktop's service namespace. A listener
 already running as its own user starts that user's worker directly.
 
-Separately, loginwindow's auxiliary capture service uses `launchctl bootstrap`
+On macOS 14+, loginwindow's auxiliary capture service uses `launchctl bootstrap`
 and `bootout` to register/remove the isolated root job and its Mach services.
+The job's helper joins the selected loginwindow audit session before executing
+Apple's replayd. A bounded readiness check verifies the owned daemon process
+and its audit ID before a worker begins capture. Version 1.7.3's direct launch
+left replayd in root's background session; 1.7.4 corrects that regression.
+Ventura's AMFI rejection of this custom service is avoided by its CoreGraphics
+backend. An awake-screen probe delivered real loginwindow frames there; full
+1.7.6 server/menu/input validation on Ventura is still pending.
 These calls manage the service's lifetime; ordinary ScreenCaptureKit stream
 start/stop and frame delivery do not invoke launchctl. Replacing these commands
 would require equivalent launchd/bootstrap integration, not just starting a
@@ -177,6 +190,11 @@ it is disabled if loginwindow or another user already owns the display. Ownershi
 is checked again when clicked and immediately before the request. The synchronous
 system request runs off the AppKit thread. If the private entry point is absent
 or macOS rejects the request, an error is shown; there is no lock-screen fallback.
+Since 1.7.7 the menu remains pending until verified console ownership belongs to
+loginwindow, with a 60-second confirmation deadline. Native API acknowledgement
+alone is not completion: on the tested VM, login UI startup took about 32 seconds
+while the viewer stayed connected. The VNC connection continues showing the
+user's account desktop during and after the physical switch.
 
 Default files are stored under the selected user's
 `~/Library/Application Support/mac-vnc-server/Transfers`, resolved after the

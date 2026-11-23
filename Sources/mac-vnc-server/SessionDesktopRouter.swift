@@ -34,8 +34,20 @@ final class SessionDesktopRouter: @unchecked Sendable, FramebufferSource, Frameb
     var frameChanges: FrameChangeHub? { changes }
     var generation: UInt64 { lock.withLock { epoch } }
     var isRemote: Bool { lock.withLock { remote != nil } }
-    var includesCursor: Bool { lock.withLock { remote != nil || localCapture.includesCursor } }
-    var cursorSnapshot: CursorSnapshot? { lock.withLock { remote == nil ? localCapture.cursorSnapshot : nil } }
+    var includesCursor: Bool { lock.withLock { remote?.includesCursor ?? localCapture.includesCursor } }
+    var cursorSnapshot: CursorSnapshot? {
+        lock.withLock {
+            guard let remote else { return localCapture.cursorSnapshot }
+            guard let cursor = remote.cursorSnapshot, let canvas, let source = try? remote.capture() else { return nil }
+            let scale = min(1, min(Double(canvas.width) / Double(source.width), Double(canvas.height) / Double(source.height)))
+            let width = max(1, Int((Double(source.width) * scale).rounded()))
+            let height = max(1, Int((Double(source.height) * scale).rounded()))
+            guard let image = try? cursor.image.scaled(by: scale) else { return nil }
+            return CursorSnapshot(image: image, position: CGPoint(
+                x: Double((canvas.width - width) / 2) + cursor.position.x * Double(width) / Double(source.width),
+                y: Double((canvas.height - height) / 2) + cursor.position.y * Double(height) / Double(source.height)))
+        }
+    }
     func withSnapshot<T>(_ body: () throws -> T) rethrows -> T { try lock.withLock(body) }
 
     func install(_ bridge: ConsoleFramebufferBridge) throws {

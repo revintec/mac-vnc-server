@@ -107,6 +107,7 @@ final class ConsoleControlService: @unchecked Sendable {
             logger.info("Brought session uid=\(identity.uid) audit=\(identity.auditID) to the physical console")
             return nil
         case .viewConsole:
+            logger.info("Console view requested: source_uid=\(identity.uid) source_audit=\(identity.auditID) target_uid=\(console.uid) target_audit=\(console.auditID)")
             let client = try broker.connect(to: console)
             guard ConsoleIdentity.current() == console else {
                 client.shutdown()
@@ -132,7 +133,8 @@ final class SessionConsoleControl: @unchecked Sendable {
     var isAvailable: Bool { lock.withLock { channel != nil } }
     var canBringToConsole: Bool { lock.withLock { channel != nil && bringAvailable } }
 
-    func request(_ action: ConsoleControlRequest.Action) throws -> ConsoleFramebufferBridge? {
+    func request(_ action: ConsoleControlRequest.Action,
+                 logger: ServerLogger = ServerLogger(verbose: false)) throws -> ConsoleFramebufferBridge? {
         guard let channel = lock.withLock({ channel }) else {
             throw CLIError.commandFailed("Console controls are unavailable. Start the server with sudo.")
         }
@@ -151,6 +153,9 @@ final class SessionConsoleControl: @unchecked Sendable {
         guard action == .viewConsole else { return nil }
         guard let identity = result.identity, let (client, admission) = try response.receive(timeout: 5),
               identity == admission.identity else { throw RFBError.protocolError("missing console desktop connection") }
-        return try ConsoleFramebufferBridge(socket: client, identity: identity)
+        logger.info("Console desktop connection received: uid=\(identity.uid) audit=\(identity.auditID); waiting for capture and input startup")
+        let bridge = try ConsoleFramebufferBridge(socket: client, identity: identity)
+        logger.info("Console desktop first image ready: uid=\(identity.uid) audit=\(identity.auditID)")
+        return bridge
     }
 }

@@ -28,6 +28,7 @@ enum CLICommand {
     case version
     case transfers(TransferStore.Options)
     case consoleCaptureService(Int32, Int32)
+    case consoleCaptureServiceCheck(Int32, Int32, String)
     case sessionWorker(SessionWorkerOptions, attached: Bool)
 
     func run(transferInbox: TransferInbox? = nil) async throws {
@@ -41,7 +42,7 @@ enum CLICommand {
         case .sessionWorker(let options, let attached):
             guard attached else { throw CLIError.commandFailed("session worker requires exec after attachment") }
             try await AccountSessionWorker.run(options, transferInbox: transferInbox)
-        case .consoleCaptureService:
+        case .consoleCaptureService, .consoleCaptureServiceCheck:
             throw CLIError.commandFailed("console capture helpers must start before AppKit")
         case .service(_, let arguments):
             try LaunchAgentService.install(arguments: arguments)
@@ -86,6 +87,15 @@ enum CLI {
                 throw CLIError.invalidArgument("invalid console capture service arguments")
             }
             return .consoleCaptureService(audit, owner)
+        }
+        if arguments.first == "--console-capture-service-check" {
+            guard arguments.count == 4, let audit = Int32(arguments[1]), audit > 0,
+                  let owner = Int32(arguments[2]), owner > 1,
+                  arguments[3].hasPrefix("com.mac-vnc-server.console-capture.mac-vnc-console."),
+                  arguments[3].utf8.count <= 255 else {
+                throw CLIError.invalidArgument("invalid console capture service arguments")
+            }
+            return .consoleCaptureServiceCheck(audit, owner, arguments[3])
         }
         guard let subcommand = arguments.first else {
             return command(for: try parseRun(arguments))

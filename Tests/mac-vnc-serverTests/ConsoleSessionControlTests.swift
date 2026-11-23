@@ -64,4 +64,71 @@ struct ConsoleSessionControlTests {
         }
         #expect(try worker.receive(timeout: 0.01) == nil)
     }
+
+    @Test func loginwindowStartupFailureIncludesItsUnderlyingReason() throws {
+        let (viewer, worker) = try ClientSocket.localPair()
+        defer { viewer.shutdown(); worker.shutdown() }
+        try ConsoleFramebufferBridge.rejectStartup(socket: worker,
+            error: CLIError.commandFailed("loginwindow HID input unavailable (code 13)"))
+        do {
+            _ = try ConsoleFramebufferBridge(socket: viewer, identity: .init(uid: 0, auditID: 101098), startupTimeout: 1)
+            Issue.record("rejected loginwindow startup succeeded")
+        } catch {
+            #expect(error.localizedDescription.contains("loginwindow (audit 101098)"))
+            #expect(error.localizedDescription.contains("HID input unavailable (code 13)"))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func consoleStartupClosureOrTimeoutIdentifiesTheFailedStage(closePeer: Bool) throws {
+        let (viewer, worker) = try ClientSocket.localPair()
+        defer { viewer.shutdown(); worker.shutdown() }
+        if closePeer { worker.shutdown() }
+        let start = ContinuousClock.now
+        do {
+            _ = try ConsoleFramebufferBridge(socket: viewer, identity: .init(uid: 0, auditID: 123), startupTimeout: 0.05)
+            Issue.record("unavailable console startup succeeded")
+        } catch {
+            #expect(error.localizedDescription.contains("loginwindow (audit 123) while starting capture and input"))
+            #expect(error.localizedDescription.contains(closePeer ? "disconnected" : "timed out"))
+        }
+        #expect(ContinuousClock.now - start < .seconds(1))
+    }
+
+    @Test(arguments: [UInt32(0), UInt32(4097), UInt32.max])
+    func consoleStartupRejectsInvalidErrorLengths(length: UInt32) throws {
+        let (viewer, worker) = try ClientSocket.localPair()
+        defer { viewer.shutdown(); worker.shutdown() }
+        try worker.writeAll(UInt32(1).beBytes + length.beBytes)
+        do {
+            _ = try ConsoleFramebufferBridge(socket: viewer, identity: own, startupTimeout: 1)
+            Issue.record("invalid error length accepted")
+        } catch { #expect(error.localizedDescription.contains("invalid console desktop error length")) }
+    }
+
+    @Test(arguments: [
+        [UInt16(0), 0, 1025, 1], // Oversized image, including maximum --scale.
+        [UInt16(1), 0, 1, 1],   // Hotspot outside image.
+        [UInt16(0), 0, 0, 1]    // Only one empty dimension.
+    ])
+    func bridgeRejectsMalformedCursorShapes(rect: [UInt16]) throws {
+        try rejectCursorRectangle(rect, encoding: RFBPseudoEncoding.richCursor, reason: "cursor shape")
+    }
+
+    @Test(arguments: [[UInt16(2), 0, 0, 0], [UInt16(0), 0, 1, 0]])
+    func bridgeRejectsMalformedCursorPositions(rect: [UInt16]) throws {
+        try rejectCursorRectangle(rect, encoding: RFBPseudoEncoding.pointerPosition, reason: "cursor position")
+    }
+
+    private func rejectCursorRectangle(_ rect: [UInt16], encoding: Int32, reason: String) throws {
+        let (viewer, worker) = try ClientSocket.localPair()
+        defer { viewer.shutdown(); worker.shutdown() }
+        let serverInit = [UInt8(0), 2, 0, 2] + PixelFormat.serverDefault.bytes + UInt32(0).beBytes
+        try worker.writeAll(UInt32(0).beBytes + serverInit + [0, 0, 0, 1]
+            + rect.flatMap(\.beBytes) + UInt32(bitPattern: encoding).beBytes)
+        do {
+            _ = try ConsoleFramebufferBridge(socket: viewer, identity: console, startupTimeout: 1)
+            Issue.record("malformed cursor accepted")
+        } catch { #expect(error.localizedDescription.contains("invalid internal \(reason)")) }
+    }
 }

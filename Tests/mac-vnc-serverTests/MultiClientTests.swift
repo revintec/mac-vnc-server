@@ -218,9 +218,39 @@ struct MultiClientTests {
         #expect(routed.currentText() == "account clipboard")
     }
 
-    @Test func consoleSwitchHidesAndRestoresViewerCursor() throws {
-        let home = try MultiClientServer(clientCursor: true)
+    @Test func failedConsoleCaptureReportsCauseAndKeepsOriginalViewerUsableForRetry() throws {
+        let home = try MultiClientServer()
         let console = try MultiClientServer()
+        defer { home.finish(); console.finish() }
+        let peer = try home.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: "RFB 003.008\n")
+        try peer.write([2, 0, 0, 1] + UInt32(0).beBytes + fullUpdate)
+        #expect(try framePayload(peer, encoding: 0) == [UInt8](repeating: 0, count: 8))
+        console.screen.captureError = RFBError.captureFailed("ScreenCaptureKit enumerate displays failed: fixture service unavailable")
+        for _ in 0..<2 {
+            do {
+                try home.router.install(internalBridge(console))
+                Issue.record("failed console capture was accepted")
+            } catch {
+                #expect(error.localizedDescription.contains("fixture service unavailable"))
+                #expect(error.localizedDescription.contains("starting capture and input"))
+            }
+            #expect(!home.router.isRemote)
+            try peer.write(fullUpdate)
+            #expect(try framePayload(peer, encoding: 0) == [UInt8](repeating: 0, count: 8))
+        }
+        console.screen.captureError = nil
+        console.screen.setFrame(solidFrame(85, width: 2, height: 1, sequence: 2))
+        try home.router.install(internalBridge(console))
+        try peer.write(fullUpdate)
+        #expect(try framePayload(peer, encoding: 0)[0] == 85)
+        #expect(home.server.activeClientCount == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func consoleSwitchRelaysOrHidesAndRestoresViewerCursor(consoleCursor: Bool) throws {
+        let home = try MultiClientServer(clientCursor: true)
+        let console = try MultiClientServer(clientCursor: consoleCursor)
         defer { home.finish(); console.finish() }
         console.screen.setFrame(solidFrame(44, width: 2, height: 1, sequence: 2))
         let peer = try home.connect(); defer { peer.finish() }
@@ -256,9 +286,100 @@ struct MultiClientTests {
         }
         try nextPixels(cursorWidth: 1, color: 0)
         try home.router.install(internalBridge(console))
-        try nextPixels(cursorWidth: 0, color: 44)
+        try nextPixels(cursorWidth: consoleCursor ? 1 : 0, color: 44)
         home.router.returnHome()
         try nextPixels(cursorWidth: 1, color: 0)
+        #expect(home.server.activeClientCount == 1)
+    }
+
+    @Test func consoleCursorShapeAndPositionTravelWithoutNewScreenPixels() throws {
+        let home = try MultiClientServer(width: 6, height: 5)
+        let console = try MultiClientServer(width: 8, height: 4, clientCursor: true)
+        defer { home.finish(); console.finish() }
+        console.screen.setFrame(solidFrame(44, width: 8, height: 4, sequence: 1))
+        console.screen.cursorPosition = CGPoint(x: 4, y: 2)
+        console.screen.cursorImage = CursorImage(width: 4, height: 4, hotX: 2, hotY: 2,
+            bgra: [UInt8](repeating: 255, count: 64))
+        let bridge = try internalBridge(console)
+        try home.router.install(bridge)
+        let initial = try bridge.capture()
+        let cursor = try #require(home.router.cursorSnapshot)
+        #expect(cursor.image.width == 3 && cursor.image.height == 3)
+        #expect(cursor.image.hotX == 2 && cursor.image.hotY == 2)
+        #expect(cursor.position == CGPoint(x: 3, y: 2.5), "cursor follows the same scale and letterbox as the console pixels")
+        #expect(!home.router.includesCursor)
+
+        console.screen.cursorPosition = CGPoint(x: 6, y: 0)
+        try waitFor { bridge.cursorSnapshot?.position == CGPoint(x: 6, y: 0) }
+        #expect(home.router.cursorSnapshot?.position == CGPoint(x: 4.5, y: 1))
+        #expect(try bridge.capture().sequence == initial.sequence, "pointer motion must not require new framebuffer pixels")
+        #expect(try bridge.capture().bgra == initial.bgra)
+
+        let masked = CursorImage(width: 2, height: 1, hotX: 1, hotY: 0,
+            bgra: [0, 40, 200, 255, 0, 0, 0, 0])
+        console.screen.cursorImage = masked
+        try waitFor { bridge.cursorSnapshot?.image == masked }
+        #expect(try bridge.capture().sequence == initial.sequence)
+        console.screen.cursorImage = .hidden
+        try waitFor { bridge.cursorSnapshot?.image == .hidden }
+        #expect(home.router.cursorSnapshot?.image == .hidden)
+    }
+
+    @Test func consoleCursorAcceptsMaximumConfiguredScale() throws {
+        let console = try MultiClientServer(clientCursor: true)
+        defer { console.finish() }
+        // A 256-point shape at the maximum --scale=4 remains a valid cursor.
+        let image = CursorImage(width: 1024, height: 4, hotX: 1020, hotY: 0,
+            bgra: [UInt8](repeating: 255, count: 1024 * 4 * 4))
+        console.screen.cursorImage = image
+        let bridge = try internalBridge(console)
+        defer { bridge.stop() }
+        #expect(bridge.cursorSnapshot?.image == image)
+    }
+
+    @Test(arguments: [false, true])
+    func consoleCursorFallbackTracksHostAndErasesOldPosition(appleObserve: Bool) throws {
+        let home = try MultiClientServer(width: 4, height: 2)
+        let console = try MultiClientServer(width: 4, height: 2, clientCursor: true)
+        defer { home.finish(); console.finish() }
+        console.screen.setFrame(solidFrame(44, width: 4, height: 2, sequence: 1))
+        let bridge = try internalBridge(console)
+        try home.router.install(bridge)
+        let peer = try home.connect(); defer { peer.finish() }
+        _ = try peer.handshake(version: appleObserve ? AppleRFB.version : "RFB 003.008\n")
+        if appleObserve {
+            try peer.write([2, 0, 0, 2] + UInt32(0).beBytes + UInt32(bitPattern: Int32(-239)).beBytes)
+            try peer.write([0x0a, 0, 0, 0])
+        } else { try peer.write([2, 0, 0, 1] + UInt32(0).beBytes) }
+        func pixels() throws -> [UInt8] {
+            try peer.write([3, 0, 0, 0, 0, 0, 0, 4, 0, 2])
+            for _ in 0..<3 {
+                let header = try peer.read(4)
+                try #require(header[0] == 0)
+                var result: [UInt8]?
+                for _ in 0..<Int(UInt16.be(header[2], header[3])) {
+                    let rect = try peer.read(12)
+                    let width = Int(UInt16.be(rect[4], rect[5])), height = Int(UInt16.be(rect[6], rect[7]))
+                    let encoding = Int32(bitPattern: UInt32.be(rect[8], rect[9], rect[10], rect[11]))
+                    if encoding == -239 {
+                        #expect(width == 0 && height == 0, "Observe must hide the local overlay")
+                    } else {
+                        try #require(encoding == 0 && width == 4 && height == 2)
+                        result = try peer.read(width * height * 4)
+                    }
+                }
+                if let result { return result }
+            }
+            throw RFBError.protocolError("missing console fallback pixels")
+        }
+        var image = try pixels()
+        #expect(Array(image[0..<4]) == [0, 0, 255, 0])
+        #expect(Array(image[12..<16]) == [44, 0, 0, 0])
+        console.screen.cursorPosition = CGPoint(x: 3, y: 0)
+        try waitFor { bridge.cursorSnapshot?.position == CGPoint(x: 3, y: 0) }
+        image = try pixels()
+        #expect(Array(image[0..<4]) == [44, 0, 0, 0], "old cursor must be erased")
+        #expect(Array(image[12..<16]) == [0, 0, 255, 0])
         #expect(home.server.activeClientCount == 1)
     }
 
@@ -1485,6 +1606,11 @@ private final class MultiClientListener: @unchecked Sendable {
 
 private final class MultiClientScreen: FramebufferSource {
     private let lock = NSLock()
+    private var failure: (any Error)?
+    var captureError: (any Error)? {
+        get { lock.withLock { failure } }
+        set { lock.withLock { failure = newValue } }
+    }
     private var size: (width: Int, height: Int)
     let nativePattern: Bool
     let clientCursor: Bool
@@ -1495,12 +1621,17 @@ private final class MultiClientScreen: FramebufferSource {
     var frameChanges: FrameChangeHub? { changes }
     func setFrame(_ frame: Framebuffer) { lock.withLock { overrideFrame = frame }; changes.signal() }
     private var image = CursorImage(width: 1, height: 1, hotX: 0, hotY: 0, bgra: [0, 0, 255, 255])
+    private var position = CGPoint.zero
     var cursorImage: CursorImage {
         get { lock.withLock { image } }
-        set { lock.withLock { image = newValue } }
+        set { lock.withLock { image = newValue }; changes.signal() }
+    }
+    var cursorPosition: CGPoint {
+        get { lock.withLock { position } }
+        set { lock.withLock { position = newValue }; changes.signal() }
     }
     var cursorSnapshot: CursorSnapshot? {
-        clientCursor ? CursorSnapshot(image: cursorImage, position: .zero) : nil
+        lock.withLock { clientCursor ? CursorSnapshot(image: image, position: position) : nil }
     }
     init(width: Int, height: Int, nativePattern: Bool, clientCursor: Bool, detailedPattern: Bool, captureDelay: TimeInterval = 0) {
         size = (width, height)
@@ -1514,6 +1645,7 @@ private final class MultiClientScreen: FramebufferSource {
     }
     var includesCursor: Bool { nativePattern && !clientCursor }
     func capture() throws -> Framebuffer {
+        if let failure = captureError { throw failure }
         if captureDelay > 0 { Thread.sleep(forTimeInterval: captureDelay) }
         if let frame = lock.withLock({ overrideFrame }) { return frame }
         let (width, height) = lock.withLock { size }

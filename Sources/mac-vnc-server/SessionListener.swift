@@ -169,7 +169,8 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
         let session = try AccountAuthentication.session(uid: identity.uid)
         guard session == identity else { throw RFBError.authenticationFailed }
         let executable = try CurrentExecutable.url()
-        let service = identity.uid == 0 ? try ConsoleCaptureService(identity: identity) : nil
+        let service = SessionCaptureBackend.needsConsoleService(uid: identity.uid)
+            ? try ConsoleCaptureService(identity: identity) : nil
         do {
             let (channel, childInput) = try SessionChannel.pair()
             defer { try? childInput.close() }
@@ -194,6 +195,11 @@ private final class AccountSessionChild: SessionWorkerConnection, @unchecked Sen
             process.standardInput = childInput
             process.standardOutput = FileHandle.standardError
             process.standardError = FileHandle.standardError
+            let logger = ServerLogger(verbose: config.verbose)
+            process.terminationHandler = { child in
+                let reason = child.terminationReason == .uncaughtSignal ? "signal" : "exit"
+                logger.info("Session worker ended: uid=\(identity.uid) audit=\(identity.auditID) pid=\(child.processIdentifier) \(reason)=\(child.terminationStatus)")
+            }
             ServerLogger(verbose: config.verbose).verbose("Starting session worker: uid=\(identity.uid) audit=\(identity.auditID) executable=\(executable.path)")
             do { try process.run() }
             catch {

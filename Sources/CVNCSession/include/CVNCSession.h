@@ -4,6 +4,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CGEvent.h>
 #include <IOKit/hidsystem/IOLLEvent.h>
+#include "VNCDisplayStream.h"
 
 typedef struct {
     uint32_t uid;
@@ -49,7 +50,13 @@ typedef struct VNCConsoleCaptureService *VNCConsoleCaptureServiceRef;
 int VNCConsoleCaptureServiceRecover(void);
 VNCConsoleCaptureServiceRef VNCConsoleCaptureServiceCreate(VNCConsoleIdentity identity, const char *executable, int32_t *error);
 void VNCConsoleCaptureServiceDestroy(VNCConsoleCaptureServiceRef service);
-int VNCConsoleExecCaptureService(VNCConsoleIdentity identity, int32_t owner_pid);
+// Called by the owned launchd helper before frameworks initialize.
+int VNCRunConsoleCaptureService(VNCConsoleIdentity identity, int32_t owner_pid);
+// Called by the listener's short-lived `launchctl asuser 0` readiness probe.
+int VNCConsoleCheckCaptureService(VNCConsoleIdentity identity, int32_t owner_pid, const char *label);
+// Strict ownership metadata also recognizes the former helper/direct jobs.
+CFDictionaryRef VNCConsoleCaptureJobCreate(const char *label, const char *executable, int32_t audit, int32_t owner) CF_RETURNS_RETAINED;
+int VNCConsoleCaptureJobReadOwner(CFDictionaryRef job, const char *label, int32_t *audit, int32_t *owner);
 
 // Only the root loginwindow worker uses physical-console HID input. User
 // workers continue to post CGEvents to their own graphics session.

@@ -8,7 +8,7 @@ enum CaptureDisplaysUnavailable: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .empty:
-            return "ScreenCaptureKit found no displays"
+            return "capture found no active displays"
         case .consoleMismatch(let offered, let active):
             return "ScreenCaptureKit displays do not match the attached console " +
                 "(offered=\(offered.sorted()), active=\(active.sorted())); no user-desktop fallback"
@@ -22,6 +22,7 @@ enum CaptureDisplaysUnavailable: LocalizedError {
 enum CaptureDisplayDiscovery {
     static func run<Value>(
         logger: ServerLogger,
+        backend: String = "ScreenCaptureKit",
         verify: () throws -> Void,
         wake: () throws -> Void = DisplayWakeup.signal,
         pause: () async throws -> Void = { try await Task.sleep(for: .seconds(1)) },
@@ -42,7 +43,7 @@ enum CaptureDisplayDiscovery {
                     (native.domain == SCStreamErrorDomain && native.code == SCStreamError.noDisplayList.rawValue) else {
                     throw error
                 }
-                logger.warning("ScreenCaptureKit display discovery attempt \(attempt)/4: \(error.localizedDescription)")
+                logger.warning("\(backend) display discovery attempt \(attempt)/4: \(error.localizedDescription)")
                 guard attempt < 4 else { throw RFBError.captureFailed(error.localizedDescription) }
                 try Task.checkCancellation()
                 try verify()

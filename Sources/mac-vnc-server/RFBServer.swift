@@ -46,6 +46,7 @@ enum RFBStandardEncoding {
 enum RFBPseudoEncoding {
     static let xCursor: Int32 = -240
     static let richCursor: Int32 = -239
+    static let pointerPosition: Int32 = -232
     static let desktopSize: Int32 = -223
     static let continuousUpdates: Int32 = -313
     static let fence: Int32 = -312
@@ -63,6 +64,7 @@ struct RFBClientCapabilities: Equatable {
     let supportsZRLE: Bool
     let supportsXCursor: Bool
     let supportsRichCursor: Bool
+    let supportsPointerPosition: Bool
     let supportsDesktopSize: Bool
     let supportsExtendedDesktopSize: Bool
     let isAppleScreenSharingClient: Bool
@@ -78,6 +80,7 @@ struct RFBClientCapabilities: Equatable {
         supportsZRLE = encodings.contains(RFBEncoding.zrle.rawValue)
         supportsXCursor = encodings.contains(RFBPseudoEncoding.xCursor)
         supportsRichCursor = encodings.contains(RFBPseudoEncoding.richCursor)
+        supportsPointerPosition = encodings.contains(RFBPseudoEncoding.pointerPosition)
         supportsDesktopSize = encodings.contains(RFBPseudoEncoding.desktopSize)
         supportsExtendedDesktopSize = encodings.contains(RFBPseudoEncoding.extendedDesktopSize)
         isAppleScreenSharingClient = encodings.contains(1011)
@@ -349,6 +352,8 @@ final class RFBClientSession: @unchecked Sendable {
     private var currentLayout = VirtualDisplayLayout.empty
     private var lastCursorImage: CursorImage?
     private var lastCursorFormat: PixelFormat?
+    private var lastCursorPosition: CGPoint?
+    private var isConsoleBridge = false
     private var pacer = FramePacer()
     private let wake = FrameWakeSignal()
     private var scaledCache = ScaledFramebufferCache()
@@ -473,7 +478,15 @@ final class RFBClientSession: @unchecked Sendable {
     }
 
     private func runSession(admission: SessionAdmission) throws {
-        let initialFrame = try capture.capture()
+        isConsoleBridge = admission.consoleBridge == true
+        let initialFrame: Framebuffer
+        do { initialFrame = try capture.capture() }
+        catch {
+            if admission.consoleBridge == true {
+                try? ConsoleFramebufferBridge.rejectStartup(socket: socket, error: error)
+            }
+            throw error
+        }
         currentLayout = initialFrame.layout
         previousFramebuffer = initialFrame
 
@@ -785,7 +798,7 @@ final class RFBClientSession: @unchecked Sendable {
                 : (clientCapabilities.supportsXCursor ? RFBPseudoEncoding.xCursor : nil)
         }
         scaledCache = ScaledFramebufferCache()
-        lastCursorImage = nil; lastCursorFormat = nil
+        lastCursorImage = nil; lastCursorFormat = nil; lastCursorPosition = nil
     }
 
     private func framebufferWriterLoop() throws {
@@ -1014,9 +1027,12 @@ final class RFBClientSession: @unchecked Sendable {
         // Sending it during SetEncodings can trigger Screen Sharing's startup race.
         var cursorRectangle: [UInt8]?
         var cursorImage: CursorImage?
+        var cursorPosition: CGPoint?
+        var positionRectangle: [UInt8]?
         let cursorFormat = prepared.pixelFormat
+        let snapshot = capture.cursorSnapshot
         if !capture.includesCursor, state.withLock({ clientCapabilities.supportsRichCursor }),
-           let cursor = capture.cursorSnapshot {
+           let cursor = snapshot {
             // Observers need to see the host's actual cursor position. RichCursor
             // alone conveys the shape, not another user's pointer movement.
             let image = state.withLock({ usesClientCursorLocked })
@@ -1033,7 +1049,22 @@ final class RFBClientSession: @unchecked Sendable {
             cursorRectangle = try CursorImage.hidden.richCursorRectangle(format: cursorFormat)
             cursorImage = .hidden
         }
-        if (unsolicited || !usesAppleExtensions) && request.incremental && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && cursorRectangle == nil {
+        // The private bridge needs the host position for non-RichCursor and
+        // Observe viewers. External controlling viewers move their own cursor;
+        // do not overwrite that immediate feedback with delayed host positions.
+        if isConsoleBridge, state.withLock({ clientCapabilities.supportsPointerPosition }),
+           !capture.includesCursor, let cursor = snapshot {
+            let layout = prepared.framebuffer.layout
+            let x = max(0, min(prepared.framebuffer.width - 1, Int(((cursor.position.x - layout.origin.x) * layout.scale).rounded())))
+            let y = max(0, min(prepared.framebuffer.height - 1, Int(((cursor.position.y - layout.origin.y) * layout.scale).rounded())))
+            let position = CGPoint(x: x, y: y)
+            if forceCursor || position != lastCursorPosition || cursorImage != nil || prepared.desktopSizeChanged {
+                positionRectangle = UInt16(x).beBytes + UInt16(y).beBytes + [0, 0, 0, 0]
+                    + UInt32(bitPattern: RFBPseudoEncoding.pointerPosition).beBytes
+                cursorPosition = position
+            }
+        }
+        if (unsolicited || !usesAppleExtensions) && request.incremental && prepared.encodedRects.isEmpty && !prepared.desktopSizeChanged && cursorRectangle == nil && positionRectangle == nil {
             return false
         }
 
@@ -1061,7 +1092,7 @@ final class RFBClientSession: @unchecked Sendable {
             return true
         }
 
-        let rectCount = prepared.encodedRects.count + (cursorRectangle == nil ? 0 : 1)
+        let rectCount = prepared.encodedRects.count + (cursorRectangle == nil ? 0 : 1) + (positionRectangle == nil ? 0 : 1)
         guard rectCount <= Int(UInt16.max) else {
             throw RFBError.protocolError("too many rectangles in framebuffer update")
         }
@@ -1071,6 +1102,7 @@ final class RFBClientSession: @unchecked Sendable {
         updateChunks.reserveCapacity(1 + rectCount)
         updateChunks.append(header)
         if let cursorRectangle { updateChunks.append(cursorRectangle) }
+        if let positionRectangle { updateChunks.append(positionRectangle) }
         updateChunks.append(contentsOf: prepared.encodedRects)
         try socket.writeAll(updateChunks, onStall: { [self] in
             noteNetworkStall()
@@ -1081,6 +1113,7 @@ final class RFBClientSession: @unchecked Sendable {
             lastCursorImage = cursorImage
             lastCursorFormat = cursorFormat
         }
+        if let cursorPosition { lastCursorPosition = cursorPosition }
 
         (capture as? SessionDesktopRouter)?.activateInput(input, generation: prepared.desktopGeneration)
         let frameDuration = Date().timeIntervalSince(frameStarted)

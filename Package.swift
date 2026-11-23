@@ -17,6 +17,7 @@ let package = Package(
     targets: [
         .target(name: "CVNCSession", publicHeadersPath: "include",
                 linkerSettings: [.linkedFramework("CoreGraphics"), .linkedFramework("Foundation"),
+                                 .linkedFramework("ServiceManagement"),
                                  .linkedFramework("IOKit"),
                                  .linkedFramework("SystemConfiguration"),
                                  .linkedFramework("Carbon")]),

@@ -124,6 +124,59 @@ capture/input/file-transfer runtime validation.
 
 ## Ventura capture and session findings
 
+The user's subsequent macOS 13.7.8 test confirms that version 1.7.1's **Bring
+This Session to Console** action works. **View Console Session** fails while
+loginwindow owns the physical display. The subsequent 1.7.2 log establishes that
+ScreenCaptureKit display enumeration times out after 60 seconds in the attached
+UID 0/audit 101105 worker. It forwards the error and exits with status 1, while
+the original user desktop keeps streaming. The capture-service registration
+message does not establish that replayd actually started or responded. Version
+1.7.2 adds startup-error forwarding and worker exit diagnostics. The subsequent
+launchd snapshot reports `OS_REASON_CODESIGNING`; the kernel explicitly reports
+an AMFI Launch Constraint Violation for the helper's exec of `/usr/libexec/replayd`
+(launch type 0). The deployed server's code signature verifies successfully.
+Version 1.7.3 changes the job to launch Apple's daemon directly through launchd
+and checks its process before capture startup. Local direct-launch lifecycle
+checks pass, but the user's subsequent Ventura test still reports
+`OS_REASON_CODESIGNING` for the direct job. It aborts in about eleven seconds,
+before starting the loginwindow worker; the source viewer keeps streaming.
+The isolated check using Apple's original service definition also failed to
+bootstrap into `user/0`, returning error 5 (Input/output error). That result alone
+does not identify why launchd rejected it; this path has not been adopted.
+Version 1.7.3 also failed on the development Mac with "Failed to find any windows
+to capture": its daemon ran in root's background audit session. Version 1.7.4
+restores the daemon's loginwindow attachment and verifies its actual audit ID.
+A live attached-service probe captured loginwindow on that Mac. This fixes the
+local regression but does not resolve Ventura's separate AMFI rejection.
+An early exploratory CGDisplayStream probe failed to produce loginwindow frames
+on the development Mac; that result did not establish Ventura behavior.
+The user's 1.7.4 retest on 2026-11-24 02:28–02:30 Asia/Shanghai confirms three
+failed console-view attempts with `OS_REASON_CODESIGNING`, including one after
+bringing the user desktop to console and returning to a fresh loginwindow audit
+session. Each attempt cleans up after about 10–11 seconds; the same viewer
+remains connected through all three failures. Bring This Session to Console
+still succeeds. No loginwindow worker reaches readiness. The Ventura console
+view therefore remains a confirmed failure, not merely untested support.
+The 1.7.5 log repeats the owned job's `OS_REASON_CODESIGNING` failure while the
+UID 501 desktop continues streaming. The independent CGDisplayStream probe
+attached to UID 0/audit 101117 and passed permission preflight, but received no
+complete frames in five seconds on physical display 2. Start/stop succeeded.
+Physical display power was not logged. After turning on the physical screen,
+the user repeated the probe and received a valid 160×100 BGRA loginwindow frame
+with 48/64 nonzero RGB samples, `frame_received=1` and a successful stop. The
+same UID 0/audit 101117 was verified, with no root replayd registered. The user
+worker's awake virtual display 45 had not established physical display 2's state.
+
+Version 1.7.6 selects public `CGDisplayStream` only for UID 0 on macOS 13, skipping
+the rejected auxiliary replayd registration. Startup requests wake if the
+physical display reports asleep, checks session/display identity, and waits for
+complete frames before installing the console view through the existing viewer
+connection. Blank callbacks clear old pixels. User sessions and newer macOS
+loginwindow workers retain ScreenCaptureKit. The native API is now verified on
+the affected Ventura host with its display awake; the complete new server/menu/
+input path and automatic wake still require that host's retest.
+See [the console-control investigation](console-controls-and-video-streaming.md#direct-capture-service-launch-in-173).
+
 The Mac mini's subsequent tests establish that account authentication and a
 fresh UID 501/audit 100005 worker start successfully. Screen Sharing 3.0
 negotiates RFB 003.889, Control, DisplayInfo and Zlib. That is not yet evidence

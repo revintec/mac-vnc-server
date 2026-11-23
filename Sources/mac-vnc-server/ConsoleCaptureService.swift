@@ -18,6 +18,9 @@ final class ConsoleCaptureService {
         let executable = try CurrentExecutable.url()
         var error: Int32 = 0
         guard let handle = VNCConsoleCaptureServiceCreate(identity.native, executable.path, &error) else {
+            if error == ETIMEDOUT {
+                throw RFBError.captureFailed("loginwindow capture service did not become ready; see the server log for its launchd job status")
+            }
             throw RFBError.captureFailed("console capture service unavailable: \(String(cString: strerror(error))) (\(error))")
         }
         self.handle = handle

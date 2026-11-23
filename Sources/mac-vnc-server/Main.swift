@@ -8,18 +8,20 @@ struct MacVNCServerApp {
     @MainActor static func main() {
         signal(SIGPIPE, SIG_IGN)
         let arguments = Array(CommandLine.arguments.dropFirst())
-        if arguments.first == "--console-capture-service" {
-            // Prepare credentials, then exec Apple's daemon before AppKit or
-            // the normal shutdown controller initializes.
+        if arguments.first == "--console-capture-service" || arguments.first == "--console-capture-service-check" {
+            // Attach the daemon before any graphics/framework connections, or
+            // verify its exact process and audit session from root's bootstrap.
             do {
                 let result: Int32
                 switch try CLI.parse(arguments: arguments) {
                 case .consoleCaptureService(let audit, let owner):
-                    result = VNCConsoleExecCaptureService(VNCConsoleIdentity(uid: 0, audit_id: audit), owner)
+                    result = VNCRunConsoleCaptureService(VNCConsoleIdentity(uid: 0, audit_id: audit), owner)
+                case .consoleCaptureServiceCheck(let audit, let owner, let label):
+                    result = VNCConsoleCheckCaptureService(VNCConsoleIdentity(uid: 0, audit_id: audit), owner, label)
                 default: throw CLIError.invalidArgument("invalid console capture helper")
                 }
-                if result != 0 { fputs("Console capture helper failed: \(String(cString: strerror(result))) (\(result))\n", stderr) }
-                Foundation.exit(result == 0 ? 0 : 1)
+                if result != 0 { fputs("Console capture service helper failed: \(String(cString: strerror(result))) (\(result))\n", stderr) }
+                Foundation.exit(result)
             } catch {
                 fputs("mac-vnc-server: \(CLI.errorMessage(for: error))\n", stderr)
                 Foundation.exit(1)

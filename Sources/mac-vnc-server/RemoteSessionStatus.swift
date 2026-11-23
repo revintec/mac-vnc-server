@@ -162,7 +162,7 @@ private final class SessionTransitionObservation: @unchecked Sendable {
 }
 
 enum LoginWindowSwitch {
-    static func request() throws {
+    static func request(logger: ServerLogger) async throws {
         guard getuid() != 0, let identity = ConsoleIdentity.current(), identity.uid == getuid(),
               VNCSessionVerify(identity.native) == 0 else {
             throw CLIError.commandFailed("This user session no longer owns the physical display.")
@@ -186,6 +186,42 @@ enum LoginWindowSwitch {
         let result = perform()
         guard result == 0 else {
             throw CLIError.commandFailed("macOS could not switch to the login window (code \(result)).")
+        }
+        let started = ProcessInfo.processInfo.systemUptime
+        logger.info("Login-window switch requested: source_uid=\(identity.uid) source_audit=\(identity.auditID); waiting for physical console ownership")
+        let target = try await waitForCompletion(from: identity)
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        logger.info("Physical console switched to loginwindow: audit=\(target.auditID) wait_s=\(String(format: "%.1f", elapsed)); the user VNC session remains running")
+    }
+
+    /// SACSwitchToLoginWindow acknowledges creation before the new login UI is
+    /// ready. Keep the action pending until graphics-console ownership agrees.
+    static func waitForCompletion(
+        from identity: ConsoleIdentity,
+        timeout: TimeInterval = 60,
+        readConsole: () -> ConsoleIdentity? = ConsoleIdentity.current,
+        verifySession: (ConsoleIdentity) throws -> Void = { identity in
+            guard VNCSessionVerify(identity.native) == 0 else {
+                throw CLIError.commandFailed("This user session ended while waiting for loginwindow.")
+            }
+        },
+        now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        pause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(100)) }
+    ) async throws -> ConsoleIdentity {
+        let deadline = now() + timeout
+        while true {
+            try Task.checkCancellation()
+            try verifySession(identity)
+            if let console = readConsole(), console.auditID > 0 {
+                if console.uid == 0 { return console }
+                guard console == identity else {
+                    throw CLIError.commandFailed("Another user session took the physical display before loginwindow could be confirmed.")
+                }
+            }
+            guard now() < deadline else {
+                throw CLIError.commandFailed("macOS accepted the request, but loginwindow did not take the physical display within \(Int(timeout)) seconds. macOS may still be starting the login screen; your VNC connection remains open.")
+            }
+            try await pause()
         }
     }
 }
@@ -260,14 +296,17 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
               PhysicalDisplayState.read().canSwitchToLoginWindow else { refresh(); return }
         switchingToLoginWindow = true
         refresh()
+        let logger = logger
         Task {
-            defer { switchingToLoginWindow = false; refresh() }
             do {
                 // The session agent performs synchronous IPC. Keep that wait
                 // off AppKit's event loop so remote input/UI remain responsive.
-                try await Task.detached(priority: .userInitiated) { try LoginWindowSwitch.request() }.value
-                logger.info("Requested Fast User Switching to loginwindow; the user VNC session remains running")
+                try await Task.detached(priority: .userInitiated) { try await LoginWindowSwitch.request(logger: logger) }.value
+                switchingToLoginWindow = false
+                refresh()
             } catch {
+                switchingToLoginWindow = false
+                refresh()
                 logger.warning("Switch to Login Window failed: \(error.localizedDescription)")
                 let alert = NSAlert()
                 alert.messageText = "Couldn’t Switch to Login Window"
@@ -296,15 +335,23 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
         guard action != .viewConsole || count > 0 else { refresh(); return }
         switchingConsole = true
         refresh()
+        let logger = logger
         Task {
-            defer { switchingConsole = false; refresh() }
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    if let bridge = try SessionConsoleControl.shared.request(action) {
+                    if let bridge = try SessionConsoleControl.shared.request(action, logger: logger) {
                         try SessionActivity.shared.install(bridge)
+                        logger.info("Console view installed; existing viewers remain connected")
                     }
                 }.value
+                switchingConsole = false
+                refresh()
             } catch {
+                // Restore actions before entering AppKit's modal event loop.
+                // Otherwise the entire error dialog lifetime looks like a
+                // console switch that is still running.
+                switchingConsole = false
+                refresh()
                 logger.warning("Console session switch failed: \(error.localizedDescription)")
                 let alert = NSAlert()
                 alert.messageText = "Couldn’t Switch Console Sessions"
@@ -353,6 +400,7 @@ final class RemoteSessionStatus: NSObject, NSMenuDelegate {
         loginWindowItem.title = switchingToLoginWindow ? "Switching to Login Window…" : "Switch to Login Window"
         loginWindowItem.isEnabled = state.canSwitchToLoginWindow && !switchingToLoginWindow && !switchingConsole
         let controls = SessionConsoleControl.shared
+        viewConsoleItem.title = switchingConsole ? "Switching Console Sessions…" : "View Console Session"
         bringToConsoleItem.isHidden = !controls.canBringToConsole || !state.isConfirmedHidden
         viewConsoleItem.isHidden = !controls.isAvailable || !state.isConfirmedHidden
         let canSwitch = state.canUseConsoleControls(privileged: controls.isAvailable)
